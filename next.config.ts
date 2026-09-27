@@ -6,7 +6,8 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts")
 /**
  * NEXT_PUBLIC_STATIC_DEMO=1 builds the static GitHub Pages demo into out/ (see .github/workflows/pages.yml):
  * no middleware and no route handlers (only .tsx files are routes); the mock API runs in the browser instead
- * (src/lib/demo). The site is written to out/, so a local server build in .next is left alone.
+ * (src/lib/demo). The site is written to out/. Note: this build also reuses .next, so run `npm run build`
+ * again before `npm start` afterwards.
  */
 const staticDemo = process.env.NEXT_PUBLIC_STATIC_DEMO === "1"
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || undefined
@@ -14,7 +15,6 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH || undefined
 const nextConfig: NextConfig = staticDemo
   ? {
       output: "export",
-      distDir: "out", // with output "export" this is the exported site itself
       basePath,
       trailingSlash: true,
       images: { unoptimized: true },

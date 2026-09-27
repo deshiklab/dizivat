@@ -121,4 +121,5 @@ PAGES_URL=http://localhost:8080/rbs-vat-frontend python3 scripts/pages_smoke.py
 ```
 
 Documents created in the demo get sequential ids (`s215`, `s216` …). Pages exist for the seeded documents plus 50 new ones
-of each type per browser. The normal server build (`npm run build`) is unaffected.
+of each type per browser. The server build is unaffected, but both builds use `.next`: run `npm run build` again
+before `npm start` if you built the demo locally.
