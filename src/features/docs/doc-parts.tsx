@@ -15,7 +15,7 @@ type Doc = Sale | Purchase
 const time = (iso: string, locale: string) => fmtDateTime(iso, locale)
 
 /** Top-of-page status strip: cancelled (with reason) or draft (not yet in the VAT return). */
-export function DocBanner({ doc }: { doc: Doc }) {
+export function DocBanner({ doc, draftNote }: { doc: Pick<Doc, "process" | "history" | "cancelReason">; /** override the draft text (stock documents) */ draftNote?: string }) {
   const t = useTranslations("docs")
   const locale = useLocale()
   if (doc.process === "Cancelled") {
@@ -34,7 +34,7 @@ export function DocBanner({ doc }: { doc: Doc }) {
     return (
       <div role="status" className="no-print mb-4 flex gap-3 rounded-lg border border-warning/40 bg-warning-soft p-3 text-sm">
         <Info className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
-        <p>{t("draftNote")}</p>
+        <p>{draftNote ?? t("draftNote")}</p>
       </div>
     )
   }

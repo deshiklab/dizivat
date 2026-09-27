@@ -1,6 +1,6 @@
 import { addHistory, db, postStock, stockShortfall } from "@/lib/mock/db"
 import { diff } from "@/lib/mock/audit"
-import { buildPurchaseFields, buildSaleFields, unknownItems } from "@/lib/mock/build"
+import { buildPurchaseFields, buildSaleFields, unknownBranch, unknownItems } from "@/lib/mock/build"
 import { delay } from "@/lib/mock/query"
 import { cancelInput, purchaseInput, saleInput } from "@/lib/schemas"
 import type { Purchase, Sale } from "@/lib/types"
@@ -21,7 +21,7 @@ const find = (k: Kind, id: string) => list(k).find((x) => x.id === id || x.invoi
  */
 function approve(k: Kind, d: Doc, by: string) {
   if (k === "sale") {
-    const short = stockShortfall(d.lines)
+    const short = stockShortfall(d.lines, d.branchId)
     if (short) return problem(409, `Insufficient stock — ${short.detail}`, short.errors)
   }
   d.process = "Approved"
@@ -30,7 +30,7 @@ function approve(k: Kind, d: Doc, by: string) {
   return null
 }
 
-const DOC_FIELDS = ["customerName", "vendorName", "issueDate", "issueTime", "challanNo", "challanDate", "method", "deliveryAddress", "vehicle", "mode", "narration", "subtotal", "sd", "vat", "discount", "netTotal", "paid"]
+const DOC_FIELDS = ["branchName", "customerName", "vendorName", "issueDate", "issueTime", "challanNo", "challanDate", "method", "deliveryAddress", "vehicle", "mode", "narration", "subtotal", "sd", "vat", "discount", "netTotal", "paid"]
 /** Header-field diff plus a one-line summary of line changes (count / qty / price). */
 function docDiff(a: Doc, b: Doc) {
   const out = diff(a, b, DOC_FIELDS)
@@ -60,11 +60,11 @@ export function docRoutes(k: Kind) {
       if (parsed.data.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
       const cust = db.customers.find((c) => c.id === parsed.data.customerId && c.active !== false)
       if (!cust) return problem(422, "Validation failed", { customerId: ["unknown"] })
-      const bad = unknownItems(parsed.data.lines, "Finished Goods")
+      const bad = unknownItems(parsed.data.lines, "Finished Goods") ?? unknownBranch(parsed.data.branchId)
       if (bad) return problem(422, "Validation failed", bad)
       const fields = buildSaleFields(parsed.data, cust)
       if (parsed.data.process === "Approved") {
-        const short = stockShortfall(fields.lines)
+        const short = stockShortfall(fields.lines, fields.branchId)
         if (short) return problem(422, `Insufficient stock — ${short.detail}`, short.errors)
       }
       const before = structuredClone(d)
@@ -77,7 +77,7 @@ export function docRoutes(k: Kind) {
       if (parsed.data.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
       const v = db.vendors.find((x) => x.id === parsed.data.vendorId && x.active !== false)
       if (!v) return problem(422, "Validation failed", { vendorId: ["unknown"] })
-      const bad = unknownItems(parsed.data.lines, "buyable")
+      const bad = unknownItems(parsed.data.lines, "buyable") ?? unknownBranch(parsed.data.branchId)
       if (bad) return problem(422, "Validation failed", bad)
       const before = structuredClone(d)
       Object.assign(d, buildPurchaseFields(parsed.data, v))
@@ -107,7 +107,7 @@ export function docRoutes(k: Kind) {
       if (!r.success) return zodProblem(r.error)
       if (d.process === "Approved") {
         if (k === "purchase") {
-          const short = stockShortfall(d.lines)
+          const short = stockShortfall(d.lines, d.branchId)
           if (short) return problem(409, `Stock from this purchase has already been used — ${short.detail}`)
         }
         postStock(k, d.lines, -1)

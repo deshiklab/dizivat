@@ -2,11 +2,14 @@
 
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
+import { parseAsString, useQueryState } from "nuqs"
 import { ArrowLeft, Link2, Printer } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { RecordHistory } from "@/features/audit/record-history"
 import { PageHeader } from "@/components/common/page-header"
 import { ModeBadge, Pill, ProcessBadge } from "@/components/common/status-badge"
 import { Money, Num } from "@/components/common/money"
@@ -28,6 +31,7 @@ export function PurchaseDetail({ id }: { id: string }) {
   const router = useRouter()
   const { data: p, isLoading, error } = useQuery({ queryKey: ["purchase", id], queryFn: () => api.purchases.get(id) })
   const actions = useDocActions("purchase", { onDeleted: () => router.push("/purchases") })
+  const [tab, setTab] = useQueryState("tab", parseAsString.withDefault("overview"))
   if (isLoading) return <Skeleton className="h-96" />
   if (error || !p) return <EmptyState title={t("notFound")} action={<Button variant="outline" render={<Link href="/purchases" />}><ArrowLeft /> {t("backToList")}</Button>} />
   return (
@@ -46,6 +50,13 @@ export function PurchaseDetail({ id }: { id: string }) {
       />
       {actions.dialog}
       <DocBanner doc={p} />
+      <Tabs value={tab} onValueChange={(v) => setTab(v as string)}>
+      <TabsList className="no-print mb-4">
+        <TabsTrigger value="overview">{ts("tabOverview")}</TabsTrigger>
+        <TabsTrigger value="history">{ts("tabHistory")}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="history" className="max-w-3xl"><RecordHistory entityId={p.id} /></TabsContent>
+      <TabsContent value="overview">
       <div className="print-area grid gap-4 lg:grid-cols-[1fr_20rem]">
         <div className="hidden print:block">
           <h2 className="text-lg font-bold">{company.name} — {t("voucher")} {p.invoiceNo}</h2>
@@ -90,7 +101,7 @@ export function PurchaseDetail({ id }: { id: string }) {
             </dl>
             <p className="mt-3 text-xs text-muted-foreground">{t("rebateHint")}</p>
             <dl className="mt-4 grid gap-2 border-t pt-4 text-sm">
-              {[[t("field.vendor"), p.vendorName], [t("field.bin"), p.vendorBin], [t("field.challanDate"), fmtDate(p.challanDate, locale)], [ts("field.issuedBy"), `${p.issuedBy} · ${p.designation}`]].map(([k, v]) => (
+              {[[t("field.vendor"), p.vendorName], [t("field.bin"), p.vendorBin], [t("field.challanDate"), fmtDate(p.challanDate, locale)], [ts("field.branch"), p.branchName], [ts("field.issuedBy"), `${p.issuedBy} · ${p.designation}`]].map(([k, v]) => (
                 <div key={k}><dt className="text-xs text-muted-foreground">{k}</dt><dd>{v}</dd></div>
               ))}
             </dl>
@@ -98,6 +109,8 @@ export function PurchaseDetail({ id }: { id: string }) {
         </Card>
         <div className="no-print lg:col-start-2"><HistoryCard history={p.history} /></div>
       </div>
+      </TabsContent>
+      </Tabs>
     </>
   )
 }

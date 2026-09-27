@@ -19,6 +19,7 @@ import { Field } from "@/components/common/field"
 import { api, ApiError } from "@/lib/api/client"
 import { partyInput } from "@/lib/schemas"
 import type { Party, PartyRow } from "@/lib/types"
+import { HistorySection } from "@/features/audit/record-history"
 
 type In = z.input<typeof partyInput>
 type Out = z.output<typeof partyInput>
@@ -120,6 +121,7 @@ export function PartySheet({ kind, open, onOpenChange, party, onSaved, readOnly 
               </div>
               <Controller control={control} name="active" render={({ field }) => <Switch id="active" checked={field.value} onCheckedChange={field.onChange} disabled={readOnly} />} />
             </div>
+            {party && <HistorySection entityId={party.id} className="sm:col-span-2" />}
           </fieldset>
           <SheetFooter className="flex-row justify-end border-t">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{readOnly ? tc("close") : tc("cancel")}</Button>

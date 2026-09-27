@@ -23,7 +23,7 @@ import { fmtCompact, fmtDate, fmtNum } from "@/lib/format"
 import type { Sale } from "@/lib/types"
 import { appUrl } from "@/lib/base-path"
 
-const FACETS = ["customer", "process", "mode", "method", "payment"] as const
+const FACETS = ["customer", "process", "mode", "method", "payment", "branch"] as const
 
 export function SalesList() {
   const t = useTranslations("sales")
@@ -58,6 +58,7 @@ export function SalesList() {
       cell: ({ row }) => <Link href={`/sales/${row.original.id}`} className="font-medium text-primary hover:underline">{row.original.invoiceNo}</Link>,
     },
     { id: "challanNo", accessorKey: "challanNo", meta: { label: t("col.challanNo") }, header: t("col.challanNo"), cell: ({ row }) => <span className="tabular">{fmtNum(Number(row.original.challanNo), locale)}</span> },
+    { id: "branchName", accessorKey: "branchName", meta: { label: t("col.branch") }, header: t("col.branch"), cell: ({ row }) => <span className="whitespace-nowrap">{row.original.branchName}</span> },
     {
       id: "customerName", accessorKey: "customerName", meta: { label: t("col.customer"), className: "max-w-72" }, header: t("col.customer"),
       cell: ({ row }) => <span className="block max-w-72 truncate" title={row.original.customerName}>{row.original.customerName}</span>,
@@ -97,6 +98,7 @@ export function SalesList() {
 
   const labels = q.data?.facetLabels?.customer ?? {}
   const facetOpts = {
+    branch: Object.entries(q.data?.facetLabels?.branch ?? {}).map(([value, label]) => ({ value, label })),
     customer: Object.entries(labels).map(([value, label]) => ({ value, label })),
     process: ["Created", "Approved", "Cancelled"].map((v) => ({ value: v, label: tp(v) })),
     mode: ["Local", "Foreign"].map((v) => ({ value: v, label: tm(v) })),
@@ -138,7 +140,7 @@ export function SalesList() {
         getRowId={(r) => r.id}
         onRowClick={(r) => router.push(`/sales/${r.id}`)}
         selectable
-        defaultHidden={["sd", "discount", "method", "paid"]}
+        defaultHidden={["sd", "discount", "method", "paid", "branchName"]}
         filtered={activeCount > 0}
         filters={
           <>
@@ -146,6 +148,7 @@ export function SalesList() {
             <DateRangeFilter from={state.from} to={state.to} onChange={(from, to) => set({ from, to })} />
             <FacetFilter title={t("facet.customer")} options={facetOpts.customer} selected={state.customer} onChange={(v) => set({ customer: v })} counts={q.data?.facets.customer} />
             <FacetFilter title={t("facet.process")} options={facetOpts.process} selected={state.process} onChange={(v) => set({ process: v })} counts={q.data?.facets.process} />
+            {(q.data?.facets.branch && Object.keys(q.data.facets.branch).length > 1) || state.branch.length ? <FacetFilter title={t("facet.branch")} options={facetOpts.branch} selected={state.branch} onChange={(v) => set({ branch: v })} counts={q.data?.facets.branch} /> : null}
             <FacetFilter title={t("facet.mode")} options={facetOpts.mode} selected={state.mode} onChange={(v) => set({ mode: v })} counts={q.data?.facets.mode} />
             <FacetFilter title={t("facet.payment")} options={facetOpts.payment} selected={state.payment} onChange={(v) => set({ payment: v })} counts={q.data?.facets.payment} />
           </>

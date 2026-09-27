@@ -16,7 +16,7 @@ async def main():
         await expect(pg.get_by_text("This field is required.").first).to_be_visible(); ok("empty form shows validation errors")
         await pg.screenshot(path=f"{OUT}/15_sale_validation.png")
         # 2 fill
-        await pg.locator("#customerId").click(); await pg.get_by_placeholder("Search name or BIN…").fill("hillcrest"); await pg.get_by_role("option").first.click()
+        await pg.locator("#customerId").click(); await pg.get_by_placeholder("Search name or BIN…").fill("sunrise"); await pg.get_by_role("option").first.click()
         await pg.get_by_role("combobox", name="Product 1").click(); await pg.get_by_role("option", name=re.compile("Printed Blister")).click()
         await pg.get_by_label("Qty 1").fill("500")
         await pg.get_by_role("button", name="Add line").click()

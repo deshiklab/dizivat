@@ -23,7 +23,7 @@ import { fmtCompact, fmtDate, fmtNum } from "@/lib/format"
 import type { Purchase } from "@/lib/types"
 import { appUrl } from "@/lib/base-path"
 
-const FACETS = ["vendor", "process", "mode", "payment"] as const
+const FACETS = ["vendor", "process", "mode", "payment", "branch"] as const
 
 export function PurchaseList() {
   const t = useTranslations("purchases")
@@ -49,6 +49,7 @@ export function PurchaseList() {
     { id: "issueDate", accessorKey: "issueDate", meta: { label: t("col.issueDate") }, header: t("col.issueDate"), cell: ({ row }) => fmtDate(row.original.issueDate, locale) },
     { id: "invoiceNo", accessorKey: "invoiceNo", meta: { label: t("col.purchaseNo"), hideable: false }, header: t("col.purchaseNo"), cell: ({ row }) => <Link href={`/purchases/${row.original.id}`} className="font-medium text-primary hover:underline">{row.original.invoiceNo}</Link> },
     { id: "challanNo", accessorKey: "challanNo", meta: { label: t("col.challan") }, header: t("col.challan"), cell: ({ row }) => <span className="tabular">{row.original.challanNo}</span> },
+    { id: "branchName", accessorKey: "branchName", meta: { label: ts("col.branch") }, header: ts("col.branch"), cell: ({ row }) => <span className="whitespace-nowrap">{row.original.branchName}</span> },
     { id: "vendorName", accessorKey: "vendorName", meta: { label: t("col.vendor") }, header: t("col.vendor"), cell: ({ row }) => <span className="block max-w-72 truncate" title={row.original.vendorName}>{row.original.vendorName}</span> },
     { id: "mode", accessorKey: "mode", meta: { label: t("col.mode") }, header: t("col.mode"), cell: ({ row }) => <ModeBadge value={row.original.mode} /> },
     { id: "subtotal", accessorKey: "subtotal", meta: { label: t("col.subtotal"), align: "right", total: "subtotal" }, header: t("col.subtotal"), cell: ({ row }) => <Money value={row.original.subtotal} /> },
@@ -82,6 +83,7 @@ export function PurchaseList() {
   ], [locale, t, tc, tt, ts, can])
 
   const facetOpts = {
+    branch: Object.entries(q.data?.facetLabels?.branch ?? {}).map(([value, label]) => ({ value, label })),
     vendor: Object.entries(q.data?.facetLabels?.vendor ?? {}).map(([value, label]) => ({ value, label })),
     process: ["Created", "Approved", "Cancelled"].map((v) => ({ value: v, label: tp(v) })),
     mode: ["Local", "Foreign", "Non-registered"].map((v) => ({ value: v, label: tm(v === "Non-registered" ? "NonRegistered" : v) })),
@@ -106,7 +108,7 @@ export function PurchaseList() {
         loading={q.isLoading} fetching={q.isFetching} error={q.error} onRetry={() => q.refetch()}
         page={state.page} size={state.size} sort={state.sort}
         onPage={(page) => set({ page }, false)} onSize={(size) => set({ size })} onSort={(sort) => set({ sort })}
-        getRowId={(r) => r.id} onRowClick={(r) => router.push(`/purchases/${r.id}`)} selectable defaultHidden={["tti", "paid"]} filtered={activeCount > 0}
+        getRowId={(r) => r.id} onRowClick={(r) => router.push(`/purchases/${r.id}`)} selectable defaultHidden={["tti", "paid", "branchName"]} filtered={activeCount > 0}
         filters={
           <>
             <SearchInput value={state.q} onChange={(v) => set({ q: v })} placeholder={t("searchPlaceholder")} />
@@ -114,6 +116,7 @@ export function PurchaseList() {
             <FacetFilter title={t("facet.vendor")} options={facetOpts.vendor} selected={state.vendor} onChange={(v) => set({ vendor: v })} counts={q.data?.facets.vendor} />
             <FacetFilter title={t("facet.mode")} options={facetOpts.mode} selected={state.mode} onChange={(v) => set({ mode: v })} counts={q.data?.facets.mode} />
             <FacetFilter title={t("facet.process")} options={facetOpts.process} selected={state.process} onChange={(v) => set({ process: v })} counts={q.data?.facets.process} />
+            {(q.data?.facets.branch && Object.keys(q.data.facets.branch).length > 1) || state.branch.length ? <FacetFilter title={t("facet.branch")} options={facetOpts.branch} selected={state.branch} onChange={(v) => set({ branch: v })} counts={q.data?.facets.branch} /> : null}
             <FacetFilter title={t("facet.payment")} options={facetOpts.payment} selected={state.payment} onChange={(v) => set({ payment: v })} counts={q.data?.facets.payment} />
           </>
         }

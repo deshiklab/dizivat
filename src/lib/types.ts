@@ -30,7 +30,8 @@ export interface Item {
   masterItem: string
   brand: string
   name: string
-  unit: "Kg" | "Pcs" | "Roll" | "Meter"
+  /** unit-of-measure code from the Units master (Kg, Pcs, Roll …) */
+  unit: string
   sku: string
   purchasePrice: number
   costPrice: number
@@ -91,6 +92,9 @@ interface DocBase {
   updatedAt?: string
   cancelReason?: string
   history?: HistoryEntry[]
+  /** branch / warehouse the goods leave (sale) or arrive at (purchase) */
+  branchId: string
+  branchName: string
 }
 
 export interface Sale extends DocBase {
@@ -167,7 +171,7 @@ export interface SearchHit {
   href: string
 }
 
-export type LedgerType = "opening" | "purchase" | "sale" | "prodReceive" | "prodIssue" | "damage"
+export type LedgerType = "opening" | "purchase" | "sale" | "prodReceive" | "prodIssue" | "damage" | "transferIn" | "transferOut"
 export interface LedgerEntry {
   date: string
   type: LedgerType
@@ -180,12 +184,22 @@ export interface LedgerEntry {
   /** monthly summary rows until the Production module (R3) supplies documents */
   summary?: boolean
 }
-export interface ItemLedger { item: ItemWithStock; entries: LedgerEntry[]; totals: { in: number; out: number } }
+export interface ItemLedger {
+  item: ItemWithStock
+  entries: LedgerEntry[]
+  totals: { in: number; out: number }
+  closing: number
+  /** set when the ledger is for one branch (transfers then appear as in/out rows) */
+  branchId?: string
+  /** stock-holding branches and this item's quantity at each */
+  branches: { id: string; name: string }[]
+  byBranch: Record<string, number>
+}
 
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "customer" | "vendor" | "item" | "user" | "company" | "session"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
@@ -245,3 +259,36 @@ export interface AppNotification {
   tone?: "info" | "warning" | "success" | "danger"
   read: boolean
 }
+
+/* ── Sprint 4 ─────────────────────────────────────────────────────────── */
+
+/** Units-of-measure master (S4-04). `decimals` = quantity precision on forms. */
+export interface Unit { id: string; code: string; name: string; decimals: number; active: boolean; createdAt: string }
+export type UnitRow = Unit & { inUse: number }
+
+/** Stock documents (S4-05): inter-branch transfer (Mushak 6.5) and damage / wastage entry. */
+export type StockDocKind = "transfer" | "damage"
+export type DamageReason = "damaged" | "expired" | "wastage" | "lost"
+export interface StockLine { itemId: string; name: string; sku: string; uom: string; qty: number; /** unit cost at posting */ cost: number; value: number }
+interface StockDocBase {
+  id: string
+  /** TR-MMYY#### / DM-MMYY#### */
+  no: string
+  date: string
+  process: Process
+  lines: StockLine[]
+  totalQty: number
+  totalValue: number
+  note?: string
+  issuedBy: string
+  createdAt: string
+  updatedAt?: string
+  cancelReason?: string
+  history?: HistoryEntry[]
+}
+export interface Transfer extends StockDocBase { kind: "transfer"; fromBranchId: string; fromBranch: string; toBranchId: string; toBranch: string; vehicle?: string }
+export interface Damage extends StockDocBase { kind: "damage"; branchId: string; branch: string; reason: DamageReason }
+export type StockDoc = Transfer | Damage
+
+/** Item stock split by branch (branch id → qty) with valuation at cost. */
+export type StockRow = ItemWithStock & { byBranch: Record<string, number>; value: number; saleValue: number }

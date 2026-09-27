@@ -1,11 +1,11 @@
-import type { AppNotification, AuditEvent, Company, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { CompanyInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, UserInput } from "../schemas"
+import type { AppNotification, AuditEvent, Branch, Company, Damage, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { CompanyInput, DamageInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import { appPathname, appUrl } from "../base-path"
 
 /**
  * Typed API client. Today it calls the Next.js mock handlers at /api/v1;
- * set NEXT_PUBLIC_API_BASE to the Symfony gateway (e.g. https://vat.pul.com.bd/api/v1) to switch.
+ * set NEXT_PUBLIC_API_BASE to the Symfony gateway (e.g. https://vat.example.com/api/v1) to switch.
  */
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "/api/v1"
 
@@ -52,6 +52,19 @@ const parties = (kind: Party$) => ({
   restore: (id: string) => req<Party>(`/${kind}/${id}/restore`, { method: "POST" }),
   csvUrl: (p: ListParams) => `${BASE}/${kind}${qs({ ...p, view: "table", page: undefined, size: undefined, format: "csv" })}`,
 })
+
+type StockDoc$ = "transfers" | "damage"
+function stockDocs<T, I>(path: StockDoc$) {
+  return {
+    list: (p: ListParams) => req<ListResult<T>>(`/${path}${qs(p)}`),
+    get: (id: string) => req<T>(`/${path}/${id}`),
+    create: (b: I) => req<T>(`/${path}`, { method: "POST", body: JSON.stringify(b) }),
+    update: (id: string, b: I) => req<T>(`/${path}/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+    setProcess: (id: string, b: CancelBody) => req<T>(`/${path}/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+    remove: (id: string) => req<{ ok: true }>(`/${path}/${id}`, { method: "DELETE" }),
+    csvUrl: (p: ListParams) => `${BASE}/${path}${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+  }
+}
 
 export type CancelBody = { process: "Cancelled"; reason: string } | { process: "Approved" }
 
@@ -122,9 +135,23 @@ export const api = {
     create: (b: ItemInput) => req<ItemWithStock>("/items", { method: "POST", body: JSON.stringify(b) }),
     update: (id: string, b: ItemInput) => req<ItemWithStock>(`/items/${id}`, { method: "PUT", body: JSON.stringify(b) }),
     get: (id: string) => req<ItemWithStock>(`/items/${id}`),
-    ledger: (id: string) => req<ItemLedger>(`/items/${id}/ledger`),
+    ledger: (id: string, branch?: string) => req<ItemLedger>(`/items/${id}/ledger${qs({ branch })}`),
     csvUrl: (p: ListParams) => `${BASE}/items${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
   },
+  units: {
+    list: (p: ListParams = {}) => req<ListResult<UnitRow>>(`/units${qs(p)}`),
+    /** active units for pickers */
+    options: () => req<ListResult<UnitRow>>(`/units${qs({ active: "1", size: 100 })}`).then((r) => r.data),
+    create: (b: UnitInput) => req<UnitRow>("/units", { method: "POST", body: JSON.stringify(b) }),
+    update: (id: string, b: UnitInput) => req<UnitRow>(`/units/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+    remove: (id: string) => req<{ ok: true }>(`/units/${id}`, { method: "DELETE" }),
+  },
+  stock: {
+    list: (p: ListParams) => req<ListResult<StockRow> & { branches: Branch[]; branchValue: Record<string, number> }>(`/stock${qs(p)}`),
+    csvUrl: (p: ListParams) => `${BASE}/stock${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+  },
+  transfers: stockDocs<Transfer, TransferInput>("transfers"),
+  damage: stockDocs<Damage, DamageInput>("damage"),
   customers: parties("customers"),
   vendors: parties("vendors"),
 }

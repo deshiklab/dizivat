@@ -2,7 +2,7 @@ import type { z } from "zod"
 import type { Party, Purchase, Sale } from "../types"
 import type { purchaseInput, saleInput } from "../schemas"
 import { calcLine, round2, sumLines } from "../vat"
-import { db } from "./db"
+import { db, resolveBranch } from "./db"
 
 type SaleData = z.output<typeof saleInput>
 type PurchaseData = z.output<typeof purchaseInput>
@@ -23,6 +23,7 @@ export function buildSaleFields(d: SaleData, cust: Party) {
     mode: cust.mode as Sale["mode"], method: d.method, vds: cust.mode === "Foreign" ? false : d.vds, lines,
     subtotal: t.subtotal, sd: t.sd, vat: t.vat, discount: t.discount, netTotal: t.netTotal,
     paid, due: round2(t.netTotal - paid), issuedBy: d.issuedBy, designation: d.designation, narration: d.narration,
+    ...branchFields(d.branchId),
   } satisfies Partial<Sale>
 }
 
@@ -41,6 +42,7 @@ export function buildPurchaseFields(d: PurchaseData, v: Party) {
     method: d.method, lines, subtotal: t.subtotal, sd: t.sd, vat: t.vat, discount: t.discount, netTotal: t.netTotal,
     tti: 0, rebate: round2(lines.filter((l) => l.rebateable).reduce((a, l) => a + l.vat, 0)),
     paid, due: round2(t.netTotal - paid), issuedBy: d.issuedBy, designation: d.designation, narration: d.narration,
+    ...branchFields(d.branchId),
   } satisfies Partial<Purchase>
 }
 
@@ -54,3 +56,12 @@ export function unknownItems(lines: { itemId: string }[], group?: "Finished Good
   })
   return Object.keys(errors).length ? errors : null
 }
+
+/** Resolved branch snapshot for a document (call `unknownBranch` first). */
+function branchFields(id?: string) {
+  const b = resolveBranch(id)!
+  return { branchId: b.id, branchName: b.name }
+}
+
+/** Branch must exist and be able to hold stock (not the head office). */
+export const unknownBranch = (id: string | undefined, field = "branchId") => (resolveBranch(id) ? null : { [field]: ["unknownBranch"] })

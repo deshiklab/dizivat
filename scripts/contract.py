@@ -7,10 +7,10 @@ import os, random, sys, requests
 BASE = os.environ.get("BASE_URL", "http://localhost:3000") + "/api/v1"
 PW = "demo1234"
 # Who lacks each permission (used for the 403 check)
-LACKS = {"doc.create": "auditor", "doc.edit": "auditor", "doc.delete": "auditor", "doc.approve": "rafiqul", "doc.cancel": "rafiqul",
-         "master.edit": "rafiqul", "users.manage": "chanchal", "settings.manage": "chanchal", "audit.view": "rafiqul", "export": None}
+LACKS = {"doc.create": "auditor", "doc.edit": "auditor", "doc.delete": "auditor", "doc.approve": "kamal", "doc.cancel": "kamal",
+         "master.edit": "kamal", "users.manage": "arif", "settings.manage": "arif", "audit.view": "kamal", "export": None}
 # Who has it (used for the success/shape checks)
-HAS = {"users.manage": "admin", "settings.manage": "admin", "audit.view": "chanchal"}
+HAS = {"users.manage": "admin", "settings.manage": "admin", "audit.view": "arif"}
 
 E = lambda m, p, perm, desc, page=False, csv=False, public=False: dict(m=m, p=p, perm=perm, desc=desc, page=page, csv=csv, public=public)
 ENDPOINTS = [
@@ -23,7 +23,7 @@ ENDPOINTS = [
     E("DELETE", "/me/views?table=sales&name=x", None, "Delete a saved view"),
     E("PUT", "/me/password", None, "Change own password {current, next, confirm}; other sessions revoked"),
     E("GET", "/dashboard", None, "KPIs, charts, deadlines, low stock for the current VAT period"),
-    E("GET", "/search?q=pul", None, "Global search (invoices, parties, items)"),
+    E("GET", "/search?q=bay", None, "Global search (invoices, parties, items)"),
     E("GET", "/notifications", None, "Notifications for the current user {items, unread}"),
     E("POST", "/notifications/read", None, "Mark read {ids} | {all: true}"),
     E("GET", "/sales", None, "Sales invoices — Page<Sale> with facets/totals", page=True, csv=True),
@@ -46,7 +46,25 @@ ENDPOINTS = [
     E("POST", "/items", "master.edit", "Create item (SKU unique)"),
     E("GET", "/items/{item}", None, "One item with stock"),
     E("PUT", "/items/{item}", "master.edit", "Update item"),
-    E("GET", "/items/{item}/ledger", None, "Stock ledger (opening, movements, balance)"),
+    E("GET", "/items/{item}/ledger", None, "Stock ledger (opening, movements, balance); ?branch=b1 → one branch incl. transfers in/out"),
+    E("GET", "/stock", None, "Stock by branch — Page<StockRow> (+ branches, branchValue); ?branch= holds stock there", page=True, csv=True),
+    E("GET", "/transfers", None, "Stock transfers (Mushak 6.5) — Page<Transfer>; facets process/fromBranch/toBranch", page=True, csv=True),
+    E("POST", "/transfers", "doc.create", "Create transfer {fromBranchId, toBranchId, date, vehicle?, note?, lines[{itemId, qty}], process} (422 sameBranch/unknownBranch; approve checks source stock)"),
+    E("GET", "/transfers/{transfer}", None, "One transfer with history"),
+    E("PUT", "/transfers/{transfer}", "doc.edit", "Replace a draft (409 if not a draft)"),
+    E("PATCH", "/transfers/{transfer}", None, "Approve (doc.approve; moves stock) or cancel {reason≥10} (doc.cancel; 409 if goods already used at destination)"),
+    E("DELETE", "/transfers/{transfer}", "doc.delete", "Delete a draft (409 if not a draft)"),
+    E("GET", "/damage", None, "Damage & wastage — Page<Damage>; facets process/branch/reason", page=True, csv=True),
+    E("POST", "/damage", "doc.create", "Create damage entry {branchId, date, reason, note (≥10 when lost), lines, process}"),
+    E("GET", "/damage/{damage}", None, "One damage entry with history"),
+    E("PUT", "/damage/{damage}", "doc.edit", "Replace a draft"),
+    E("PATCH", "/damage/{damage}", None, "Approve (writes stock off) / cancel (restores it)"),
+    E("DELETE", "/damage/{damage}", "doc.delete", "Delete a draft"),
+    E("GET", "/units", None, "Units of measure — Page<UnitRow> (inUse = items using it); ?active=1", page=True),
+    E("POST", "/units", "master.edit", "Create unit {code, name, decimals 0–3, active} (422 duplicate)"),
+    E("GET", "/units/un1", None, "One unit"),
+    E("PUT", "/units/un1", "master.edit", "Update unit (422 unitInUse when re-coding a unit items use)"),
+    E("DELETE", "/units/un7", "master.edit", "Delete unit (409 when items use it — deactivate instead)"),
     E("GET", "/customers?view=table", None, "Customers — Page<PartyRow>", page=True, csv=True),
     E("POST", "/customers", "master.edit", "Create customer (422 duplicate/customerMode)"),
     E("GET", "/customers/c1", None, "One customer with aggregates"),
@@ -86,10 +104,12 @@ def check(cond, msg):
 def is_problem(r): return r.headers.get("content-type", "").startswith("application/problem+json") and "title" in r.json()
 
 def fixtures():
-    s = S("chanchal")
+    s = S("arif")
     sale = s.get(BASE + "/sales?process=Approved&size=1").json()["data"][0]["id"]
     purchase = s.get(BASE + "/purchases?process=Approved&size=1").json()["data"][0]["id"]
-    return {"sale": sale, "purchase": purchase, "item": "i1"}
+    transfer = s.get(BASE + "/transfers?process=Approved&size=1").json()["data"][0]["id"]
+    damage = s.get(BASE + "/damage?process=Approved&size=1").json()["data"][0]["id"]
+    return {"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage}
 
 def run():
     fx = fixtures()
@@ -105,14 +125,14 @@ def run():
             check(r.status_code == 403 and is_problem(r) and e["perm"] in r.json()["title"], f"{m} {path} as {LACKS[e['perm']]} → {r.status_code} (want 403 naming {e['perm']})")
         # shape for readable endpoints
         if m == "GET":
-            r = S(HAS.get(e["perm"], "chanchal")).get(url)
+            r = S(HAS.get(e["perm"], "arif")).get(url)
             check(r.status_code == 200 and r.headers["content-type"].startswith("application/json"), f"GET {path} → {r.status_code}")
             if e["page"] and r.ok:
                 d = r.json()
                 check(all(k in d for k in ("data", "total", "page", "size", "facets")) and isinstance(d["data"], list), f"GET {path} is not a Page")
             if e["csv"]:
                 sep = "&" if "?" in path else "?"
-                r = S(HAS.get(e["perm"], "chanchal")).get(url + sep + "format=csv")
+                r = S(HAS.get(e["perm"], "arif")).get(url + sep + "format=csv")
                 check(r.ok and r.headers["content-type"].startswith("text/csv"), f"GET {path} CSV → {r.status_code} {r.headers.get('content-type')}")
 
     # Specific error contracts: (user, method, path, body, status, error-key or None)
@@ -120,28 +140,46 @@ def run():
     cases = [
         (None, "POST", "/auth/login", {}, 422, "username"),
         (None, "POST", "/auth/login", {"username": rnd, "password": "x"}, 401, "_"),
-        ("chanchal", "GET", "/sales/nope", None, 404, None),
-        ("chanchal", "GET", "/purchases/nope", None, 404, None),
-        ("chanchal", "GET", "/items/nope", None, 404, None),
-        ("chanchal", "POST", "/sales", {}, 422, "customerId"),
-        ("chanchal", "POST", "/purchases", {}, 422, "vendorId"),
-        ("chanchal", "PUT", f"/sales/{fx['sale']}", {}, 409, None),
-        ("chanchal", "DELETE", f"/sales/{fx['sale']}", None, 409, None),
-        ("chanchal", "PATCH", f"/sales/{fx['sale']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
-        ("chanchal", "POST", "/items", {}, 422, "name"),
-        ("chanchal", "POST", "/customers", {}, 422, "name"),
-        ("chanchal", "DELETE", "/customers/c1", None, 409, None),
-        ("chanchal", "GET", "/tariff?hs=99999999", None, 404, None),
-        ("chanchal", "POST", "/notifications/read", {}, 422, None),
-        ("chanchal", "PUT", "/me/password", {"current": "wrong-one", "next": "abcd12345", "confirm": "abcd12345"}, 422, "current"),
-        ("chanchal", "PUT", "/me/password", {"current": PW, "next": "short", "confirm": "short"}, 422, "next"),
+        ("arif", "GET", "/sales/nope", None, 404, None),
+        ("arif", "GET", "/purchases/nope", None, 404, None),
+        ("arif", "GET", "/items/nope", None, 404, None),
+        ("arif", "POST", "/sales", {}, 422, "customerId"),
+        ("arif", "POST", "/purchases", {}, 422, "vendorId"),
+        ("arif", "PUT", f"/sales/{fx['sale']}", {}, 409, None),
+        ("arif", "DELETE", f"/sales/{fx['sale']}", None, 409, None),
+        ("arif", "PATCH", f"/sales/{fx['sale']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
+        ("arif", "POST", "/items", {}, 422, "name"),
+        ("arif", "POST", "/customers", {}, 422, "name"),
+        ("arif", "DELETE", "/customers/c1", None, 409, None),
+        ("arif", "GET", "/tariff?hs=99999999", None, 404, None),
+        ("arif", "POST", "/notifications/read", {}, 422, None),
+        ("arif", "PUT", "/me/password", {"current": "wrong-one", "next": "abcd12345", "confirm": "abcd12345"}, 422, "current"),
+        ("arif", "PUT", "/me/password", {"current": PW, "next": "short", "confirm": "short"}, 422, "next"),
         ("admin", "GET", "/users/nope", None, 404, None),
         ("admin", "POST", "/users", {}, 422, "username"),
-        ("admin", "POST", "/users", {"username": "chanchal", "name": "Dup User", "designation": "Tester", "email": "x@y.co", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "username"),
-        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@pulindustries.com.bd", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "role"),
-        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@pulindustries.com.bd", "mobile": "", "department": "", "role": "admin", "active": False}, 422, "active"),
+        ("admin", "POST", "/users", {"username": "arif", "name": "Dup User", "designation": "Tester", "email": "x@y.co", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "username"),
+        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@rupsha-flexipack.example", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "role"),
+        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@rupsha-flexipack.example", "mobile": "", "department": "", "role": "admin", "active": False}, 422, "active"),
         ("admin", "POST", "/users/u5/reset-password", None, 422, None),
         ("admin", "PUT", "/company", {}, 422, "name"),
+        # Sprint 4 — branches, stock documents, units
+        ("arif", "POST", "/sales", {"branchId": "b2"}, 422, None),
+        ("arif", "GET", "/transfers/nope", None, 404, None),
+        ("arif", "GET", "/damage/nope", None, 404, None),
+        ("arif", "GET", "/units/nope", None, 404, None),
+        ("arif", "POST", "/transfers", {}, 422, "fromBranchId"),
+        ("arif", "POST", "/transfers", {"fromBranchId": "b1", "toBranchId": "b1", "date": "2026-09-20", "lines": [{"itemId": "i1", "qty": 1}], "process": "Created"}, 422, "toBranchId"),
+        ("arif", "POST", "/transfers", {"fromBranchId": "b1", "toBranchId": "b2", "date": "2026-09-20", "lines": [{"itemId": "i1", "qty": 1}], "process": "Created"}, 422, "toBranchId"),
+        ("arif", "PUT", f"/transfers/{fx['transfer']}", {}, 409, None),
+        ("arif", "DELETE", f"/transfers/{fx['transfer']}", None, 409, None),
+        ("arif", "PATCH", f"/transfers/{fx['transfer']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
+        ("arif", "POST", "/damage", {}, 422, "branchId"),
+        ("arif", "POST", "/damage", {"branchId": "b1", "date": "2026-09-20", "reason": "lost", "note": "gone", "lines": [{"itemId": "i1", "qty": 1}], "process": "Created"}, 422, "note"),
+        ("arif", "DELETE", f"/damage/{fx['damage']}", None, 409, None),
+        ("arif", "POST", "/units", {}, 422, "code"),
+        ("arif", "POST", "/units", {"code": "Kg", "name": "Kilogram again", "decimals": 2, "active": True}, 422, "code"),
+        ("arif", "PUT", "/units/un1", {"code": "KGX", "name": "Kilogram", "decimals": 3, "active": True}, 422, "code"),
+        ("arif", "DELETE", "/units/un1", None, 409, None),
     ]
     for user, m, path, body, status, key in cases:
         r = S(user).request(m, BASE + path, json=body)

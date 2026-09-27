@@ -32,7 +32,7 @@ async def main():
         ctx = await browser.new_context(viewport={"width": 1440, "height": 900}, locale="en-US", accept_downloads=True)
         page = await ctx.new_page()
         errors: list[str] = []
-        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("pageerror", lambda e: errors.append(f"{page.url}: {str(e)[:160]}"))
 
         # 1. Root → locale → sign-in (no session yet)
         await page.goto(BASE + "/")
@@ -42,14 +42,14 @@ async def main():
         check("static demo notice + reset button", await page.get_by_role("button", name="Reset demo data").is_visible())
 
         # 2. Wrong password → 401 with attempts left (handler running in the browser)
-        await page.get_by_label("Username").fill("rafiqul")
+        await page.get_by_label("Username").fill("kamal")
         await page.locator("#password").fill("nope")
         await page.get_by_role("button", name="Sign in").click()
         await expect(page.locator("main p[role=alert]")).to_contain_text("attempt")
         check("bad password shows attempts left", True)
 
         # 3. Sign in → dashboard
-        await page.get_by_label("Username").fill("chanchal")
+        await page.get_by_label("Username").fill("arif")
         await page.locator("#password").fill("demo1234")
         await page.get_by_role("button", name="Sign in").click()
         await page.wait_for_url(re.compile(re.escape(PREFIX) + r"/en/$"), timeout=15000)
@@ -95,6 +95,16 @@ async def main():
         await page.goto(BASE + "/en/production/bom/")
         await expect(page.get_by_role("heading", level=1)).to_be_visible(timeout=15000)
         check("placeholder route renders", True)
+
+        # 8b. Sprint 4 pages run on the in-browser API (static routes, no server)
+        await page.goto(BASE + "/en/inventory/transfers/")
+        await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
+        check("stock transfers page renders", await page.locator("table tbody tr").count() > 3)
+        await page.goto(BASE + "/en/master/units/")
+        await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
+        check("units page renders", await page.locator("table tbody tr").count() >= 7)
+        r = await api(page, "GET", "/stock?size=5")
+        check("stock-by-branch API answers in the browser", r["status"] == 200 and "branches" in (r["body"] or {}))
 
         # 9. CSV export link is served by the in-browser API
         await page.goto(BASE + "/en/vat/tariff/")

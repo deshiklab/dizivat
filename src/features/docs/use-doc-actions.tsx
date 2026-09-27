@@ -35,7 +35,7 @@ export function useDocActions(kind: Kind, opts: { onDeleted?: () => void } = {})
     qc.invalidateQueries({ queryKey: [listKey] })
     qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["notifications"] })
     qc.invalidateQueries({ queryKey: ["items"] })
-    qc.invalidateQueries({ queryKey: ["ledger"] })
+    qc.invalidateQueries({ queryKey: ["ledger"] }); qc.invalidateQueries({ queryKey: ["stock"] }); qc.invalidateQueries({ queryKey: ["audit"] })
     if (d) qc.setQueryData([kind, d.id], d)
   }
 

@@ -17,10 +17,19 @@ import { Pill } from "@/components/common/status-badge"
 import { api } from "@/lib/api/client"
 import { fmtCompact, fmtNum } from "@/lib/format"
 import type { ItemWithStock } from "@/lib/types"
-import { ItemSheet } from "./item-sheet"
-import { LedgerSheet } from "./ledger-sheet"
+import dynamic from "next/dynamic"
 import { useCan } from "@/components/auth/me-provider"
 import { AlertTriangle, CircleSlash } from "lucide-react"
+
+// The sheets (form + HS lookup, ledger + history) open on demand — keep them off the list's critical path (S4-03).
+const ItemSheet = dynamic(() => import("./item-sheet").then((m) => m.ItemSheet), { ssr: false })
+const LedgerSheet = dynamic(() => import("./ledger-sheet").then((m) => m.LedgerSheet), { ssr: false })
+/** true from the first time `open` is set, so a lazily loaded sheet stays mounted for its close animation */
+function useOnceOpen(open: boolean) {
+  const [once, setOnce] = React.useState(open)
+  React.useEffect(() => { if (open) setOnce(true) }, [open])
+  return once || open
+}
 
 const FACETS = ["group", "unit", "stock"] as const
 
@@ -52,6 +61,9 @@ export function ItemsList() {
   const onPage = editId ? q.data?.data.find((i) => i.id === editId) : undefined
   const single = useQuery({ queryKey: ["item", editId], queryFn: () => api.items.get(editId!), enabled: !!editId && !!q.data && !onPage })
   const editing = editId && canEdit ? onPage ?? single.data ?? null : null
+  const itemOpen = (!!isNew && canEdit) || !!editing
+  const itemMounted = useOnceOpen(itemOpen)
+  const ledgerMounted = useOnceOpen(!!ledgerId)
   const gl = (g: string) => tg(g.replace(/ /g, ""))
 
   const columns = React.useMemo<ColumnDef<ItemWithStock, unknown>[]>(() => [
@@ -85,7 +97,7 @@ export function ItemsList() {
 
   const facetOpts = {
     group: ["Raw Material", "Consumable", "Packing Materials", "Finished Goods"].map((v) => ({ value: v, label: gl(v) })),
-    unit: ["Kg", "Pcs", "Roll", "Meter"].map((v) => ({ value: v, label: v })),
+    unit: Object.keys(q.data?.facets.unit ?? {}).sort().map((v) => ({ value: v, label: v })),
     stock: ["ok", "low", "out"].map((v) => ({ value: v, label: t(`stock.${v}`) })),
   }
   const chips = [
@@ -128,8 +140,8 @@ export function ItemsList() {
           </div>
         )}
       />
-      <LedgerSheet id={ledgerId} onOpenChange={(o) => { if (!o) setLedgerId(null) }} onEdit={(id) => { setLedgerId(null); setEditId(id) }} />
-      <ItemSheet open={(isNew && canEdit) || !!editing} item={editing} onOpenChange={(o) => { if (!o) { setNew(null); setEditId(null) } }} />
+      {ledgerMounted && <LedgerSheet id={ledgerId} onOpenChange={(o) => { if (!o) setLedgerId(null) }} onEdit={(id) => { setLedgerId(null); setEditId(id) }} />}
+      {itemMounted && <ItemSheet open={itemOpen} item={editing} onOpenChange={(o) => { if (!o) { setNew(null); setEditId(null) } }} />}
     </>
   )
 }

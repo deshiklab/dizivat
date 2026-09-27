@@ -18,6 +18,7 @@ import { Link, useRouter } from "@/i18n/navigation"
 import { api, ApiError } from "@/lib/api/client"
 import { fmtDate } from "@/lib/format"
 import { Mushak63 } from "./mushak-63"
+import { RecordHistory } from "@/features/audit/record-history"
 import { useDocActions } from "@/features/docs/use-doc-actions"
 import { DocActionButtons, DocBanner, HistoryCard } from "@/features/docs/doc-parts"
 
@@ -45,7 +46,7 @@ export function SaleDetail({ id }: { id: string }) {
   }
   const url = typeof window !== "undefined" ? window.location.href.split("?")[0] : ""
   const share = () => { navigator.clipboard?.writeText(url); toast.success(tt("linkCopied")) }
-  const mail = `mailto:?subject=${encodeURIComponent(`Mushak 6.3 – ${s.invoiceNo} – PUL INDUSTRIES LTD`)}&body=${encodeURIComponent(`${s.customerName}\n${t("col.netTotal")}: BDT ${s.netTotal}\n${url}`)}`
+  const mail = `mailto:?subject=${encodeURIComponent(`Mushak 6.3 – ${s.invoiceNo} – RUPSHA FLEXIPACK LTD`)}&body=${encodeURIComponent(`${s.customerName}\n${t("col.netTotal")}: BDT ${s.netTotal}\n${url}`)}`
 
   return (
     <>
@@ -69,7 +70,9 @@ export function SaleDetail({ id }: { id: string }) {
         <TabsList className="no-print mb-4">
           <TabsTrigger value="overview">{t("tabOverview")}</TabsTrigger>
           <TabsTrigger value="mushak">{t("tabMushak")}</TabsTrigger>
+          <TabsTrigger value="history">{t("tabHistory")}</TabsTrigger>
         </TabsList>
+        <TabsContent value="history" className="max-w-3xl"><RecordHistory entityId={s.id} /></TabsContent>
         <TabsContent value="overview">
           <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
             <Card className="self-start">
@@ -117,7 +120,7 @@ export function SaleDetail({ id }: { id: string }) {
                 <CardContent>
                   <dl className="grid gap-2 text-sm">
                     {[
-                      [t("field.customer"), s.customerName], [t("field.bin"), s.customerBin], [t("field.delivery"), s.deliveryAddress],
+                      [t("field.customer"), s.customerName], [t("field.bin"), s.customerBin], [t("field.branch"), s.branchName], [t("field.delivery"), s.deliveryAddress],
                       [t("field.vehicle"), s.vehicle || "—"], [t("field.issueTime"), `${fmtDate(s.issueDate, locale)} ${s.issueTime}`],
                       [t("field.method"), tpm(s.method)], [t("field.vds"), s.vds ? tc("yes") : tc("no")], [t("field.issuedBy"), `${s.issuedBy} · ${s.designation}`],
                     ].map(([k, v]) => <div key={k} className="grid gap-0.5"><dt className="text-xs text-muted-foreground">{k}</dt><dd className="break-words">{v}</dd></div>)}

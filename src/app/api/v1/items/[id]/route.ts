@@ -2,6 +2,7 @@ import { db, withStock } from "@/lib/mock/db"
 import { itemInput } from "@/lib/schemas"
 import { json, problem, withAuth, zodProblem } from "../../_lib"
 import { diff, recordAudit } from "@/lib/mock/audit"
+import { badUnit } from "@/lib/mock/units"
 
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -18,6 +19,8 @@ export const PUT = withAuth<Ctx>("master.edit", async (req, { params }, user) =>
   const parsed = itemInput.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return zodProblem(parsed.error)
   if (db.items.some((i) => i.id !== id && i.sku.toLowerCase() === parsed.data.sku.toLowerCase())) return problem(422, "Validation failed", { sku: ["duplicate"] })
+  const bu = badUnit(parsed.data.unit, it.unit)
+  if (bu) return problem(422, "Validation failed", bu)
   const before = { ...it }
   Object.assign(it, parsed.data)
   recordAudit({ actor: user, entity: "item", entityId: it.id, ref: `${it.sku} · ${it.name}`, action: "edited",

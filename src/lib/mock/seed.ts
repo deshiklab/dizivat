@@ -26,32 +26,32 @@ const shuffle = <T,>(arr: readonly T[]) => {
 const pad = (n: number, w = 4) => String(n).padStart(w, "0")
 const bin = () => `${pad(int(1000, 9999), 4)}${pad(int(10000, 99999), 5)}-${pad(int(101, 999), 4)}`
 
-// ── Parties (names observed in the legacy system + representative additions) ──
+// ── Parties (fictitious businesses; BIN/NID formats as in the legacy system) ──
 export const customers: Party[] = [
-  { id: "c1", name: "HILLCREST PRINTERS LTD", bin: "000512347-0203", mobile: "01711-402233", address: "Plot 12, Tejgaon I/A, Dhaka-1208", kind: "customer", mode: "Local" },
-  { id: "c2", name: "ESSENTIAL DRUGS COMPANY LIMITED", bin: "000045678-0101", mobile: "01819-223344", address: "Tejgaon I/A, Dhaka-1208", kind: "customer", mode: "Local" },
-  { id: "c3", name: "DELTA PHARMA PACKAGING LTD", bin: bin(), mobile: "01713-556677", address: "Kashimpur, Gazipur-1750", kind: "customer", mode: "Local" },
-  { id: "c4", name: "ORION HEALTHCARE LTD", bin: bin(), mobile: "01912-889900", address: "Tongi I/A, Gazipur-1710", kind: "customer", mode: "Local" },
-  { id: "c5", name: "NAVANA FOODS & BEVERAGE LTD", bin: bin(), mobile: "01730-112211", address: "Rupganj, Narayanganj-1460", kind: "customer", mode: "Local" },
-  { id: "c6", name: "MEGHNA CONSUMER PRODUCTS LTD", bin: bin(), mobile: "01755-667788", address: "Meghnaghat, Sonargaon, Narayanganj", kind: "customer", mode: "Local" },
-  { id: "c7", name: "SHOHAG AGRO CHEMICALS LTD", bin: bin(), mobile: "01670-445566", address: "Savar, Dhaka-1340", kind: "customer", mode: "Local" },
-  { id: "c8", name: "GULF MEDICAL SUPPLIES LLC", bin: "EXP-AE-2024-118", mobile: "+971-4-3345566", address: "Al Quoz Industrial Area 3, Dubai, UAE", kind: "customer", mode: "Foreign", country: "UAE" },
-  { id: "c9", name: "COLOMBO PHARMA (PVT) LTD", bin: "EXP-LK-2025-031", mobile: "+94-11-2233445", address: "Ekala Industrial Estate, Ja-Ela, Sri Lanka", kind: "customer", mode: "Foreign", country: "Sri Lanka" },
+  { id: "c1", name: "SUNRISE PRINT & PACK LTD", bin: "000731906-0203", mobile: "01711-402233", address: "Plot 12, Tejgaon I/A, Dhaka-1208", kind: "customer", mode: "Local" },
+  { id: "c2", name: "NATIONAL MEDICARE LIMITED", bin: "000268417-0101", mobile: "01819-223344", address: "Tejgaon I/A, Dhaka-1208", kind: "customer", mode: "Local" },
+  { id: "c3", name: "RIVERVIEW PHARMA LTD", bin: bin(), mobile: "01713-556677", address: "Kashimpur, Gazipur-1750", kind: "customer", mode: "Local" },
+  { id: "c4", name: "GREENLEAF HEALTHCARE LTD", bin: bin(), mobile: "01912-889900", address: "Tongi I/A, Gazipur-1710", kind: "customer", mode: "Local" },
+  { id: "c5", name: "BAYSIDE FOODS & BEVERAGE LTD", bin: bin(), mobile: "01730-112211", address: "Rupganj, Narayanganj-1460", kind: "customer", mode: "Local" },
+  { id: "c6", name: "LOTUS CONSUMER PRODUCTS LTD", bin: bin(), mobile: "01755-667788", address: "Meghnaghat, Sonargaon, Narayanganj", kind: "customer", mode: "Local" },
+  { id: "c7", name: "SHAPLA AGRO CHEMICALS LTD", bin: bin(), mobile: "01670-445566", address: "Tongi, Gazipur-1710", kind: "customer", mode: "Local" },
+  { id: "c8", name: "DESERT ROSE MEDICAL TRADING LLC", bin: "EXP-AE-2024-118", mobile: "+971-4-3345566", address: "Al Quoz Industrial Area 3, Dubai, UAE", kind: "customer", mode: "Foreign", country: "UAE" },
+  { id: "c9", name: "LANKA CAREPACK (PVT) LTD", bin: "EXP-LK-2025-031", mobile: "+94-11-2233445", address: "Ekala Industrial Estate, Ja-Ela, Sri Lanka", kind: "customer", mode: "Foreign", country: "Sri Lanka" },
 ]
 
 export const vendors: Party[] = [
-  { id: "v1", name: "HYUNDAI L AND C CORPORATION", bin: "IMP-KR-HLC", mobile: "+82-2-3456-7890", address: "Seoul, Republic of Korea", kind: "vendor", mode: "Foreign", country: "Korea" },
-  { id: "v2", name: "HENAN MINGSHENG NEW MATERIAL TECHNOLOGY CO LTD", bin: "IMP-CN-HMS", mobile: "+86-371-6655-4433", address: "Zhengzhou, Henan, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v3", name: "XIAMEN CHANGSU INDUSTRIAL CORPORATION LTD", bin: "IMP-CN-XCS", mobile: "+86-592-6881-234", address: "Xiamen, Fujian, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v4", name: "NANTONG COMENS NEW MATERIALS CO. LTD", bin: "IMP-CN-NTC", mobile: "+86-513-8511-0099", address: "Nantong, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v5", name: "SUZHOU BOWU NEW MATERIAL TECHNOLOGY CO. LTD", bin: "IMP-CN-SBW", mobile: "+86-512-6587-1122", address: "Suzhou, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v6", name: "BENE CHEMICALS LTD", bin: "002314567-0302", mobile: "01711-908070", address: "Tongi, Gazipur-1710", kind: "vendor", mode: "Local" },
-  { id: "v7", name: "DHAKA POLY INDUSTRIES LTD", bin: bin(), mobile: "01819-303030", address: "Ashulia, Savar, Dhaka", kind: "vendor", mode: "Local" },
-  { id: "v8", name: "M/S J N G ENTERPRISE", bin: "NID 1994261234567", mobile: "01552-340011", address: "Nawabpur Road, Dhaka-1100", kind: "vendor", mode: "Non-registered" },
-  { id: "v9", name: "M/S RAHMAN CARTON HOUSE", bin: "NID 1987263456789", mobile: "01677-121314", address: "Dhamrai, Dhaka-1350", kind: "vendor", mode: "Non-registered" },
+  { id: "v1", name: "KORYO FILM MATERIALS CO LTD", bin: "IMP-KR-KFM", mobile: "+82-2-3456-7890", address: "Seoul, Republic of Korea", kind: "vendor", mode: "Foreign", country: "Korea" },
+  { id: "v2", name: "ZHENGZHOU BRIGHTFOIL MATERIALS CO LTD", bin: "IMP-CN-ZBF", mobile: "+86-371-6655-4433", address: "Zhengzhou, Henan, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v3", name: "XIAMEN SEABREEZE FILMS CO LTD", bin: "IMP-CN-XSF", mobile: "+86-592-6881-234", address: "Xiamen, Fujian, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v4", name: "NANTONG EVERGREEN POLYMER CO. LTD", bin: "IMP-CN-NEP", mobile: "+86-513-8511-0099", address: "Nantong, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v5", name: "SUZHOU JADELINE MATERIALS CO. LTD", bin: "IMP-CN-SJM", mobile: "+86-512-6587-1122", address: "Suzhou, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v6", name: "BENGAL SOLVENT CHEMICALS LTD", bin: "002590318-0302", mobile: "01711-908070", address: "Tongi, Gazipur-1710", kind: "vendor", mode: "Local" },
+  { id: "v7", name: "MEGHNA POLY INDUSTRIES LTD", bin: bin(), mobile: "01819-303030", address: "Sonargaon, Narayanganj", kind: "vendor", mode: "Local" },
+  { id: "v8", name: "M/S K R TRADING", bin: "NID 1994261234567", mobile: "01552-340011", address: "Nawabpur Road, Dhaka-1100", kind: "vendor", mode: "Non-registered" },
+  { id: "v9", name: "M/S NIRAPAD CARTON HOUSE", bin: "NID 1987263456789", mobile: "01677-121314", address: "Kaliakair, Gazipur-1750", kind: "vendor", mode: "Non-registered" },
 ]
 
-// ── Items (HS codes & names from the legacy Items list) ──
+// ── Items (typical flexible-packaging materials with their HS codes) ──
 type Seed = [string, Item["group"], string, string, Item["unit"], number, number, number]
 // name, group, hs, master, unit, purchasePrice, salePrice(0=not sold), opening
 const itemSeeds: Seed[] = [
@@ -84,7 +84,7 @@ export const items: Item[] = itemSeeds.map(([name, group, hs, master, unit, pp, 
   hsCode: hs,
   group,
   masterItem: master,
-  brand: group === "Finished Goods" ? "PUL" : pick(["Generic", "Imported", "Local"]),
+  brand: group === "Finished Goods" ? "RFP" : pick(["Generic", "Imported", "Local"]),
   name,
   unit,
   sku: `${group === "Finished Goods" ? "FG" : group === "Raw Material" ? "RM" : group === "Consumable" ? "CN" : "PM"}-${pad(i + 1, 3)}`,
@@ -104,7 +104,7 @@ export const items: Item[] = itemSeeds.map(([name, group, hs, master, unit, pp, 
 }))
 
 const methods: PayMethod[] = ["Bank", "Bank", "Bank", "Cheque", "Cash", "Mobile"]
-const people = [["Chanchal Mahmud", "Shift-In-Charge"], ["Md. Rafiqul Islam", "Store Officer"], ["Nusrat Jahan", "Accounts Executive"]] as const
+const people = [["Arif Hossain", "Shift-In-Charge"], ["Md. Kamal Uddin", "Store Officer"], ["Farzana Akter", "Accounts Executive"]] as const
 
 function* monthsBack(from = new Date(2025, 6, 1), to = new Date(2026, 8, 24)) {
   const d = new Date(from)
@@ -165,7 +165,7 @@ for (const day of monthsBack()) {
       lines,
       subtotal: t.subtotal, sd: t.sd, vat: t.vat, discount: t.discount, netTotal: t.netTotal,
       paid, due: round2(t.netTotal - paid), process,
-      issuedBy: by, designation: desig,
+      issuedBy: by, designation: desig, branchId: "b1", branchName: "",
     })
     if (process !== "Cancelled") for (const l of lines) items.find((i) => i.id === l.itemId)!.sold += l.qty
   }
@@ -208,7 +208,7 @@ for (const day of monthsBack()) {
       subtotal: t.subtotal, sd: t.sd, vat: t.vat, discount: 0, netTotal: t.netTotal,
       tti: round2(tti), rebate: round2(lines.filter((l) => l.rebateable).reduce((a, l) => a + l.vat, 0)),
       paid, due: round2(t.netTotal - paid), process,
-      issuedBy: by, designation: desig,
+      issuedBy: by, designation: desig, branchId: "b1", branchName: "",
     })
     for (const l of lines) items.find((i) => i.id === l.itemId)!.purchased += l.qty
   }

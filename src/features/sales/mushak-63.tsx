@@ -1,3 +1,5 @@
+import { useQuery } from "@tanstack/react-query"
+import { api } from "@/lib/api/client"
 import { useCompany } from "@/components/auth/me-provider"
 import { amountInWords, fmtDate, fmtMoney, fmtNum } from "@/lib/format"
 import type { Sale } from "@/lib/types"
@@ -9,6 +11,10 @@ import type { Sale } from "@/lib/types"
  */
 export function Mushak63({ sale }: { sale: Sale }) {
   const company = useCompany()
+  // NBR 6.3 prints the address of the branch that issued the invoice (S4-04)
+  const { data: profile } = useQuery({ queryKey: ["company"], queryFn: api.company.get, staleTime: 5 * 60_000 })
+  const branch = profile?.branches.find((b) => b.id === sale.branchId)
+  const issueAddress = branch ? `${branch.name} — ${branch.address}` : company.address
   const m = (n: number) => fmtMoney(n, "en")
   const L = ({ bn, en }: { bn: string; en: string }) => (
     <span className="block leading-tight"><span lang="bn">{bn}</span><span className="block text-[0.625rem] text-neutral-500">{en}</span></span>
@@ -33,7 +39,7 @@ export function Mushak63({ sale }: { sale: Sale }) {
       <section className="mb-4 grid gap-1 border-y border-neutral-300 py-2 text-center">
         <p><span lang="bn">নিবন্ধিত ব্যক্তির নাম</span> / Registered person: <strong>{company.name}</strong></p>
         <p><span lang="bn">নিবন্ধিত ব্যক্তির বিআইএন</span> / BIN: <strong className="tabular">{company.bin}</strong></p>
-        <p><span lang="bn">চালানপত্র ইস্যুর ঠিকানা</span> / Address of issue: {company.address}</p>
+        <p><span lang="bn">চালানপত্র ইস্যুর ঠিকানা</span> / Address of issue: {issueAddress}</p>
       </section>
 
       <section className="mb-4 grid grid-cols-1 gap-x-8 gap-y-1 sm:grid-cols-[1fr_auto] print:grid-cols-[1fr_auto]">

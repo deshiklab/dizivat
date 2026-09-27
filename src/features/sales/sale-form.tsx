@@ -50,7 +50,10 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
   const canApprove = can("doc.approve")
   const [addingCustomer, setAddingCustomer] = React.useState(false)
   const { data: customers = [] } = useQuery({ queryKey: ["customers", "options"], queryFn: () => api.customers.options() })
-  const { data: itemsPage } = useQuery({ queryKey: ["items", "all"], queryFn: () => api.items.list({ size: 500 }) })
+  // Stock by branch: a sale can only ship what the chosen branch holds
+  const { data: itemsPage } = useQuery({ queryKey: ["stock", "all"], queryFn: () => api.stock.list({ size: 500 }) })
+  const branches = itemsPage?.branches ?? []
+  const mainBranch = branches.find((b) => b.category === "factory")?.id ?? branches[0]?.id ?? ""
   const products = (itemsPage?.data ?? []).filter((i) => i.group === "Finished Goods" && i.active)
 
   const form = useForm<In, unknown, Out>({
@@ -59,11 +62,11 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
     defaultValues: initial ? {
       customerId: initial.customerId, issueDate: initial.issueDate, issueTime: initial.issueTime, deliveryAddress: initial.deliveryAddress, vehicle: initial.vehicle ?? "",
       method: initial.method === "Transaction" ? "Bank" : initial.method, discount: initial.discount, paid: initial.paid, vds: initial.vds, issuedBy: initial.issuedBy, designation: initial.designation,
-      narration: initial.narration ?? "", process: "Created",
+      narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "",
       lines: initial.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, price: l.price, sdRate: l.sdRate, vatRate: l.vatRate })),
     } : {
       customerId: "", issueDate: TODAY, issueTime: "10:30", deliveryAddress: "", vehicle: "", method: "Bank",
-      discount: 0, paid: 0, vds: false, issuedBy: me.user.name, designation: me.user.designation, narration: "", process: "Created",
+      discount: 0, paid: 0, vds: false, issuedBy: me.user.name, designation: me.user.designation, narration: "", process: "Created", branchId: "",
       lines: [emptyLine],
     },
   })
@@ -73,6 +76,8 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
 
   const w = useWatch({ control })
   const customer = customers.find((c) => c.id === w.customerId)
+  const branchId = w.branchId || mainBranch
+  const avail = (p: { byBranch: Record<string, number> }) => p.byBranch[branchId] ?? 0
   const foreign = customer?.mode === "Foreign"
   const calc = (w.lines ?? []).map((l) => calcLine({ qty: Number(l?.qty) || 0, price: Number(l?.price) || 0, sdRate: Number(l?.sdRate) || 0, vatRate: foreign ? 0 : Number(l?.vatRate) || 0 }))
   const totals = sumLines(calc, Number(w.discount) || 0)
@@ -91,7 +96,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
     mutationFn: (v: Out) => (initial ? api.sales.update(initial.id, v) : api.sales.create(v)),
     onSuccess: (s) => {
       qc.setQueryData(["sale", s.id], s)
-      qc.invalidateQueries({ queryKey: ["sales"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["notifications"] }); qc.invalidateQueries({ queryKey: ["items"] })
+      qc.invalidateQueries({ queryKey: ["sales"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["notifications"] }); qc.invalidateQueries({ queryKey: ["items"] }); qc.invalidateQueries({ queryKey: ["stock"] })
       form.reset(getValues())
       toast.success(t("saved", { no: s.invoiceNo }), { description: s.process === "Approved" ? t("savedApproved") : t("savedDraft") })
       router.push(`/sales/${s.id}`)
@@ -170,6 +175,14 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
               <Field id="vehicle" label={t("field.vehicle")} error={err("vehicle")} hint={t("vehicleHint")}>
                 {(a) => <Input placeholder={t("vehiclePlaceholder")} {...a} {...register("vehicle")} />}
               </Field>
+              <Field id="branchId" label={t("field.branch")} error={err("branchId")} hint={t("branchHint")}>
+                {(a) => <Controller control={control} name="branchId" render={({ field }) => (
+                  <Select value={field.value || mainBranch} onValueChange={(v) => field.onChange(v)} items={branches.map((b) => ({ value: b.id, label: b.name }))}>
+                    <SelectTrigger id={a.id} className="w-full" aria-describedby={a["aria-describedby"]} aria-invalid={a["aria-invalid"]}><SelectValue /></SelectTrigger>
+                    <SelectContent>{branches.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                )} />}
+              </Field>
             </CardContent>
           </Card>
 
@@ -205,7 +218,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                     {fields.map((f, i) => {
                       const line = w.lines?.[i]
                       const item = products.find((p) => p.id === line?.itemId)
-                      const over = item && Number(line?.qty) > item.remain
+                      const over = item && Number(line?.qty) > avail(item)
                       return (
                         <tr key={f.id} className="border-b align-top last:border-0">
                           <td className="px-3 py-2.5 text-muted-foreground tabular">{fmtNum(i + 1, locale)}</td>
@@ -217,9 +230,9 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                                   const it = products.find((p) => p.id === v)
                                   if (it) { setValue(`lines.${i}.price`, it.salePrice, { shouldValidate: true }); setValue(`lines.${i}.vatRate`, foreign ? 0 : it.vatRate); setValue(`lines.${i}.sdRate`, it.sdRate) }
                                 }}
-                                options={products.map((p) => ({ value: p.id, label: p.name, description: `${p.sku} · HS ${p.hsCode} · ${t("inStock")}: ${fmtNum(p.remain, locale)} ${p.unit}` }))} />
+                                options={products.map((p) => ({ value: p.id, label: p.name, description: `${p.sku} · HS ${p.hsCode} · ${t("inStock")}: ${fmtNum(avail(p), locale)} ${p.unit}` }))} />
                             )} />
-                            {item && <p className={`mt-1 flex items-center gap-1 text-xs ${over ? "text-warning" : "text-muted-foreground"}`}>{over && <AlertTriangle className="size-3" aria-hidden />}{t("inStock")}: {fmtNum(item.remain, locale)} {item.unit}{over ? ` — ${t("overStock")}` : ""}</p>}
+                            {item && <p className={`mt-1 flex items-center gap-1 text-xs ${over ? "text-warning" : "text-muted-foreground"}`}>{over && <AlertTriangle className="size-3" aria-hidden />}{t("inStock")}: {fmtNum(avail(item), locale)} {item.unit}{over ? ` — ${t("overStock")}` : ""}</p>}
                           </td>
                           <td className="px-2 py-1.5"><Input aria-label={`${t("line.qty")} ${i + 1}`} aria-invalid={!!err(`lines.${i}.qty`) || undefined} inputMode="decimal" type="number" step="any" min={0} className="text-right tabular" {...register(`lines.${i}.qty`, { valueAsNumber: true })} /></td>
                           <td className="px-2 py-1.5"><Input aria-label={`${t("line.price")} ${i + 1}`} aria-invalid={!!err(`lines.${i}.price`) || undefined} inputMode="decimal" type="number" step="0.01" min={0} className="text-right tabular" {...register(`lines.${i}.price`, { valueAsNumber: true })} /></td>

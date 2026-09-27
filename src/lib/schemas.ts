@@ -25,6 +25,8 @@ export const saleInput = z.object({
   designation: z.string().min(2, "required"),
   narration: z.string().max(500).optional().default(""),
   process: z.enum(["Created", "Approved"]),
+  /** branch the goods leave from; "" = main (factory) branch */
+  branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
 })
 export type SaleInput = z.input<typeof saleInput>
@@ -41,6 +43,8 @@ export const purchaseInput = z.object({
   designation: z.string().min(2, "required"),
   narration: z.string().max(500).optional().default(""),
   process: z.enum(["Created", "Approved"]),
+  /** branch receiving the goods; "" = main (factory) branch */
+  branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
 })
 export type PurchaseInput = z.input<typeof purchaseInput>
@@ -49,7 +53,8 @@ export const itemInput = z.object({
   name: z.string().min(2, "required").max(120),
   hsCode: z.string().regex(/^\d{8}$/, "hs8"),
   group: z.enum(["Raw Material", "Consumable", "Packing Materials", "Finished Goods"]),
-  unit: z.enum(["Kg", "Pcs", "Roll", "Meter"]),
+  /** code from the Units master — existence is checked by the API */
+  unit: z.string().trim().min(1, "required").max(12),
   sku: z.string().min(2, "required").max(30),
   purchasePrice: z.number().min(0, "min0"),
   salePrice: z.number().min(0, "min0"),
@@ -60,7 +65,7 @@ export const itemInput = z.object({
 })
 export type ItemInput = z.input<typeof itemInput>
 
-/** BIN as issued by NBR: 9 digits, hyphen, 4-digit branch code (e.g. 001925823-0404). */
+/** BIN as issued by NBR: 9 digits, hyphen, 4-digit branch code (e.g. 004817362-0105). */
 export const BIN_RE = /^\d{9}-\d{4}$/
 /** Bangladesh NID: 10, 13 or 17 digits (optional "NID " prefix as stored by the legacy system). */
 export const NID_RE = /^(NID )?(\d{10}|\d{13}|\d{17})$/
@@ -156,3 +161,49 @@ export const companyInput = z.object({
   })).min(1, "branchMin").max(30),
 })
 export type CompanyInput = z.input<typeof companyInput>
+
+/* ── Sprint 4 ─────────────────────────────────────────────────────────────── */
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "required")
+
+/** Units-of-measure master. The code is what documents print (Kg, Pcs …) and cannot change once in use. */
+export const unitInput = z.object({
+  code: z.string().trim().min(1, "required").regex(/^[A-Za-z][A-Za-z0-9.]{0,11}$/, "unitCode"),
+  name: z.string().trim().min(2, "required").max(40),
+  decimals: z.number({ error: "required" }).int().min(0).max(3),
+  active: z.boolean(),
+})
+export type UnitInput = z.input<typeof unitInput>
+
+export const stockLineInput = z.object({
+  itemId: z.string().min(1, "required"),
+  qty: z.number({ error: "required" }).positive("positive"),
+})
+const stockLines = z.array(stockLineInput).min(1, "atLeastOneLine").max(50)
+
+/** Inter-branch stock transfer (NBR Mushak 6.5). Stock moves on approval. */
+export const transferInput = z.object({
+  fromBranchId: z.string().min(1, "required"),
+  toBranchId: z.string().min(1, "required"),
+  date: isoDate,
+  vehicle: z.string().trim().max(40).optional().default(""),
+  note: z.string().trim().max(300).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+  lines: stockLines,
+}).superRefine((v, ctx) => {
+  if (v.fromBranchId && v.fromBranchId === v.toBranchId) ctx.addIssue({ code: "custom", path: ["toBranchId"], message: "sameBranch" })
+})
+export type TransferInput = z.input<typeof transferInput>
+
+/** Damage / expiry / wastage / loss write-off. Stock leaves the branch on approval. */
+export const damageInput = z.object({
+  branchId: z.string().min(1, "required"),
+  date: isoDate,
+  reason: z.enum(["damaged", "expired", "wastage", "lost"]),
+  note: z.string().trim().max(300).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+  lines: stockLines,
+}).superRefine((v, ctx) => {
+  // A loss must be explained (NBR may ask for the police GD / insurance claim reference)
+  if (v.reason === "lost" && (v.note ?? "").trim().length < 10) ctx.addIssue({ code: "custom", path: ["note"], message: "lostNote" })
+})
+export type DamageInput = z.input<typeof damageInput>

@@ -51,7 +51,9 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
   const canApprove = can("doc.approve")
   const [addingVendor, setAddingVendor] = React.useState(false)
   const { data: vendors = [] } = useQuery({ queryKey: ["vendors", "options"], queryFn: () => api.vendors.options() })
-  const { data: itemsPage } = useQuery({ queryKey: ["items", "all"], queryFn: () => api.items.list({ size: 500 }) })
+  const { data: itemsPage } = useQuery({ queryKey: ["stock", "all"], queryFn: () => api.stock.list({ size: 500 }) })
+  const branches = itemsPage?.branches ?? []
+  const mainBranch = branches.find((b) => b.category === "factory")?.id ?? branches[0]?.id ?? ""
   const buyables = (itemsPage?.data ?? []).filter((i) => i.group !== "Finished Goods" && i.active)
   const localVendors = vendors.filter((v) => v.mode !== "Foreign")
 
@@ -60,11 +62,11 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
     mode: "onTouched",
     defaultValues: initial ? {
       vendorId: initial.vendorId, issueDate: initial.issueDate, challanNo: initial.challanNo, challanDate: initial.challanDate, method: initial.method === "Transaction" ? "Bank" : initial.method,
-      discount: initial.discount, paid: initial.paid, issuedBy: initial.issuedBy, designation: initial.designation, narration: initial.narration ?? "", process: "Created",
+      discount: initial.discount, paid: initial.paid, issuedBy: initial.issuedBy, designation: initial.designation, narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "",
       lines: initial.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, price: l.price, sdRate: l.sdRate, vatRate: l.vatRate, rebateable: l.rebateable ?? true, vds: l.vds ?? false })),
     } : {
       vendorId: "", issueDate: TODAY, challanNo: "", challanDate: TODAY, method: "Bank", discount: 0, paid: 0,
-      issuedBy: me.user.name, designation: me.user.designation, narration: "", process: "Created", lines: [emptyLine],
+      issuedBy: me.user.name, designation: me.user.designation, narration: "", process: "Created", branchId: "", lines: [emptyLine],
     },
   })
   const { register, control, handleSubmit, setValue, getValues, setError, formState: { errors, isDirty, isSubmitting } } = form
@@ -86,7 +88,7 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
     mutationFn: (v: Out) => (initial ? api.purchases.update(initial.id, v) : api.purchases.create(v)),
     onSuccess: (p) => {
       qc.setQueryData(["purchase", p.id], p)
-      qc.invalidateQueries({ queryKey: ["purchases"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["notifications"] }); qc.invalidateQueries({ queryKey: ["items"] })
+      qc.invalidateQueries({ queryKey: ["purchases"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["notifications"] }); qc.invalidateQueries({ queryKey: ["items"] }); qc.invalidateQueries({ queryKey: ["stock"] })
       form.reset(getValues())
       toast.success(t("saved", { no: p.invoiceNo }))
       router.push(`/purchases/${p.id}`)
@@ -139,6 +141,14 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
               <Field id="challanNo" label={t("field.challanNo")} required error={err("challanNo")} hint={t("challanHint")}>{(a) => <Input {...a} {...register("challanNo")} />}</Field>
               <Field id="challanDate" label={t("field.challanDate")} required error={err("challanDate")}>{(a) => <Input type="date" max={TODAY} {...a} {...register("challanDate")} />}</Field>
               <Field id="issueDate" label={t("field.receiveDate")} required error={err("issueDate")}>{(a) => <Input type="date" max={TODAY} {...a} {...register("issueDate")} />}</Field>
+              <Field id="branchId" label={t("field.branch")} error={err("branchId")} hint={t("branchHint")}>
+                {(a) => <Controller control={control} name="branchId" render={({ field }) => (
+                  <Select value={field.value || mainBranch} onValueChange={(v) => field.onChange(v)} items={branches.map((b) => ({ value: b.id, label: b.name }))}>
+                    <SelectTrigger id={a.id} className="w-full" aria-describedby={a["aria-describedby"]} aria-invalid={a["aria-invalid"]}><SelectValue /></SelectTrigger>
+                    <SelectContent>{branches.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                )} />}
+              </Field>
               <Field id="method" label={ts("field.method")}>
                 {(a) => (
                   <Controller control={control} name="method" render={({ field }) => (

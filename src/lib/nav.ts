@@ -45,9 +45,10 @@ export const NAV: NavGroup[] = [
     key: "inventory", icon: Boxes, href: "/inventory/items", shortcut: "g i",
     items: [
       { key: "items", href: "/inventory/items", release: "R2", ready: true, legacy: "/en/item" },
-      { key: "finishedGoods", href: "/inventory/finished-goods", release: "R2" },
+      { key: "finishedGoods", href: "/inventory/finished-goods", release: "R2", ready: true },
+      { key: "transfers", href: "/inventory/transfers", release: "R2", ready: true },
+      { key: "damage", href: "/inventory/damage", release: "R2", ready: true },
       { key: "masterItems", href: "/inventory/master-items", release: "R2" },
-      { key: "branchIssue", href: "/inventory/branch-issue", release: "R2" },
     ],
   },
   {
@@ -82,6 +83,7 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "customers", href: "/master/customers", release: "R1", ready: true, legacy: "/en/customer" },
       { key: "vendors", href: "/master/vendors", release: "R1", ready: true, legacy: "/en/vendor" },
+      { key: "units", href: "/master/units", release: "R2", ready: true },
       { key: "users", href: "/master/users", release: "R1", ready: true, perm: "users.manage", legacy: "/en/core/user/" },
       { key: "company", href: "/master/company", release: "R1", ready: true, legacy: "/en/core/domain/" },
       { key: "audit", href: "/master/audit", release: "R1", ready: true, perm: "audit.view" },

@@ -53,7 +53,7 @@ async def main():
             await pg.get_by_role("button", name="Invite", exact=True).click()
             pw_el = pg.get_by_test_id("temp-password")
             await expect(pw_el).to_be_visible(); temp = (await pw_el.inner_text()).strip()
-            assert re.fullmatch(r"Pul-[a-z]{4}-\d{4}", temp), temp; ok("invite → temporary password shown once")
+            assert re.fullmatch(r"Rfx-[a-z]{4}-\d{4}", temp), temp; ok("invite → temporary password shown once")
             await settle(pg); await pg.screenshot(path=f"{OUT}/48_temp_password.png")
             await pg.get_by_role("button", name="Done").click()
             row = pg.locator("tbody tr").filter(has_text="E2E Tester")
@@ -92,22 +92,22 @@ async def main():
             await expect(pg.get_by_role("radio", name=re.compile("^Approver"))).to_be_disabled()
             await expect(pg.get_by_text("This is your account")).to_be_visible(); ok("own account: role/status locked in the sheet")
             await pg.keyboard.press("Escape")
-            r = await admin.request.put(BASE + "/api/v1/users/u5", data={"name": "System Administrator", "designation": "IT", "email": "it@pulindustries.com.bd", "mobile": "", "department": "", "role": "viewer", "active": True})
+            r = await admin.request.put(BASE + "/api/v1/users/u5", data={"name": "System Administrator", "designation": "IT", "email": "it@rupsha-flexipack.example", "mobile": "", "department": "", "role": "viewer", "active": True})
             assert r.status == 422 and (await r.json())["errors"]["role"] == ["self"]; ok("API: own role change → 422 self")
-            nusrat = await login_ctx(b, "nusrat")
+            farzana = await login_ctx(b, "farzana")
             await pg.goto(BASE + "/en/master/users", wait_until="networkidle")
-            await pg.locator("tbody tr").filter(has_text="Nusrat Jahan").get_by_role("button", name=re.compile("^Actions for")).click()
+            await pg.locator("tbody tr").filter(has_text="Farzana Akter").get_by_role("button", name=re.compile("^Actions for")).click()
             await pg.get_by_role("menuitem", name="Reset password").click()
             await pg.get_by_role("alertdialog").get_by_role("button", name="Reset password").click()
             await expect(pg.get_by_test_id("temp-password")).to_be_visible(); ok("reset password via row menu → new one-time password")
             await pg.get_by_role("button", name="Done").click()
-            assert (await nusrat.request.get(BASE + "/api/v1/me")).status == 401; ok("reset revokes the user's existing sessions")
-            await nusrat.close()
+            assert (await farzana.request.get(BASE + "/api/v1/me")).status == 401; ok("reset revokes the user's existing sessions")
+            await farzana.close()
             target = await login_ctx(b, "auditor")
-            await pg.locator("tbody tr").filter(has_text="Tanvir Hasan").get_by_role("button", name=re.compile("^Actions for")).click()
+            await pg.locator("tbody tr").filter(has_text="Sabbir Rahman").get_by_role("button", name=re.compile("^Actions for")).click()
             await pg.get_by_role("menuitem", name="Deactivate").click()
             await pg.get_by_role("alertdialog").get_by_role("button", name="Deactivate").click()
-            await expect(pg.locator("tbody tr").filter(has_text="Tanvir Hasan").get_by_text("Inactive")).to_be_visible(); ok("deactivate via row menu (with confirmation)")
+            await expect(pg.locator("tbody tr").filter(has_text="Sabbir Rahman").get_by_text("Inactive")).to_be_visible(); ok("deactivate via row menu (with confirmation)")
             assert (await target.request.get(BASE + "/api/v1/me")).status == 401; ok("deactivation ends the user's session immediately")
             await target.close()
             ovf = await pg.evaluate("[...document.querySelectorAll('main .overflow-auto')].map(e => e.scrollWidth - e.clientWidth)"); assert ovf, 'table scroller not found'
@@ -127,22 +127,22 @@ async def main():
         # ── 4. Company profile ────────────────────────────────────────
         try:
             await pg.goto(BASE + "/en/master/company", wait_until="networkidle")
-            await expect(pg.locator("#name")).to_have_value("PUL INDUSTRIES LTD")
+            await expect(pg.locator("#name")).to_have_value("RUPSHA FLEXIPACK LTD")
             await pg.locator("#tin").fill("12345"); await pg.locator("#tin").blur()
             await expect(pg.get_by_text("Enter the 12-digit TIN.")).to_be_visible(); ok("company: TIN validated inline")
-            await pg.locator("#tin").fill("794189966697")
-            await pg.locator("#name").fill("PUL INDUSTRIES LIMITED")
+            await pg.locator("#tin").fill("512378904461")
+            await pg.locator("#name").fill("RUPSHA FLEXIPACK LIMITED")
             await expect(pg.get_by_text("You have unsaved changes.")).to_be_visible()
             await settle(pg); await pg.screenshot(path=f"{OUT}/52_company.png")
             await pg.get_by_role("button", name="Save", exact=True).click()
             await expect(pg.get_by_text("Company profile saved.")).to_be_visible()
-            await expect(pg.locator("footer, [role=contentinfo]").get_by_text("PUL INDUSTRIES LIMITED").first).to_be_visible(); ok("saved name updates the shell footer without reload")
+            await expect(pg.locator("footer, [role=contentinfo]").get_by_text("RUPSHA FLEXIPACK LIMITED").first).to_be_visible(); ok("saved name updates the shell footer without reload")
             await pg.goto(BASE + "/en/sales/s1?tab=mushak", wait_until="networkidle")
-            await expect(pg.get_by_label("Mushak 6.3 tax invoice").get_by_text("PUL INDUSTRIES LIMITED").first).to_be_visible(); ok("Mushak 6.3 prints the saved company name")
+            await expect(pg.get_by_label("Mushak 6.3 tax invoice").get_by_text("RUPSHA FLEXIPACK LIMITED").first).to_be_visible(); ok("Mushak 6.3 prints the saved company name")
             r = await admin.request.get(BASE + "/api/v1/company"); c = await r.json()
-            c["name"] = "PUL INDUSTRIES LTD"; [c.pop(k, None) for k in ("updatedAt", "updatedBy")]
+            c["name"] = "RUPSHA FLEXIPACK LTD"; [c.pop(k, None) for k in ("updatedAt", "updatedBy")]
             assert (await admin.request.put(BASE + "/api/v1/company", data=c)).ok  # restore for later runs
-            appr = await login_ctx(b, "chanchal", viewport=VP); ap = await appr.new_page(); watch(ap, errs)
+            appr = await login_ctx(b, "arif", viewport=VP); ap = await appr.new_page(); watch(ap, errs)
             await ap.goto(BASE + "/en/master/company", wait_until="networkidle")
             await expect(ap.get_by_text("Only an administrator can change")).to_be_visible()
             await expect(ap.locator("#name")).to_be_disabled(); ok("approver: company profile read-only")
@@ -177,7 +177,7 @@ async def main():
             await ap.locator("tbody tr").first.click()
             sheet = ap.get_by_role("dialog")
             await expect(sheet.get_by_role("rowheader", name="Name")).to_be_visible()
-            await expect(sheet.get_by_text("PUL INDUSTRIES LIMITED").first).to_be_visible(); ok("audit: company edit recorded with before/after")
+            await expect(sheet.get_by_text("RUPSHA FLEXIPACK LIMITED").first).to_be_visible(); ok("audit: company edit recorded with before/after")
             await settle(ap); await ap.screenshot(path=f"{OUT}/57_audit_detail.png")
             await ap.keyboard.press("Escape")
             await ap.goto(BASE + "/en/master/audit?entity=user", wait_until="networkidle")
@@ -195,7 +195,7 @@ async def main():
 
         # ── 7. Notifications ──────────────────────────────────────────
         try:
-            op = await login_ctx(b, "rafiqul", viewport=VP)
+            op = await login_ctx(b, "kamal", viewport=VP)
             # the seed has no draft purchases — the operator raises one (mock DB only), the approver approves it
             me = (await (await op.request.get(BASE + "/api/v1/me")).json())["user"]
             r = await op.request.post(BASE + "/api/v1/purchases", data={
@@ -211,7 +211,7 @@ async def main():
             await opg.goto(BASE + "/en", wait_until="networkidle")
             bell = opg.get_by_role("button", name=re.compile(r"Notifications|notification"))
             await bell.first.click()
-            item = opg.get_by_text(f"Chanchal Mahmud approved {doc_no}")
+            item = opg.get_by_text(f"Arif Hossain approved {doc_no}")
             await expect(item).to_be_visible(); ok("issuer notified when someone else approves their document")
             await settle(opg); await opg.screenshot(path=f"{OUT}/58_notifications.png")
             before = (await (await op.request.get(BASE + "/api/v1/notifications")).json())["unread"]

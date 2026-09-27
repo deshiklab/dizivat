@@ -84,6 +84,9 @@ jobs:
       - name: E2E — Sprint 3 (users, forced password, company, tariff, audit, notifications)
         working-directory: scripts
         run: python e2e_s3.py
+      - name: E2E — Sprint 4 (units, branches, transfers, damage, finished goods, record history, deferred charts)
+        working-directory: scripts
+        run: python e2e_s4.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

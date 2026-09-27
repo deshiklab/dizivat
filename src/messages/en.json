@@ -1,7 +1,7 @@
 {
   "meta": {
     "app": "RBS VAT",
-    "description": "VAT management for PUL INDUSTRIES LTD — sales, purchases, inventory and NBR Mushak compliance."
+    "description": "VAT management for RUPSHA FLEXIPACK LTD — sales, purchases, inventory and NBR Mushak compliance."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -19,7 +19,6 @@
     "items": "Items",
     "finishedGoods": "Finished goods",
     "masterItems": "Master items",
-    "branchIssue": "Branch issue",
     "production": "Production",
     "bom": "Bill of materials",
     "batches": "Production batches",
@@ -40,7 +39,10 @@
     "vendors": "Vendors",
     "users": "Users & roles",
     "company": "Company profile",
-    "audit": "Audit trail"
+    "audit": "Audit trail",
+    "transfers": "Stock transfers",
+    "damage": "Damage & wastage",
+    "units": "Units of measure"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -261,7 +263,14 @@
     "pwUsername": "The password must not contain your username.",
     "tin": "Enter the 12-digit TIN.",
     "nidOrPassport": "Enter a 10, 13 or 17-digit NID, or a passport number (e.g. A1234567).",
-    "branchCode": "Enter the 4-digit BIN branch code."
+    "branchCode": "Enter the 4-digit BIN branch code.",
+    "unknownBranch": "Pick a branch that can hold stock (not the head office).",
+    "sameBranch": "Choose a different branch — goods can't move to where they already are.",
+    "lostNote": "Explain the loss in at least 10 characters (GD / insurance reference).",
+    "unitCode": "1–12 letters, digits or dots, starting with a letter (e.g. Kg, Pcs, Sq.m).",
+    "unitInUse": "This unit is used by items — its code can't change.",
+    "unknownUnit": "Pick an active unit from the Units master.",
+    "branchInUse": "This branch has documents and stock history — it can't become an office."
   },
   "form": {
     "discardTitle": "Discard unsaved changes?",
@@ -350,7 +359,8 @@
       "netTotal": "Net total",
       "received": "Received",
       "due": "Due",
-      "process": "Status"
+      "process": "Status",
+      "branch": "Branch"
     },
     "printMushak": "Print Mushak 6.3",
     "approve": "Approve",
@@ -365,7 +375,8 @@
       "process": "Status",
       "mode": "Mode",
       "method": "Method",
-      "payment": "Payment"
+      "payment": "Payment",
+      "branch": "Branch"
     },
     "searchPlaceholder": "Invoice, challan, customer, BIN…",
     "views": {
@@ -413,7 +424,8 @@
       "designation": "Designation",
       "narration": "Narration",
       "discount": "Discount (৳)",
-      "received": "Received (৳)"
+      "received": "Received (৳)",
+      "branch": "Branch / warehouse"
     },
     "saved": "Invoice {no} saved",
     "savedApproved": "Approved — ready to print Mushak 6.3.",
@@ -451,7 +463,9 @@
     "draftOnlyHint": "Your role can save drafts; an approver will review and approve them.",
     "saveChanges": "Save changes",
     "vehiclePlaceholder": "e.g. Dhaka Metro-Ta 11-2233",
-    "zeroRatedExport": "0% export"
+    "zeroRatedExport": "0% export",
+    "branchHint": "Stock leaves this branch when the invoice is approved.",
+    "tabHistory": "History"
   },
   "purchases": {
     "title": "Purchases",
@@ -477,7 +491,8 @@
       "vendor": "Vendor",
       "process": "Status",
       "mode": "Mode",
-      "payment": "Payment"
+      "payment": "Payment",
+      "branch": "Branch"
     },
     "searchPlaceholder": "Purchase no., challan, BoE, vendor…",
     "views": {
@@ -500,7 +515,8 @@
       "bin": "BIN / NID",
       "challanDate": "Challan date",
       "challanNo": "Vendor challan no.",
-      "receiveDate": "Receive date"
+      "receiveDate": "Receive date",
+      "branch": "Receiving branch"
     },
     "saved": "Purchase {no} saved",
     "newTitle": "New local purchase",
@@ -519,7 +535,8 @@
     "payable": "Payable",
     "editTitle": "Edit {no}",
     "cancelPurchase": "Cancel purchase",
-    "addVendor": "Add new vendor"
+    "addVendor": "Add new vendor",
+    "branchHint": "Goods are added to this branch's stock on approval."
   },
   "items": {
     "title": "Items",
@@ -713,7 +730,7 @@
       "purchase": "Purchases",
       "sale": "Sales",
       "production": "Production",
-      "other": "Opening & damage"
+      "other": "Opening, damage & transfers"
     },
     "editItem": "Edit item",
     "col": {
@@ -730,13 +747,20 @@
       "sale": "Sale",
       "prodReceive": "Production in",
       "prodIssue": "Issued to production",
-      "damage": "Damage / wastage"
+      "damage": "Damage / wastage",
+      "transferIn": "Transfer in",
+      "transferOut": "Transfer out"
     },
     "summaryRow": "Monthly summary",
     "monthly": "Monthly total",
     "empty": "No movements of this type.",
     "footer": "{n} movements; approved documents only.",
-    "summaryNote": "Production and damage rows are monthly totals until the Production module ships (R3)."
+    "summaryNote": "Production rows — and damage recorded before damage entries existed — are monthly totals until the Production module ships (R3).",
+    "tabMovements": "Movements",
+    "tabHistory": "History",
+    "branch": "Branch",
+    "allBranches": "All branches (company)",
+    "branchNote": "Transfers in and out are shown for a single branch."
   },
   "parties": {
     "created": "{name} added",
@@ -787,7 +811,7 @@
     },
     "hint": {
       "name": "As printed on the trade licence; stored in capitals.",
-      "bin": "13 digits, e.g. 000512347-0203.",
+      "bin": "13 digits, e.g. 000731906-0203.",
       "foreignRef": "Importer/exporter reference, e.g. EXP-AE-2024-118.",
       "nid": "Owner's NID — 10, 13 or 17 digits.",
       "address": "Default delivery address on invoices."
@@ -914,7 +938,7 @@
     "hint": {
       "username": "Used to sign in; cannot be changed later.",
       "usernameFixed": "Usernames can't be changed (the audit trail refers to them).",
-      "department": "For example: Factory — Dhamrai",
+      "department": "For example: Factory — Kaliakair",
       "active": "Turn off to block sign-in without deleting the account."
     },
     "roleHint": {
@@ -1008,13 +1032,14 @@
     },
     "error": {
       "branchMin": "Keep at least one branch unit."
-    }
+    },
+    "branchInUse": "Branches with documents can't be removed."
   },
   "tariff": {
     "title": "Tax tariff",
     "subtitle": "NBR customs and VAT rates by HS code.",
     "summary": "{count} HS codes · FY {fy}",
-    "note": "Sample of the NBR tariff for the chapters PUL trades in. The full schedule (7,000+ codes) is loaded from the official feed in R4. TTI is the total tax on import as a % of assessable value.",
+    "note": "Sample of the NBR tariff for the chapters the company trades in. The full schedule (7,000+ codes) is loaded from the official feed in R4. TTI is the total tax on import as a % of assessable value.",
     "searchPlaceholder": "Search HS code or description…",
     "chapterN": "Chapter {n}",
     "col": {
@@ -1086,7 +1111,10 @@
       "item": "Item",
       "user": "User",
       "company": "Company profile",
-      "session": "Sign-in"
+      "session": "Sign-in",
+      "transfer": "Stock transfer",
+      "damage": "Damage entry",
+      "unit": "Unit of measure"
     },
     "facet": {
       "entity": "Record type",
@@ -1167,8 +1195,22 @@
         "mobile": "Signatory mobile",
         "email": "Signatory email",
         "nid": "Signatory NID/passport"
-      }
-    }
+      },
+      "branchName": "Branch",
+      "fromBranch": "From branch",
+      "toBranch": "To branch",
+      "branch": "Branch",
+      "reason": "Reason",
+      "date": "Date",
+      "note": "Note",
+      "totalValue": "Value at cost",
+      "code": "Code",
+      "decimals": "Decimal places"
+    },
+    "historyNoAccess": "The full change history is visible to users with audit access (approvers, admins and auditors).",
+    "historyEmpty": "No changes recorded for this record yet.",
+    "moreChanges": "+{n} more fields — open the audit trail for all",
+    "openInAudit": "Open in audit trail"
   },
   "password": {
     "title": "Change password",
@@ -1193,5 +1235,171 @@
     "docCancelled": "{actor} cancelled {ref}",
     "deadline": "{title} — due {date} ({n, plural, one {{days} day} other {{days} days}} left)",
     "lowStock": "{count, plural, one {{n} item is} other {{n} items are}} below reorder level, starting with {first}"
+  },
+  "stock": {
+    "transfer": {
+      "title": "Stock transfers",
+      "titleOne": "Stock transfer",
+      "subtitle": "Move goods between your branches — NBR Mushak 6.5.",
+      "summary": "{count} transfers · {value} moved at cost · {pending} awaiting approval",
+      "new": "New transfer",
+      "newTitle": "New stock transfer",
+      "editTitle": "Edit draft {no}",
+      "newSub": "Mushak 6.5 — stock moves from one branch to the other when the transfer is approved.",
+      "searchPlaceholder": "Search transfer no., item, branch or vehicle…",
+      "approved": "{no} approved — stock moved",
+      "notFound": "Transfer not found",
+      "draftNote": "Draft — stock has not moved yet. Approve to move it between the branches.",
+      "mushakNote": "The printable Mushak 6.5 (transfer challan) arrives with the NBR reports in R4; the data recorded here is what it will print.",
+      "formNote": "A transfer never changes company stock — only where it is. Cancelling an approved transfer moves the goods back if they are still at the receiving branch."
+    },
+    "damage": {
+      "title": "Damage & wastage",
+      "titleOne": "Damage entry",
+      "subtitle": "Write off damaged, expired, wasted or lost stock.",
+      "summary": "{count} entries · {value} written off at cost · {pending} awaiting approval",
+      "new": "New damage entry",
+      "newTitle": "New damage entry",
+      "editTitle": "Edit draft {no}",
+      "newSub": "Stock leaves the branch when the entry is approved. Keep the QA report or GD reference in the note.",
+      "searchPlaceholder": "Search entry no., item, branch or note…",
+      "approved": "{no} approved — stock written off",
+      "notFound": "Damage entry not found",
+      "draftNote": "Draft — stock has not been written off yet."
+    },
+    "col": {
+      "no": "No.",
+      "date": "Date",
+      "route": "From → to",
+      "branch": "Branch",
+      "reason": "Reason",
+      "items": "Items",
+      "value": "Value at cost",
+      "status": "Status",
+      "by": "Entered by",
+      "note": "Note"
+    },
+    "facet": {
+      "process": "Status",
+      "fromBranch": "From",
+      "toBranch": "To",
+      "branch": "Branch",
+      "reason": "Reason"
+    },
+    "reason": {
+      "damaged": "Damaged",
+      "expired": "Expired",
+      "wastage": "Process wastage",
+      "lost": "Lost / stolen"
+    },
+    "reasonHint": {
+      "damaged": "Physically damaged in store or handling.",
+      "expired": "Past shelf life or rejected by QA.",
+      "wastage": "Normal process loss — set-up waste, edge trim.",
+      "lost": "Missing or stolen — the note must give the GD or insurance reference."
+    },
+    "field": {
+      "from": "From branch",
+      "to": "To branch",
+      "route": "Route",
+      "date": "Date",
+      "vehicle": "Vehicle",
+      "note": "Note",
+      "branch": "Branch",
+      "reason": "Reason",
+      "lines": "Items",
+      "item": "Item",
+      "itemN": "Item {n}",
+      "qty": "Quantity",
+      "cost": "Unit cost",
+      "value": "Value",
+      "total": "Total at cost",
+      "issuedBy": "Entered by"
+    },
+    "hint": {
+      "vehicle": "Registration number, e.g. Dhaka Metro-Ta 11-4821"
+    },
+    "to": "to",
+    "more": "+{n} more",
+    "itemsCount": "{n, plural, one {# item} other {# items}}",
+    "tabDetails": "Details",
+    "tabHistory": "History",
+    "costNote": "Valued at each item's cost price when the document was saved.",
+    "pickBranch": "Choose a branch",
+    "pickItem": "Choose an item",
+    "searchItem": "Search item or SKU…",
+    "noItems": "No items found.",
+    "atSource": "available",
+    "available": "Available at {branch}: {qty} {unit}",
+    "valueAtCost": "Value",
+    "addLine": "Add item",
+    "removeLine": "Remove item {n}",
+    "shortNote": "Some quantities exceed the stock at the source branch. You can save a draft, but it can't be approved until the stock is there.",
+    "saveDraft": "Save draft",
+    "saveApprove": "Save & approve",
+    "saved": "{no} saved as draft",
+    "deleted": "{no} deleted",
+    "deleteBody": "The draft is removed. Its number is not reused and the audit trail keeps the record.",
+    "viewDoc": "View {no}",
+    "approveDoc": "Approve {no}"
+  },
+  "fg": {
+    "title": "Finished goods",
+    "subtitle": "Finished-goods stock by branch, valued at cost.",
+    "summary": "{count} products · {value} at cost · {sale} at sale price",
+    "byBranch": "Stock value by branch",
+    "shareOfValue": "{pct}% of finished-goods value",
+    "newTransfer": "New transfer",
+    "transfer": "Transfer",
+    "transferItem": "Transfer {name}",
+    "ledgerAt": "Stock ledger of {item} at {branch}",
+    "col": {
+      "total": "Total",
+      "reorder": "Re-order level",
+      "value": "Value at cost",
+      "saleValue": "Value at sale price"
+    }
+  },
+  "units": {
+    "title": "Units of measure",
+    "subtitle": "The units items are counted in and documents print.",
+    "summary": "{count} units",
+    "new": "New unit",
+    "newTitle": "New unit",
+    "editTitle": "Edit unit",
+    "newSub": "Add a unit such as Sq.m or Dozen.",
+    "searchPlaceholder": "Search code or name…",
+    "col": {
+      "code": "Code",
+      "name": "Name",
+      "decimals": "Decimals",
+      "inUse": "Used by",
+      "status": "Status"
+    },
+    "field": {
+      "code": "Code",
+      "name": "Name",
+      "decimals": "Quantity precision",
+      "active": "Active"
+    },
+    "hint": {
+      "code": "Printed on invoices and challans, e.g. Kg.",
+      "decimals": "Decimal places allowed in quantities.",
+      "active": "Inactive units stay on existing items but can't be chosen for new ones."
+    },
+    "dp": "{n, plural, =0 {Whole numbers} one {# decimal place} other {# decimal places}}",
+    "items": "{n, plural, one {# item} other {# items}}",
+    "active": "Active",
+    "inactive": "Inactive",
+    "codeLocked": "Used by {n, plural, one {# item} other {# items}} — the code can't change.",
+    "inUseNoDelete": "In use — deactivate instead",
+    "editUnit": "Edit {code}",
+    "deleteUnit": "Delete {code}",
+    "deleteTitle": "Delete unit {code}?",
+    "deleteBody": "No item uses this unit. It is removed from the list; the audit trail keeps the record.",
+    "delete": "Delete",
+    "created": "Unit {code} added",
+    "updated": "Unit {code} updated",
+    "deleted": "Unit {code} deleted"
   }
 }

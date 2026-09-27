@@ -1,5 +1,5 @@
-import { addHistory, db, nextDocId, nextNo, postStock, stockShortfall } from "@/lib/mock/db"
-import { buildSaleFields, unknownItems } from "@/lib/mock/build"
+import { addHistory, branchLabels, db, nextDocId, nextNo, postStock, stockShortfall } from "@/lib/mock/db"
+import { buildSaleFields, unknownBranch, unknownItems } from "@/lib/mock/build"
 import { csvResponse, delay, runQuery, toCSV } from "@/lib/mock/query"
 import { saleInput } from "@/lib/schemas"
 import type { Sale } from "@/lib/types"
@@ -8,7 +8,7 @@ import { deny, json, problem, withAuth, zodProblem } from "../_lib"
 const spec = {
   search: (s: Sale) => `${s.invoiceNo} ${s.challanNo} ${s.customerName} ${s.customerBin}`,
   dateField: "issueDate" as const,
-  facets: { process: (s: Sale) => s.process, mode: (s: Sale) => s.mode, customer: (s: Sale) => s.customerId, method: (s: Sale) => s.method, payment: (s: Sale) => (s.due <= 0 ? "paid" : s.paid > 0 ? "partial" : "unpaid") },
+  facets: { process: (s: Sale) => s.process, mode: (s: Sale) => s.mode, customer: (s: Sale) => s.customerId, method: (s: Sale) => s.method, payment: (s: Sale) => (s.due <= 0 ? "paid" : s.paid > 0 ? "partial" : "unpaid"), branch: (s: Sale) => s.branchId },
   totals: ["subtotal", "sd", "vat", "discount", "netTotal", "paid", "due"] as (keyof Sale)[],
 }
 
@@ -21,7 +21,7 @@ export const GET = withAuth(null, async (req) => {
     return csvResponse(
       toCSV(rows, [
         { key: "issueDate", label: "Issue Date" }, { key: "invoiceNo", label: "Invoice No" }, { key: "challanNo", label: "Challan No" },
-        { key: "customerName", label: "Customer" }, { key: "customerBin", label: "BIN" }, { key: "mode", label: "Mode" }, { key: "method", label: "Method" },
+        { key: "customerName", label: "Customer" }, { key: "branchName", label: "Branch" }, { key: "customerBin", label: "BIN" }, { key: "mode", label: "Mode" }, { key: "method", label: "Method" },
         { key: "subtotal", label: "SubTotal" }, { key: "sd", label: "SD" }, { key: "vat", label: "VAT" }, { key: "discount", label: "Discount" },
         { key: "netTotal", label: "NetTotal" }, { key: "paid", label: "Received" }, { key: "due", label: "Due" }, { key: "process", label: "Process" },
       ]),
@@ -33,7 +33,7 @@ export const GET = withAuth(null, async (req) => {
   const { all, ...page } = r
   // facet labels for customers
   const customerNames = Object.fromEntries(db.customers.map((c) => [c.id, c.name]))
-  return json({ ...page, facetLabels: { customer: customerNames } })
+  return json({ ...page, facetLabels: { customer: customerNames, branch: branchLabels() } })
 })
 
 export const POST = withAuth("doc.create", async (req, _ctx, user) => {
@@ -43,11 +43,11 @@ export const POST = withAuth("doc.create", async (req, _ctx, user) => {
   if (d.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
   const cust = db.customers.find((c) => c.id === d.customerId && c.active !== false)
   if (!cust) return problem(422, "Validation failed", { customerId: ["unknown"] })
-  const bad = unknownItems(d.lines, "Finished Goods")
+  const bad = unknownItems(d.lines, "Finished Goods") ?? unknownBranch(d.branchId)
   if (bad) return problem(422, "Validation failed", bad)
   const fields = buildSaleFields(d, cust)
   if (d.process === "Approved") {
-    const short = stockShortfall(fields.lines)
+    const short = stockShortfall(fields.lines, fields.branchId)
     if (short) return problem(422, `Insufficient stock — ${short.detail}`, short.errors)
   }
   const sale: Sale = {

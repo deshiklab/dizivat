@@ -4,6 +4,7 @@ import { itemInput } from "@/lib/schemas"
 import type { Item, ItemWithStock } from "@/lib/types"
 import { json, problem, withAuth, zodProblem } from "../_lib"
 import { recordAudit } from "@/lib/mock/audit"
+import { badUnit } from "@/lib/mock/units"
 
 const spec = {
   search: (i: ItemWithStock) => `${i.name} ${i.hsCode} ${i.sku} ${i.masterItem}`,
@@ -44,6 +45,8 @@ export const POST = withAuth("master.edit", async (req, _ctx, user) => {
   if (!parsed.success) return zodProblem(parsed.error)
   const d = parsed.data
   if (db.items.some((i) => i.sku.toLowerCase() === d.sku.toLowerCase())) return problem(422, "Validation failed", { sku: ["duplicate"] })
+  const bu = badUnit(d.unit)
+  if (bu) return problem(422, "Validation failed", bu)
   const it: Item = {
     id: `i${db.items.length + 1}-${Date.now().toString(36)}`, ...d, masterItem: d.name.split(" ")[0], brand: "Local",
     costPrice: d.purchasePrice ? Math.round(d.purchasePrice * 112) / 100 : Math.round(d.salePrice * 78) / 100,

@@ -2,7 +2,7 @@ import type { TariffLine } from "../types"
 
 /**
  * Sample of the NBR customs & VAT tariff (legacy "Tax Tariff" lists all 7,136 lines).
- * Rates are ILLUSTRATIVE mock values for the chapters PUL trades in — R4 replaces this with the
+ * Rates are ILLUSTRATIVE mock values for the chapters the company trades in — R4 replaces this with the
  * official tariff feed for the fiscal year (published with the budget each June).
  *
  * TTI (total tax incidence on import, % of assessable value AV), NBR method:

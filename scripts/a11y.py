@@ -3,7 +3,7 @@ from playwright.async_api import async_playwright
 from _auth import login_ctx
 BASE=__import__("os").environ.get("BASE_URL", "http://localhost:3000")
 AXE=open(__import__("pathlib").Path(__file__).resolve().parent.parent / "node_modules/axe-core/axe.min.js").read()
-urls=["/en","/en/sales","/en/sales/new","/en/sales/s1","/en/sales/s1?tab=mushak","/en/purchases","/en/purchases/new","/en/purchases/p1","/en/inventory/items","/en/inventory/items?new=1","/en/vat/return-9-1","/bn","/bn/sales","/en/master/customers","/en/master/customers?edit=c1","/en/master/vendors","/en/inventory/items?ledger=i1","/en/sales/s1/edit","/en/master/users","/en/master/users?tab=roles","/en/master/users?edit=u3","/en/master/company","/en/vat/tariff","/en/master/audit","/en/master/audit?entity=company&event=a1"]
+urls=["/en","/en/sales","/en/sales/new","/en/sales/s1","/en/sales/s1?tab=mushak","/en/purchases","/en/purchases/new","/en/purchases/p1","/en/inventory/items","/en/inventory/items?new=1","/en/vat/return-9-1","/bn","/bn/sales","/en/master/customers","/en/master/customers?edit=c1","/en/master/vendors","/en/inventory/items?ledger=i1","/en/sales/s1/edit","/en/master/users","/en/master/users?tab=roles","/en/master/users?edit=u3","/en/master/company","/en/vat/tariff","/en/master/audit","/en/master/audit?entity=company&event=a1","/en/master/units","/en/master/units?edit=un1","/en/inventory/finished-goods","/en/inventory/transfers","/en/inventory/transfers?new=1","/en/inventory/transfers?view=t1","/en/inventory/damage","/en/inventory/damage?view=d1","/en/sales/s1?tab=history"]
 async def main():
     res={}
     async with async_playwright() as p:

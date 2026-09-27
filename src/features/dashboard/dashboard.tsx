@@ -4,7 +4,7 @@ import * as React from "react"
 import { useCan, useCompany, useMe } from "@/components/auth/me-provider"
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
+import dynamic from "next/dynamic"
 import { AlertTriangle, ArrowRight, BadgePercent, CalendarClock, CheckCircle2, CircleDollarSign, HandCoins, Landmark, Plus, Receipt, TableProperties, BarChart3 } from "lucide-react"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,11 @@ import { api } from "@/lib/api/client"
 import { TODAY } from "@/lib/company"
 import { fmtCompact, fmtDate, fmtMoney, fmtNum } from "@/lib/format"
 import { KpiCard } from "./kpi-card"
+
+// recharts is the largest dependency on this page — fetch it after first paint (S4-03)
+const chartSkeleton = () => <Skeleton className="size-full" aria-hidden />
+const SalesPurchasesChart = dynamic(() => import("./charts").then((m) => m.SalesPurchasesChart), { ssr: false, loading: chartSkeleton })
+const VatTrendChart = dynamic(() => import("./charts").then((m) => m.VatTrendChart), { ssr: false, loading: chartSkeleton })
 
 function ChartCard({ title, description, table, children }: { title: string; description: string; table: React.ReactNode; children: React.ReactNode }) {
   const t = useTranslations("dashboard")
@@ -65,8 +70,6 @@ export function Dashboard() {
   }
   const k = data.kpis
   const series = data.monthly.map((m) => ({ ...m, label: monthLabel(m.month) }))
-  const tip = { contentStyle: { background: "var(--popover)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--popover-foreground)", fontSize: 12 }, formatter: (v: unknown) => `৳ ${fmtMoney(Number(v), locale)}` }
-  const axis = { stroke: "var(--muted-foreground)", fontSize: 12, tickLine: false, axisLine: false }
   const maxCust = Math.max(...data.topCustomers.map((c) => c.amount), 1)
   const period = fmtDate(`${data.period.label}-01`, locale, "MMMM yyyy")
 
@@ -104,30 +107,10 @@ export function Dashboard() {
 
       <div className="mb-4 grid gap-4 xl:grid-cols-2">
         <ChartCard title={t("salesVsPurchases")} description={t("last12")} table={monthTable([["sales", t("sales")], ["purchases", t("purchases")]])}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={series} margin={{ left: 0, right: 8, top: 8 }}>
-              <CartesianGrid vertical={false} stroke="var(--border)" />
-              <XAxis dataKey="label" {...axis} />
-              <YAxis {...axis} width={56} tickFormatter={(v) => fmtCompact(v, locale)} />
-              <Tooltip {...tip} cursor={{ fill: "var(--muted)" }} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="sales" name={t("sales")} fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="purchases" name={t("purchases")} fill="var(--chart-5)" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <SalesPurchasesChart data={series} labels={{ sales: t("sales"), purchases: t("purchases") }} />
         </ChartCard>
         <ChartCard title={t("vatTrend")} description={t("vatTrendHint")} table={monthTable([["outputVat", t("outputVat")], ["inputVat", t("inputVat")]])}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={series} margin={{ left: 0, right: 8, top: 8 }}>
-              <CartesianGrid vertical={false} stroke="var(--border)" />
-              <XAxis dataKey="label" {...axis} />
-              <YAxis {...axis} width={56} tickFormatter={(v) => fmtCompact(v, locale)} />
-              <Tooltip {...tip} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Line type="monotone" dataKey="outputVat" name={t("outputVat")} stroke="var(--chart-1)" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="inputVat" name={t("inputVat")} stroke="var(--chart-2)" strokeWidth={2} strokeDasharray="5 4" dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          <VatTrendChart data={series} labels={{ outputVat: t("outputVat"), inputVat: t("inputVat") }} />
         </ChartCard>
       </div>
 

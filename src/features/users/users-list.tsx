@@ -94,7 +94,7 @@ function UsersInner() {
     },
     { id: "role", accessorKey: "role", meta: { label: t("col.role") }, header: t("col.role"), cell: ({ row }) => <Pill tone={roleTone[row.original.role]}>{tr(row.original.role)}</Pill> },
     { id: "department", accessorKey: "department", meta: { label: t("col.department"), className: "min-w-28 max-w-36 whitespace-normal" /* wraps so the table fits 1440 px */ }, header: t("col.department"), cell: ({ row }) => row.original.department || "—" },
-    { id: "email", accessorKey: "email", meta: { label: t("col.email") }, header: t("col.email"), cell: ({ row }) => <a href={`mailto:${row.original.email}`} onClick={(e) => e.stopPropagation()} className="hover:underline">{row.original.email}</a> },
+    { id: "email", accessorKey: "email", meta: { label: t("col.email") }, header: t("col.email"), cell: ({ row }) => <a href={`mailto:${row.original.email}`} onClick={(e) => e.stopPropagation()} className="block max-w-56 truncate hover:underline" title={row.original.email}>{row.original.email}</a> },
     { id: "mobile", accessorKey: "mobile", meta: { label: t("col.mobile") }, header: t("col.mobile"), cell: ({ row }) => <span className="tabular whitespace-nowrap">{row.original.mobile || "—"}</span> },
     { id: "lastSignInAt", accessorKey: "lastSignInAt", meta: { label: t("col.lastSignIn") }, header: t("col.lastSignIn"), cell: ({ row }) => <span className="whitespace-nowrap">{row.original.lastSignInAt ? fmtDateTime(row.original.lastSignInAt, locale) : <span className="text-muted-foreground">{t("never")}</span>}</span> },
     {

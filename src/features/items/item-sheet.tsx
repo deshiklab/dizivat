@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl"
 import { Controller, useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import type { z } from "zod"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { HistorySection } from "@/features/audit/record-history"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Field } from "@/components/common/field"
 import { api, ApiError } from "@/lib/api/client"
@@ -23,7 +24,6 @@ import { HsLookup } from "./hs-lookup"
 type In = z.input<typeof itemInput>
 type Out = z.output<typeof itemInput>
 const GROUPS = ["Raw Material", "Consumable", "Packing Materials", "Finished Goods"] as const
-const UNITS = ["Kg", "Pcs", "Roll", "Meter"] as const
 const blank: In = { name: "", hsCode: "", group: "Raw Material", unit: "Kg", sku: "", purchasePrice: 0, salePrice: 0, vatRate: 15, sdRate: 0, reorderLevel: 0, active: true }
 
 /** Create/edit in a side sheet: keeps list context, ≤ 11 fields, validated with the shared zod schema. */
@@ -44,7 +44,10 @@ export function ItemSheet({ open, onOpenChange, item }: { open: boolean; onOpenC
     onError: (e) => { if (e instanceof ApiError && e.errors) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] })); else toast.error(e.message) },
   })
   const groupItems = GROUPS.map((g) => ({ value: g, label: tg(g.replace(/ /g, "")) }))
-  const unitItems = UNITS.map((u) => ({ value: u, label: u }))
+  // Units come from the Units master; an item keeps its unit even if that unit was later deactivated
+  const units = useQuery({ queryKey: ["units", "options"], queryFn: () => api.units.options(), enabled: open, staleTime: 60_000 })
+  const unitItems = [...(units.data ?? []).map((u) => ({ value: u.code, label: `${u.code} — ${u.name}` })),
+    ...(item && !(units.data ?? []).some((u) => u.code === item.unit) ? [{ value: item.unit, label: item.unit }] : [])]
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg">
@@ -64,7 +67,7 @@ export function ItemSheet({ open, onOpenChange, item }: { open: boolean; onOpenC
                   <SelectContent>{groupItems.map((g) => <SelectItem key={g.value} value={g.value}>{g.label}</SelectItem>)}</SelectContent></Select>
               )} />}
             </Field>
-            <Field id="unit" label={t("field.unit")} required>
+            <Field id="unit" label={t("field.unit")} required error={errors.unit?.message}>
               {(a) => <Controller control={control} name="unit" render={({ field }) => (
                 <Select value={field.value} onValueChange={field.onChange} items={unitItems}><SelectTrigger id={a.id} className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>{unitItems.map((g) => <SelectItem key={g.value} value={g.value}>{g.label}</SelectItem>)}</SelectContent></Select>
@@ -79,6 +82,7 @@ export function ItemSheet({ open, onOpenChange, item }: { open: boolean; onOpenC
               <Label htmlFor="active">{t("field.active")}</Label>
               <Controller control={control} name="active" render={({ field }) => <Switch id="active" checked={field.value} onCheckedChange={field.onChange} />} />
             </div>
+            {item && <HistorySection entityId={item.id} className="sm:col-span-2" />}
           </div>
           <SheetFooter className="flex-row justify-end border-t">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{tc("cancel")}</Button>

@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { RecordHistory } from "@/features/audit/record-history"
 import { Num } from "@/components/common/money"
 import { Pill } from "@/components/common/status-badge"
 import { EmptyState } from "@/components/common/empty-state"
@@ -20,25 +23,36 @@ import type { LedgerEntry, LedgerType } from "@/lib/types"
 type Filter = "all" | "purchase" | "sale" | "production" | "other"
 const FILTERS: Filter[] = ["all", "purchase", "sale", "production", "other"]
 const inFilter = (f: Filter, e: LedgerEntry) =>
-  f === "all" || (f === "production" ? e.type === "prodReceive" || e.type === "prodIssue" : f === "other" ? e.type === "opening" || e.type === "damage" : e.type === f)
+  f === "all" || (f === "production" ? e.type === "prodReceive" || e.type === "prodIssue" : f === "other" ? !["purchase", "sale", "prodReceive", "prodIssue"].includes(e.type) : e.type === f)
 const TONE: Record<LedgerType, "neutral" | "info" | "success" | "warning" | "danger"> = {
-  opening: "neutral", purchase: "info", sale: "success", prodReceive: "info", prodIssue: "warning", damage: "danger",
+  opening: "neutral", purchase: "info", sale: "success", prodReceive: "info", prodIssue: "warning", damage: "danger", transferIn: "info", transferOut: "warning",
 }
+/** Where a ledger reference opens. */
+const refHref = (e: LedgerEntry) =>
+  e.type === "sale" ? `/sales/${e.refId}` : e.type === "purchase" ? `/purchases/${e.refId}`
+    : e.type === "damage" ? `/inventory/damage?view=${e.refId}` : `/inventory/transfers?view=${e.refId}`
+const ALL = "all"
 
 /**
  * Stock ledger (Mushak 6.1/6.2-style movement card) for one item: every movement with running balance.
  * Opened from the Items list or global search via ?ledger=<id>, so it is linkable.
  */
-export function LedgerSheet({ id, onOpenChange, onEdit }: { id: string | null; onOpenChange: (o: boolean) => void; onEdit?: (id: string) => void }) {
+export function LedgerSheet({ id, onOpenChange, onEdit, branch: initialBranch }: {
+  id: string | null; onOpenChange: (o: boolean) => void; onEdit?: (id: string) => void; /** open on one branch's ledger */ branch?: string | null
+}) {
   const t = useTranslations("ledger")
   const locale = useLocale()
   const can = useCan()
   const [filter, setFilter] = React.useState<Filter>("all")
-  React.useEffect(() => { setFilter("all") }, [id])
-  const { data, isLoading, error } = useQuery({ queryKey: ["ledger", id], queryFn: () => api.items.ledger(id!), enabled: !!id })
+  const [tab, setTab] = React.useState("movements")
+  const [branch, setBranch] = React.useState<string>(initialBranch || ALL)
+  React.useEffect(() => { setFilter("all"); setTab("movements"); setBranch(initialBranch || ALL) }, [id, initialBranch])
+  const b = branch === ALL ? undefined : branch
+  const { data, isLoading, error } = useQuery({ queryKey: ["ledger", id, b], queryFn: () => api.items.ledger(id!, b), enabled: !!id })
   const rows = (data?.entries ?? []).filter((e) => inFilter(filter, e))
   const it = data?.item
   const hasSummary = data?.entries.some((e) => e.summary)
+  const openingQty = data?.entries.find((e) => e.type === "opening")?.in ?? 0
 
   const csv = React.useMemo(() => {
     if (!data) return ""
@@ -54,16 +68,34 @@ export function LedgerSheet({ id, onOpenChange, onEdit }: { id: string | null; o
           <SheetTitle>{it ? t("title", { name: it.name }) : t("titlePlain")}</SheetTitle>
           <SheetDescription>{it ? `${it.sku} · HS ${it.hsCode} · ${it.unit}` : "\u00a0"}</SheetDescription>
         </SheetHeader>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as string)} className="flex min-h-0 flex-1 flex-col gap-0">
+        <TabsList className="mx-4 mt-3">
+          <TabsTrigger value="movements">{t("tabMovements")}</TabsTrigger>
+          <TabsTrigger value="history">{t("tabHistory")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="history" className="min-h-0 flex-1 overflow-y-auto p-4">{id && <RecordHistory entityId={id} />}</TabsContent>
+        <TabsContent value="movements" className="flex min-h-0 flex-1 flex-col">
         {isLoading ? <div className="grid gap-3 p-4"><Skeleton className="h-20" /><Skeleton className="h-80" /></div>
           : error || !data || !it ? <EmptyState title={t("notFound")} hint={error?.message} />
           : (
             <div className="flex min-h-0 flex-1 flex-col">
-              <dl className="grid grid-cols-2 gap-px border-b bg-border sm:grid-cols-4">
+              <div className="flex flex-wrap items-center gap-2 px-4 pt-3 text-sm">
+                <label htmlFor="ledger-branch" className="text-muted-foreground">{t("branch")}</label>
+                <Select value={branch} onValueChange={(v) => setBranch(v as string)} items={[{ value: ALL, label: t("allBranches") }, ...data.branches.map((x) => ({ value: x.id, label: x.name }))]}>
+                  <SelectTrigger id="ledger-branch" className="min-w-56"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL}>{t("allBranches")}</SelectItem>
+                    {data.branches.map((x) => <SelectItem key={x.id} value={x.id}>{x.name} · {fmtNum(data.byBranch[x.id] ?? 0, locale)} {it.unit}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {b && <span className="text-xs text-muted-foreground">{t("branchNote")}</span>}
+              </div>
+              <dl className="mt-3 grid grid-cols-2 gap-px border-y bg-border sm:grid-cols-4">
                 {[
-                  [t("opening"), it.opening, ""],
-                  [t("in"), data.totals.in - it.opening, "text-success"],
+                  [t("opening"), openingQty, ""],
+                  [t("in"), data.totals.in - openingQty, "text-success"],
                   [t("out"), data.totals.out, "text-destructive"],
-                  [t("closing"), it.remain, "font-semibold"],
+                  [t("closing"), data.closing, "font-semibold"],
                 ].map(([k, v, cls]) => (
                   <div key={k as string} className="bg-card px-4 py-3">
                     <dt className="text-xs text-muted-foreground">{k}</dt>
@@ -77,7 +109,7 @@ export function LedgerSheet({ id, onOpenChange, onEdit }: { id: string | null; o
                 </ToggleGroup>
                 <div className="flex gap-2">
                   {onEdit && can("master.edit") && <Button variant="outline" size="sm" onClick={() => onEdit(it.id)}><Pencil /> {t("editItem")}</Button>}
-                  <Button variant="outline" size="sm" render={<a href={csv} download={`ledger-${it.sku}.csv`} />}><Download /> CSV</Button>
+                  <Button variant="outline" size="sm" render={<a href={csv} download={`ledger-${it.sku}${b ? `-${b}` : ""}.csv`} />}><Download /> CSV</Button>
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto border-t" tabIndex={0} role="region" aria-label={t("titlePlain")}>
@@ -96,7 +128,7 @@ export function LedgerSheet({ id, onOpenChange, onEdit }: { id: string | null; o
                         <td className="px-3 py-2 whitespace-nowrap tabular">{fmtDate(e.date, locale)}</td>
                         <td className="px-3 py-2"><Pill tone={TONE[e.type]}>{t(`type.${e.type}`)}</Pill>{e.summary && <span className="ml-1 text-xs text-muted-foreground" title={t("summaryRow")}>Σ</span>}</td>
                         <td className="max-w-64 px-3 py-2">
-                          {e.refId ? <Link href={`/${e.type === "sale" ? "sales" : "purchases"}/${e.refId}`} className="font-medium text-primary hover:underline">{e.ref}</Link> : <span className="text-muted-foreground">{e.summary ? t("monthly") : "—"}</span>}
+                          {e.refId ? <Link href={refHref(e)} className="font-medium text-primary hover:underline">{e.ref}</Link> : <span className="text-muted-foreground">{e.summary ? t("monthly") : "—"}</span>}
                           {e.party && <span className="block truncate text-xs text-muted-foreground" title={e.party}>{e.party}</span>}
                         </td>
                         <td className="px-3 py-2 text-right text-success">{e.in ? <Num value={e.in} /> : ""}</td>
@@ -114,6 +146,8 @@ export function LedgerSheet({ id, onOpenChange, onEdit }: { id: string | null; o
               </p>
             </div>
           )}
+        </TabsContent>
+        </Tabs>
       </SheetContent>
     </Sheet>
   )

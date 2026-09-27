@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { HistorySection } from "@/features/audit/record-history"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Field } from "@/components/common/field"
 import { useMe } from "@/components/auth/me-provider"
@@ -122,6 +123,7 @@ export function UserSheet({ open, onOpenChange, user, onInvited }: {
             {errors.active?.message && <p role="alert" className="text-xs font-medium text-destructive sm:col-span-2">{t(`error.${errors.active.message}`)}</p>}
             {self && <p className="flex items-start gap-2 text-xs text-muted-foreground sm:col-span-2"><Lock className="mt-0.5 size-3 shrink-0" aria-hidden /> {t("selfNote")}</p>}
             {!user && <p className="flex items-start gap-2 rounded-md bg-info-soft p-3 text-xs sm:col-span-2"><Info className="mt-0.5 size-3.5 shrink-0" aria-hidden /> {t("inviteNote")}</p>}
+            {user && <HistorySection entityId={user.id} className="sm:col-span-2" />}
           </div>
           <SheetFooter className="flex-row justify-end border-t">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{tc("cancel")}</Button>
