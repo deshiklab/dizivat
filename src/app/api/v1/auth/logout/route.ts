@@ -1,12 +1,11 @@
-import { currentUser } from "@/lib/auth/server"
-import { SESSION_COOKIE } from "@/lib/auth/session"
+import { clearSession, currentUser } from "@/lib/auth/session-user"
 import { recordAudit } from "@/lib/mock/audit"
 import { json } from "../../_lib"
 
-export async function POST() {
-  const user = await currentUser()
+export async function POST(req: Request) {
+  const user = await currentUser(req)
   if (user) recordAudit({ actor: user, entity: "session", entityId: user.id, ref: user.username, action: "signedOut" })
   const res = json({ ok: true })
-  res.cookies.set(SESSION_COOKIE, "", { httpOnly: true, sameSite: "lax", path: "/", maxAge: 0 })
+  clearSession(res)
   return res
 }

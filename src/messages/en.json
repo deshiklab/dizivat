@@ -150,7 +150,8 @@
     "edit": "Edit",
     "delete": "Delete",
     "deleteDraft": "Delete draft",
-    "close": "Close"
+    "close": "Close",
+    "loading": "Loading…"
   },
   "table": {
     "select": "Select",
@@ -635,7 +636,11 @@
     "network": "Couldn't reach the server. Check your connection and try again.",
     "demoTitle": "Demo accounts — click to fill (password: {pw})",
     "footer": "Prototype build · mock data · no real records are changed",
-    "disabled": "This account has been deactivated. Contact your administrator."
+    "disabled": "This account has been deactivated. Contact your administrator.",
+    "staticDemoTitle": "Static demo on GitHub Pages",
+    "staticDemoBody": "There is no server behind this copy: everything you create or change is saved in this browser only, and nobody else sees it.",
+    "resetDemo": "Reset demo data",
+    "resetDemoConfirm": "Delete every change made in this browser and restore the original demo data?"
   },
   "cancel": {
     "title": "Cancel {no}?",

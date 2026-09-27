@@ -1,5 +1,7 @@
 "use client"
 
+// First: in the static GitHub Pages demo this answers /api/v1 in the browser (no-op otherwise)
+import "@/lib/demo/boot"
 import * as React from "react"
 import { ThemeProvider } from "next-themes"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"

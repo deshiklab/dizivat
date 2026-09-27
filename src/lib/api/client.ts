@@ -1,6 +1,7 @@
 import type { AppNotification, AuditEvent, Company, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
 import type { CompanyInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
+import { appPathname, appUrl } from "../base-path"
 
 /**
  * Typed API client. Today it calls the Next.js mock handlers at /api/v1;
@@ -28,9 +29,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({}))
     // Session expired mid-use → back to sign-in, returning here afterwards
     if (res.status === 401 && typeof window !== "undefined" && !path.startsWith("/auth/")) {
-      const [, locale = "en", ...rest] = window.location.pathname.split("/")
+      const [, locale = "en", ...rest] = appPathname(window.location.pathname).split("/")
       const next = "/" + rest.join("/") + window.location.search
-      window.location.assign(`/${locale}/login?reason=expired&next=${encodeURIComponent(next)}`)
+      window.location.assign(appUrl(`/${locale}/login?reason=expired&next=${encodeURIComponent(next)}`))
     }
     throw new ApiError(res.status, body.title ?? res.statusText, body.errors)
   }

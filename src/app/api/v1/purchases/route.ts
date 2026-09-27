@@ -1,4 +1,4 @@
-import { addHistory, db, nextNo, postStock } from "@/lib/mock/db"
+import { addHistory, db, nextDocId, nextNo, postStock } from "@/lib/mock/db"
 import { buildPurchaseFields, unknownItems } from "@/lib/mock/build"
 import { csvResponse, delay, runQuery, toCSV } from "@/lib/mock/query"
 import { purchaseInput } from "@/lib/schemas"
@@ -45,7 +45,7 @@ export const POST = withAuth("doc.create", async (req, _ctx, user) => {
   if (bad) return problem(422, "Validation failed", bad)
   const p: Purchase = {
     ...buildPurchaseFields(d, v),
-    id: `p${db.purchases.length + db.trash.length + 1}-${Date.now().toString(36)}`,
+    id: nextDocId("p", [...db.purchases, ...db.trash.filter((t) => t.kind === "purchase").map((t) => t.doc)]),
     invoiceNo: nextNo("P", d.issueDate),
     createdAt: new Date().toISOString(),
     process: "Created",

@@ -78,6 +78,15 @@ export const withStock = (i: Item): ItemWithStock => ({
   remain: Math.round((i.opening + i.purchased + i.prodReceive - i.prodIssue - i.sold - i.damage) * 100) / 100,
 })
 
+/**
+ * Next document id (s223, p86 …): one above the highest number ever used, trash included, so ids are never reused.
+ * Sequential ids also let the static GitHub Pages demo pre-render pages for documents created in the browser.
+ */
+export function nextDocId(prefix: "s" | "p", docs: { id: string }[]) {
+  const max = docs.reduce((m, d) => Math.max(m, Number(/^[sp](\d+)/.exec(d.id)?.[1] ?? 0)), 0)
+  return `${prefix}${max + 1}`
+}
+
 export function nextNo(prefix: "S" | "P", issueDate: string) {
   const [y, m] = issueDate.split("-")
   const key = `${prefix}-${m}${y.slice(2)}`

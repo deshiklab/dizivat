@@ -15,6 +15,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api/client"
 import { usePrefs, type Accent, type Density, type TextSize } from "@/components/prefs"
 import { useShell } from "./shell-context"
+import { appUrl } from "@/lib/base-path"
 
 // Full class names (not built from strings) so Tailwind emits them; colours live in globals.css @theme
 const ACCENTS: { v: Accent; c: string }[] = [
@@ -48,7 +49,7 @@ export function UserMenu() {
   const signOut = async () => {
     await api.auth.logout().catch(() => {})
     qc.clear()
-    window.location.assign(`/${locale}/login`)
+    window.location.assign(appUrl(`/${locale}/login`))
   }
 
   return (

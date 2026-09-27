@@ -21,6 +21,7 @@ import { Link, useRouter } from "@/i18n/navigation"
 import { api } from "@/lib/api/client"
 import { fmtCompact, fmtDate, fmtNum } from "@/lib/format"
 import type { Purchase } from "@/lib/types"
+import { appUrl } from "@/lib/base-path"
 
 const FACETS = ["vendor", "process", "mode", "payment"] as const
 
@@ -67,7 +68,7 @@ export function PurchaseList() {
             <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={tc("actionsFor", { name: p.invoiceNo })} />}><MoreHorizontal /></DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem onClick={() => router.push(`/purchases/${p.id}`)}><Eye /> {tc("view")}</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/${locale}/purchases/${p.id}`); toast.success(tt("linkCopied")) }}><Link2 /> {tt("copyLink")}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { navigator.clipboard?.writeText(window.location.origin + appUrl(`/${locale}/purchases/${p.id}`)); toast.success(tt("linkCopied")) }}><Link2 /> {tt("copyLink")}</DropdownMenuItem>
               {p.process === "Created" && can("doc.edit") && <DropdownMenuItem onClick={() => router.push(`/purchases/${p.id}/edit`)}><Pencil /> {tc("edit")}</DropdownMenuItem>}
               {p.process === "Created" && can("doc.approve") && <DropdownMenuItem onClick={() => actions.approve(p)}><CheckCheck /> {ts("approve")}</DropdownMenuItem>}
               {p.process === "Created" && can("doc.delete") && (<><DropdownMenuSeparator /><DropdownMenuItem variant="destructive" onClick={() => actions.askDelete(p)}><Trash2 /> {tc("deleteDraft")}</DropdownMenuItem></>)}

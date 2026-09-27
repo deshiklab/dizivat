@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { issueSession, meFor } from "@/lib/auth/server"
+import { issueSession, meFor } from "@/lib/auth/session-user"
 import { passwordOf, userStore, users } from "@/lib/mock/users"
 import { recordAudit } from "@/lib/mock/audit"
 import { delay } from "@/lib/mock/query"

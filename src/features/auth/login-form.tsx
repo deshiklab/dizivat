@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { AlertCircle, Eye, EyeOff, Info, Languages, Loader2, LockKeyhole, LogIn, ShieldCheck } from "lucide-react"
+import { AlertCircle, Eye, EyeOff, FlaskConical, Info, Languages, Loader2, LockKeyhole, LogIn, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -11,6 +11,9 @@ import { LogoMark } from "@/components/shell/logo"
 import { api, ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/roles"
 import { cn } from "@/lib/utils"
+import { STATIC_DEMO, appUrl } from "@/lib/base-path"
+import { DemoResetButton } from "@/components/auth/demo-reset"
+import { useSearchParams } from "next/navigation"
 
 export interface DemoAccount { username: string; name: string; designation: string; role: Role }
 
@@ -53,7 +56,7 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
     try {
       await api.auth.login({ username: username.trim(), password, remember })
       // Full navigation so the server layout renders with the new session cookie
-      window.location.assign(`/${locale}${safeNext(next) === "/" ? "" : safeNext(next)}`)
+      window.location.assign(appUrl(`/${locale}${safeNext(next) === "/" ? "" : safeNext(next)}`))
     } catch (err) {
       setPending(false)
       if (err instanceof ApiError && err.status === 429) {
@@ -73,7 +76,7 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
   const fill = (u: string) => { setUsername(u); setPassword(demoPassword); setError(null); setFieldErr({}); setLockedFor(0) }
   const otherLocale = locale === "bn" ? "en" : "bn"
   const qs = new URLSearchParams({ ...(next ? { next } : {}), ...(reason ? { reason } : {}) }).toString()
-  const switchHref = `/${otherLocale}/login${qs ? `?${qs}` : ""}`
+  const switchHref = appUrl(`/${otherLocale}/login${qs ? `?${qs}` : ""}`)
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
@@ -168,9 +171,23 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
               ))}
             </ul>
           </section>
+
+          {STATIC_DEMO && (
+            <section aria-labelledby="static-demo-h" className="grid gap-2 rounded-lg bg-info-soft p-3 text-sm text-info">
+              <h2 id="static-demo-h" className="flex items-center gap-2 font-medium"><FlaskConical className="size-4 shrink-0" aria-hidden /> {t("staticDemoTitle")}</h2>
+              <p className="text-xs">{t("staticDemoBody")}</p>
+              <DemoResetButton />
+            </section>
+          )}
         </div>
         <p className="text-center text-xs text-muted-foreground">{t("footer")}</p>
       </main>
     </div>
   )
+}
+
+/** Static GitHub Pages demo: the page HTML is pre-built, so ?next= and ?reason= come from the browser URL. */
+export function LoginFormFromUrl(props: Omit<React.ComponentProps<typeof LoginForm>, "next" | "reason">) {
+  const sp = useSearchParams()
+  return <LoginForm {...props} next={sp.get("next")} reason={sp.get("reason")} />
 }

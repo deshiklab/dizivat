@@ -14,6 +14,15 @@ const rnd = mulberry32(20260925)
 const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rnd() * arr.length)]
 const between = (a: number, b: number) => a + rnd() * (b - a)
 const int = (a: number, b: number) => Math.floor(between(a, b + 1))
+/**
+ * Fisher–Yates with the seeded PRNG. (A random sort comparator is NOT deterministic: the comparison order is up to
+ * the JS engine, so Node and the browser — used by the static demo — produced different data.)
+ */
+const shuffle = <T,>(arr: readonly T[]) => {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]] }
+  return a
+}
 const pad = (n: number, w = 4) => String(n).padStart(w, "0")
 const bin = () => `${pad(int(1000, 9999), 4)}${pad(int(10000, 99999), 5)}-${pad(int(101, 999), 4)}`
 
@@ -124,7 +133,7 @@ for (const day of monthsBack()) {
     const cust = rnd() < 0.08 ? pick(customers.slice(7)) : rnd() < 0.5 ? pick(customers.slice(0, 2)) : pick(customers.slice(2, 7))
     const foreign = cust.mode === "Foreign"
     const n = int(1, 3)
-    const chosen = [...fg].sort(() => rnd() - 0.5).slice(0, n)
+    const chosen = shuffle(fg).slice(0, n)
     const lines = chosen.map((it) => {
       const qty = it.unit === "Pcs" ? int(20, 160) * 1000 : int(80, 1400)
       const price = round2(it.salePrice * between(0.95, 1.06))
@@ -165,7 +174,7 @@ for (const day of monthsBack()) {
     const v = rnd() < 0.45 ? pick(vendors.slice(0, 5)) : rnd() < 0.65 ? pick(vendors.slice(5, 7)) : pick(vendors.slice(7))
     const pool = v.mode === "Foreign" ? buyables.filter((i) => i.group === "Raw Material") : v.mode === "Local" ? buyables.filter((i) => i.group !== "Packing Materials") : buyables.filter((i) => i.group === "Packing Materials" || i.name.includes("Solvent"))
     const n = int(1, 3)
-    const chosen = [...pool].sort(() => rnd() - 0.5).slice(0, n)
+    const chosen = shuffle(pool).slice(0, n)
     let tti = 0
     const lines = chosen.map((it) => {
       const qty = it.unit === "Pcs" && it.purchasePrice > 1000 ? int(1, 6) : it.unit === "Kg" ? int(200, 6000) : int(300, 4000)

@@ -1,4 +1,4 @@
-import { addHistory, db, nextNo, postStock, stockShortfall } from "@/lib/mock/db"
+import { addHistory, db, nextDocId, nextNo, postStock, stockShortfall } from "@/lib/mock/db"
 import { buildSaleFields, unknownItems } from "@/lib/mock/build"
 import { csvResponse, delay, runQuery, toCSV } from "@/lib/mock/query"
 import { saleInput } from "@/lib/schemas"
@@ -52,7 +52,7 @@ export const POST = withAuth("doc.create", async (req, _ctx, user) => {
   }
   const sale: Sale = {
     ...fields,
-    id: `s${db.sales.length + db.trash.length + 1}-${Date.now().toString(36)}`,
+    id: nextDocId("s", [...db.sales, ...db.trash.filter((t) => t.kind === "sale").map((t) => t.doc)]),
     invoiceNo: nextNo("S", d.issueDate),
     challanNo: String(Math.max(...db.sales.map((s) => Number(s.challanNo) || 0)) + 1),
     createdAt: new Date().toISOString(),

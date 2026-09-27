@@ -102,3 +102,23 @@ These are conventions without a lint rule:
 - Permissions are checked on the server. The UI uses `useCan()` to hide actions the role can't perform — in the sidebar, module tabs, ⌘K palette, buttons and row menus alike.
 - Reversible deletes show a 10-second **Undo** toast (the record is restored from the server trash).
 - Money is rounded with `round2`. Line maths: SD on value; VAT on value + SD.
+
+## Static demo on GitHub Pages
+
+Every push to `main` also publishes a **static demo** (`.github/workflows/pages.yml`) at
+`https://<owner>.github.io/<repo>/`. GitHub Pages only serves files, so the demo build:
+
+- pre-renders every page (`next build` with `output: "export"`, into `out/`);
+- runs the same mock API route handlers **inside the browser** (`src/lib/demo`): `fetch("/api/v1/…")` is answered locally
+  and the data plus the session live in `localStorage`, so each visitor has a private copy (use **Reset demo data** on the
+  sign-in page);
+- has no middleware: the session check happens in the browser (`DemoGate`), and `/` picks English or Bengali in the browser.
+
+```bash
+NEXT_PUBLIC_BASE_PATH=/rbs-vat-frontend npm run build:pages      # → out/
+mkdir -p /tmp/site && cp -r out /tmp/site/rbs-vat-frontend && (cd /tmp/site && python3 -m http.server 8080 &)
+PAGES_URL=http://localhost:8080/rbs-vat-frontend python3 scripts/pages_smoke.py
+```
+
+Documents created in the demo get sequential ids (`s215`, `s216` …). Pages exist for the seeded documents plus 50 new ones
+of each type per browser. The normal server build (`npm run build`) is unaffected.

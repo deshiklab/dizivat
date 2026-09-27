@@ -1,8 +1,6 @@
-import { NextResponse } from "next/server"
-import { cookies } from "next/headers"
 import { passwordChange } from "@/lib/schemas"
-import { issueSession, meFor } from "@/lib/auth/server"
-import { SESSION_COOKIE, SESSION_TTL_SHORT, verifySession } from "@/lib/auth/session"
+import { issueSession, meFor, sessionOf } from "@/lib/auth/session-user"
+import { SESSION_TTL_SHORT } from "@/lib/auth/session"
 import { recordAudit } from "@/lib/mock/audit"
 import { passwordOf, userStore } from "@/lib/mock/users"
 import { delay } from "@/lib/mock/query"
@@ -20,8 +18,8 @@ export const PUT = withAuth(null, async (req, _ctx, user) => {
   userStore.revokedBefore[user.id] = Math.floor(Date.now() / 1000)
   user.mustChangePassword = false
   recordAudit({ actor: user, entity: "user", entityId: user.id, ref: user.username, action: "passwordChanged" })
-  const s = await verifySession((await cookies()).get(SESSION_COOKIE)?.value)
-  const res = NextResponse.json(meFor(user))
+  const s = await sessionOf(req)
+  const res = Response.json(meFor(user))
   await issueSession(res, req, user.id, !!s && s.exp - (s.iat ?? s.exp) > SESSION_TTL_SHORT)
   return res
 })

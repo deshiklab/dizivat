@@ -16,6 +16,7 @@ import { api, ApiError } from "@/lib/api/client"
 import type { Me } from "@/lib/auth/roles"
 import { passwordChange, type PasswordChange } from "@/lib/schemas"
 import { useShell } from "./shell-context"
+import { appUrl } from "@/lib/base-path"
 
 const blank: PasswordChange = { current: "", next: "", confirm: "" }
 
@@ -52,7 +53,7 @@ export function PasswordDialog() {
   const signOut = async () => {
     await api.auth.logout().catch(() => {})
     qc.clear()
-    window.location.assign(`/${locale}/login`)
+    window.location.assign(appUrl(`/${locale}/login`))
   }
 
   return (

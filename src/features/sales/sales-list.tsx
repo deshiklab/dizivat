@@ -21,6 +21,7 @@ import { Link, useRouter } from "@/i18n/navigation"
 import { api } from "@/lib/api/client"
 import { fmtCompact, fmtDate, fmtNum } from "@/lib/format"
 import type { Sale } from "@/lib/types"
+import { appUrl } from "@/lib/base-path"
 
 const FACETS = ["customer", "process", "mode", "method", "payment"] as const
 
@@ -48,7 +49,7 @@ export function SalesList() {
     },
     onError: (e) => toast.error(e.message),
   })
-  const copyLink = (s: Sale) => { navigator.clipboard?.writeText(`${window.location.origin}/${locale}/sales/${s.id}`); toast.success(tt("linkCopied")) }
+  const copyLink = (s: Sale) => { navigator.clipboard?.writeText(window.location.origin + appUrl(`/${locale}/sales/${s.id}`)); toast.success(tt("linkCopied")) }
 
   const columns = React.useMemo<ColumnDef<Sale, unknown>[]>(() => [
     { id: "issueDate", accessorKey: "issueDate", meta: { label: t("col.issueDate") }, header: t("col.issueDate"), cell: ({ row }) => fmtDate(row.original.issueDate, locale) },
