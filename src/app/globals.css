@@ -1,0 +1,209 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter), var(--font-bengali), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-surface: var(--surface);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+
+/* ───────────────────────────── Design tokens ─────────────────────────────
+ * All text/background pairs are checked against WCAG 2.2 AA (≥4.5:1 body text,
+ * ≥3:1 large text/UI). Fixes prototype issues: dark mode failing AA on 68–79% of text,
+ * white-on-#2F80ED at 3.87:1, themes that tinted only backgrounds.
+ * Accents are switched with <html data-accent="blue|emerald|violet|orange">.
+ */
+:root {
+  --radius: 0.5rem;
+  --background: #f5f7fa;          /* app canvas */
+  --surface: #ffffff;             /* page panels */
+  --foreground: #0f172a;          /* 17.9:1 on white */
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --secondary: #eef2f7;
+  --secondary-foreground: #1e293b;
+  --muted: #f1f4f8;
+  --muted-foreground: #4b5a6d;    /* 7.0:1 on white, 6.4:1 on muted */
+  --accent: #eaf1fd;
+  --accent-foreground: #0f2f6b;
+  --destructive: #c2261d;         /* 5.9:1 on white */
+  --border: #dde3ea;
+  --input: #cfd7e1;
+  --primary: #1d5fd1;             /* 5.8:1 with white */
+  --primary-foreground: #ffffff;
+  --ring: #1d5fd1;
+  --success: #166534;  --success-soft: #e7f6ec;   /* 7.1:1 */
+  --warning: #92400e;  --warning-soft: #fdf3e2;   /* 6.4:1 */
+  --info: #1e4fa8;     --info-soft: #e8f0fd;      /* 7.4:1 */
+  --danger: #b42318;   --danger-soft: #fdecea;    /* 6.0:1 */
+  --chart-1: var(--primary);
+  --chart-2: #0e9f6e;
+  --chart-3: #d97706;
+  --chart-4: #7c3aed;
+  --chart-5: #64748b;
+  --sidebar: #0f1b2d;             /* deep navy rail, brand anchor */
+  --sidebar-foreground: #c9d4e3;  /* 11.5:1 */
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #0f1b2d;
+  --sidebar-accent: #1b2a42;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #22324c;
+  --sidebar-ring: #7fb0ff;
+  /* density */
+  --row-h: 2.5rem;
+  --cell-py: 0.5rem;
+  --control-h: 2.25rem;
+}
+:root[data-accent="emerald"] { --primary: #047857; --ring: #047857; --accent: #e6f5ef; --accent-foreground: #064e3b; --chart-1: #047857; }
+:root[data-accent="violet"]  { --primary: #6d28d9; --ring: #6d28d9; --accent: #f1ebfd; --accent-foreground: #3b0f86; --chart-1: #6d28d9; }
+:root[data-accent="orange"]  { --primary: #c2410c; --ring: #c2410c; --accent: #fdf0e8; --accent-foreground: #7c2d12; --chart-1: #c2410c; }
+
+.dark {
+  --background: #0a111c;
+  --surface: #0f1826;
+  --foreground: #e6edf6;          /* 14.7:1 */
+  --card: #111b2a;
+  --card-foreground: #e6edf6;
+  --popover: #142033;
+  --popover-foreground: #e6edf6;
+  --secondary: #1b2739;
+  --secondary-foreground: #e6edf6;
+  --muted: #172233;
+  --muted-foreground: #a3b1c4;    /* 7.9:1 on card */
+  --accent: #1a2a44;
+  --accent-foreground: #dbe7ff;
+  --destructive: #ff8a80;         /* 7.4:1 on card */
+  --border: #243247;
+  --input: #2c3c54;
+  --primary: #6ea8ff;             /* 7.6:1 against #0a111c text */
+  --primary-foreground: #06101f;
+  --ring: #6ea8ff;
+  --success: #6ee7a0;  --success-soft: #0f2e1f;
+  --warning: #fbbf6a;  --warning-soft: #33240c;
+  --info: #93c0ff;     --info-soft: #11264a;
+  --danger: #ff9b91;   --danger-soft: #3a1512;
+  --chart-2: #34d399;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #94a3b8;
+  --sidebar: #0b1422;
+  --sidebar-foreground: #b8c5d8;
+  --sidebar-accent: #17243a;
+  --sidebar-border: #1c2a40;
+}
+.dark[data-accent="emerald"] { --primary: #34d399; --ring: #34d399; --accent: #0f2e24; --accent-foreground: #c9f5e3; --chart-1: #34d399; }
+.dark[data-accent="violet"]  { --primary: #b79cff; --ring: #b79cff; --accent: #241a44; --accent-foreground: #e6dcff; --chart-1: #b79cff; }
+.dark[data-accent="orange"]  { --primary: #fd9a5c; --ring: #fd9a5c; --accent: #3a2012; --accent-foreground: #ffe2cf; --chart-1: #fd9a5c; }
+
+/* Density: compact rows for power users (prototype had fixed 11px text instead) */
+:root[data-density="compact"] { --row-h: 2rem; --cell-py: 0.25rem; --control-h: 2rem; }
+:root[data-density="comfortable"] { --row-h: 3rem; --cell-py: 0.75rem; --control-h: 2.5rem; }
+
+/* Text size — rem-based so every component scales (prototype used CSS zoom). */
+:root[data-text="lg"] { font-size: 112.5%; }
+:root[data-text="xl"] { font-size: 125%; }
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { @apply font-sans; -webkit-text-size-adjust: 100%; }
+  body { @apply bg-background text-foreground antialiased; font-feature-settings: "cv11", "ss01"; }
+  :lang(bn) body { line-height: 1.6; }
+  .tabular, td, th { font-variant-numeric: tabular-nums; }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}
+
+@layer components {
+  /* 44px touch targets on coarse pointers (prototype: 85/85 targets too small) */
+  @media (pointer: coarse) {
+    [data-slot="button"], [data-slot$="-trigger"], [data-slot="dropdown-menu-item"], [data-slot="select-trigger"],
+    [data-slot="command-item"], [data-slot="sidebar-menu-button"], [data-slot="sidebar-menu-sub-button"],
+    [data-slot="tabs-trigger"], [data-slot="toggle"], [role="combobox"], [data-touch-target] { min-height: 44px; }
+    [data-slot="button"][data-size^="icon"], [data-slot$="-trigger"][data-size^="icon"],
+    [data-slot="sidebar-trigger"], [data-touch-target="square"] { min-width: 44px; }
+    [data-slot="checkbox"]::after { inset: -14px; } /* 44px hit area around 16px box */
+  }
+  .data-row > td { padding-top: var(--cell-py); padding-bottom: var(--cell-py); height: var(--row-h); }
+}
+
+/* Print: only the document marked .print-area is printed (fixes printTable printing title only). */
+@media print {
+  @page { size: A4; margin: 12mm; }
+  html, body { background: #fff !important; color: #000 !important; font-size: 11pt; }
+  body * { visibility: hidden; }
+  .print-area, .print-area * { visibility: visible; }
+  .print-area { position: absolute; inset: 0 auto auto 0; width: 100%; box-shadow: none !important; border: 0 !important; }
+  .no-print { display: none !important; }
+}
+
+/* Number inputs: no spin buttons. They steal ~15 px from narrow line-item cells (VAT % "15" clipped to "1"),
+   are far below the 44 px touch target, and ArrowUp/ArrowDown still step the value. */
+@layer base {
+  input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+}
+
+/* Fixed brand swatches — accent pickers and the login brand panel must show these regardless of the active accent. */
+@theme {
+  --color-swatch-blue: #1d5fd1;
+  --color-swatch-emerald: #047857;
+  --color-swatch-violet: #6d28d9;
+  --color-swatch-orange: #c2410c;
+  --color-swatch-sky: #6ea8ff;
+}

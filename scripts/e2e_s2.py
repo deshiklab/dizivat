@@ -1,0 +1,205 @@
+"""Sprint 2 end-to-end checks: auth, roles, draft lifecycle, master data, ledger, saved views. Run after capture.py/e2e.py on a fresh server."""
+import asyncio, re, sys
+from playwright.async_api import async_playwright, expect
+from _auth import BASE, login_ctx
+
+OUT = __import__("os").environ.get("SHOT_DIR", "/home/user/RBS_VAT_Frontend_Plan/screenshots")
+__import__("os").makedirs(OUT, exist_ok=True)
+results = []
+def ok(m): results.append(("PASS", m)); print("PASS", m)
+def missing_msgs(errs): return [e for e in errs if "MISSING_MESSAGE" in e or "FORMATTING_ERROR" in e]
+
+def watch(pg, errs):
+    pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
+    pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" else None)
+
+async def main():
+    async with async_playwright() as p:
+        b = await p.chromium.launch()
+        errs = []
+
+        # ── 1. Login UI ────────────────────────────────────────────────
+        ctx = await b.new_context(viewport={"width": 1440, "height": 900})
+        pg = await ctx.new_page(); watch(pg, errs)
+        await pg.goto(BASE + "/en/sales?process=Created", wait_until="networkidle")
+        assert "/en/login" in pg.url and "next=" in pg.url, pg.url; ok("anonymous deep link → login with ?next")
+        await pg.screenshot(path=f"{OUT}/32_login.png")
+        await pg.get_by_label("Username").fill(f"e2e-{__import__('random').randint(1000,9999)}"); await pg.get_by_label("Password", exact=True).fill("wrong")
+        await pg.get_by_role("button", name="Sign in", exact=True).click()
+        await expect(pg.get_by_role("alert").filter(has_text="4 attempts left")).to_be_visible(); ok("wrong password → announced error with attempts left")
+        await pg.screenshot(path=f"{OUT}/33_login_error.png")
+        await pg.get_by_role("button", name="Show password").click()
+        assert await pg.locator("#password").get_attribute("type") == "text"; ok("show/hide password toggle")
+        await pg.get_by_role("button", name=re.compile("^chanchal")).click()
+        await pg.get_by_role("button", name="Sign in", exact=True).click()
+        await pg.wait_for_url(re.compile(r"/en/sales\?process=Created"), timeout=15000); ok("demo account sign-in returns to ?next target")
+        await expect(pg.get_by_text("Chanchal Mahmud").first).to_be_visible()
+        # logout
+        await pg.get_by_role("button", name="Account and preferences").click()
+        await pg.get_by_role("menuitem", name="Sign out").click()
+        await pg.wait_for_url(re.compile("/en/login"), timeout=10000)
+        r = await ctx.request.get(BASE + "/api/v1/me"); assert r.status == 401; ok("sign out clears the session (API 401)")
+        await ctx.close()
+
+        # ── 2. Viewer: read-only ───────────────────────────────────────
+        ctx = await login_ctx(b, "auditor", viewport={"width": 1440, "height": 900})
+        pg = await ctx.new_page(); watch(pg, errs)
+        await pg.goto(BASE + "/en/sales", wait_until="networkidle"); await pg.wait_for_timeout(500)
+        assert await pg.get_by_role("link", name="New invoice").count() == 0; ok("viewer: no New invoice button")
+        assert await pg.get_by_role("button", name="New", exact=True).count() == 0; ok("viewer: no global New menu")
+        await pg.locator("tbody tr").first.get_by_role("button", name=re.compile("^Actions for")).click()
+        assert await pg.get_by_role("menuitem", name=re.compile("Cancel invoice|Approve|Edit")).count() == 0; ok("viewer: row menu has no approve/edit/cancel")
+        await pg.keyboard.press("Escape")
+        await pg.screenshot(path=f"{OUT}/34_viewer_sales.png")
+        await pg.goto(BASE + "/en/sales/new", wait_until="networkidle")
+        await expect(pg.get_by_text("You don't have access to this page")).to_be_visible(); ok("viewer: /sales/new shows no-access state")
+        await pg.screenshot(path=f"{OUT}/35_no_access.png")
+        r = await ctx.request.patch(BASE + "/api/v1/sales/s1", data={"process": "Cancelled", "reason": "viewer should not be able to"})
+        assert r.status == 403; ok("viewer: API cancel → 403")
+        await ctx.close()
+
+        # ── 3. Operator: drafts only ───────────────────────────────────
+        ctx = await login_ctx(b, "rafiqul", viewport={"width": 1440, "height": 900})
+        pg = await ctx.new_page(); watch(pg, errs)
+        await pg.goto(BASE + "/en/sales/new", wait_until="networkidle")
+        assert await pg.get_by_role("button", name="Save & approve").count() == 0; ok("operator: no Save & approve on the form")
+        await pg.locator("#customerId").click(); await pg.get_by_placeholder("Search name or BIN…").fill("delta"); await pg.get_by_role("option").first.click()
+        await pg.get_by_role("combobox", name="Product 1").click(); await pg.get_by_role("option", name=re.compile("Printed Blister")).click()
+        await pg.get_by_label("Qty 1").fill("100")
+        await pg.get_by_label("Qty 1").blur(); await expect(pg.get_by_role("listbox")).to_have_count(0); await pg.wait_for_timeout(300)
+        await pg.evaluate("window.scrollTo(0,0)"); await pg.screenshot(path=f"{OUT}/36_operator_sale_new.png")
+        await pg.get_by_role("button", name="Save as draft").click()
+        await pg.wait_for_url(re.compile(r"/en/sales/s\d+"), timeout=15000)
+        draft_url = pg.url; draft_id = draft_url.rsplit("/", 1)[1]
+        await expect(pg.get_by_text("Draft — not yet in stock").first).to_be_visible(); ok("operator: saved draft " + draft_id)
+        assert await pg.get_by_role("button", name="Approve", exact=True).count() == 0; ok("operator: detail has no Approve button")
+        await expect(pg.get_by_role("link", name="Edit", exact=True)).to_be_visible(); ok("operator: can edit own draft")
+        r = await ctx.request.patch(BASE + f"/api/v1/sales/{draft_id}", data={"process": "Approved"}); assert r.status == 403; ok("operator: API approve → 403")
+        await ctx.close()
+
+        # ── 4. Approver: edit → approve → cancel with reason ───────────
+        ctx = await login_ctx(b, "chanchal", viewport={"width": 1440, "height": 900})
+        pg = await ctx.new_page(); watch(pg, errs)
+        await pg.goto(draft_url, wait_until="networkidle")
+        await pg.get_by_role("link", name="Edit", exact=True).click()
+        await pg.wait_for_url(re.compile(r"/edit$")); await expect(pg.get_by_label("Qty 1")).to_have_value("100")
+        await pg.get_by_label("Qty 1").fill("120")
+        await pg.screenshot(path=f"{OUT}/37_sale_edit.png")
+        await pg.get_by_role("button", name="Save changes").click()
+        await pg.wait_for_url(re.compile(rf"/en/sales/{draft_id}$"), timeout=15000)
+        await expect(pg.get_by_role("listitem").filter(has_text="Edited")).to_be_visible(); ok("edit draft → history shows Edited")
+        await pg.get_by_role("button", name="Approve", exact=True).click()
+        await expect(pg.get_by_role("listitem").filter(has_text="Approved · Chanchal Mahmud")).to_be_visible(timeout=8000); ok("approve from detail → history")
+        await pg.get_by_role("button", name="Cancel…").click()
+        dlg = pg.get_by_role("alertdialog")
+        await dlg.get_by_label("Reason for cancellation").fill("short")
+        await dlg.get_by_role("button", name="Cancel document").click()
+        await expect(dlg.get_by_text("Enter at least 10 characters.")).to_be_visible(); ok("cancel reason < 10 chars blocked")
+        await dlg.get_by_role("button", name="Wrong qty/price").click()
+        await pg.screenshot(path=f"{OUT}/38_cancel_dialog.png")
+        await dlg.get_by_role("button", name="Cancel document").click()
+        await expect(pg.get_by_text(re.compile("Cancelled by Chanchal Mahmud"))).to_be_visible(timeout=8000)
+        await expect(pg.get_by_text("Wrong quantity or price entered").first).to_be_visible(); ok("cancelled banner shows who + reason")
+        await expect(pg.get_by_role("alertdialog")).to_have_count(0); await pg.wait_for_timeout(400)
+        await pg.screenshot(path=f"{OUT}/39_cancelled_detail.png", full_page=True)
+
+        # ── 5. Delete draft + Undo ─────────────────────────────────────
+        await pg.goto(BASE + "/en/sales?process=Created", wait_until="networkidle"); await pg.wait_for_timeout(500)
+        n0 = await pg.locator("tbody tr").count()
+        row = pg.locator("tbody tr").first; no = (await row.get_by_role("link").first.inner_text()).strip()
+        await row.get_by_role("button", name=re.compile("^Actions for")).click()
+        await pg.get_by_role("menuitem", name="Delete draft").click()
+        await pg.get_by_role("alertdialog").get_by_role("button", name="Delete draft").click()
+        await expect(pg.get_by_text(f"Draft {no} deleted")).to_be_visible(); await pg.wait_for_timeout(600)
+        n1 = await pg.locator("tbody tr").count()
+        await pg.screenshot(path=f"{OUT}/40_undo_toast.png")
+        await pg.get_by_role("button", name="Undo").click()
+        await expect(pg.get_by_text(f"{no} restored")).to_be_visible(); await pg.wait_for_timeout(800)
+        n2 = await pg.locator("tbody tr").count()
+        assert n1 == n0 - 1 and n2 == n0, (n0, n1, n2); ok(f"delete draft {no} → undo restores ({n0}→{n1}→{n2})")
+
+        # ── 6. Customers master ────────────────────────────────────────
+        await pg.goto(BASE + "/en/master/customers", wait_until="networkidle"); await pg.wait_for_timeout(500)
+        await pg.screenshot(path=f"{OUT}/41_customers.png")
+        await pg.get_by_role("button", name="New customer").first.click()
+        sheet = pg.get_by_role("dialog")
+        await sheet.get_by_label("Legal name").fill("Rupsha Foods Ltd")
+        await sheet.get_by_role("textbox", name="BIN", exact=True).fill("12345")
+        await sheet.get_by_label("Address").fill("Khulna Road, Jessore")
+        await sheet.get_by_role("button", name="Save").click()
+        await expect(sheet.get_by_text("Enter the 13-digit BIN as 000000000-0000.")).to_be_visible(); ok("customer: invalid BIN message")
+        await sheet.get_by_role("textbox", name="BIN", exact=True).fill("000512347-0203")
+        await sheet.get_by_role("button", name="Save").click()
+        await expect(sheet.get_by_text("This value is already in use.")).to_be_visible(); ok("customer: duplicate BIN rejected by server (422 → field)")
+        await pg.screenshot(path=f"{OUT}/42_party_sheet_errors.png")
+        await sheet.get_by_role("textbox", name="BIN", exact=True).fill("004455667-0101")
+        await sheet.get_by_role("button", name="Save").click()
+        await expect(pg.get_by_text("RUPSHA FOODS LTD added")).to_be_visible(); ok("customer created (name normalised to capitals)")
+        await pg.get_by_role("searchbox").first.fill("rupsha"); await pg.wait_for_timeout(900)
+        row = pg.locator("tbody tr").filter(has_text="RUPSHA FOODS LTD")
+        await row.get_by_role("button", name=re.compile("^Actions for")).click(); await pg.get_by_role("menuitem", name="Delete").click()
+        await pg.get_by_role("alertdialog").get_by_role("button", name="Delete").click()
+        await expect(pg.get_by_text("RUPSHA FOODS LTD deleted")).to_be_visible(); ok("unused customer deleted (undo offered)")
+        await pg.get_by_role("searchbox").first.fill("hillcrest"); await pg.wait_for_timeout(900)
+        row = pg.locator("tbody tr").filter(has_text="HILLCREST")
+        await row.get_by_role("button", name=re.compile("^Actions for")).click(); await pg.get_by_role("menuitem", name="Delete").click()
+        await expect(pg.get_by_text(re.compile(r"HILLCREST PRINTERS LTD is used on \d+ documents"))).to_be_visible(); ok("customer with invoices: delete refused, deactivate offered")
+        await pg.goto(BASE + "/en/master/customers?edit=c8", wait_until="networkidle"); await pg.wait_for_timeout(600)
+        await expect(pg.get_by_role("dialog").get_by_text("Type can't change once documents exist")).to_be_visible(); ok("deep link ?edit= opens sheet; type locked when documents exist")
+        await pg.screenshot(path=f"{OUT}/43_party_sheet_foreign.png")
+        await pg.keyboard.press("Escape")
+        await pg.goto(BASE + "/en/master/vendors", wait_until="networkidle"); await pg.wait_for_timeout(500)
+        await pg.screenshot(path=f"{OUT}/44_vendors.png"); ok("vendors list renders")
+
+        # ── 7. Quick-add customer from the invoice form ────────────────
+        await pg.goto(BASE + "/en/sales/new", wait_until="networkidle")
+        await pg.locator("#customerId").click(); await pg.get_by_role("button", name="Add new customer").click()
+        sheet = pg.get_by_role("dialog").filter(has_text="New customer")
+        rnd = __import__("random").randint(100, 999)
+        await sheet.get_by_label("Legal name").fill(f"Karnaphuli Paper Mills {rnd}")
+        await sheet.get_by_role("textbox", name="BIN", exact=True).fill(f"007788{rnd}-0202"); await sheet.get_by_label("Address").fill("Chandraghona, Rangamati")
+        await sheet.get_by_role("button", name="Save").click()
+        await expect(pg.locator("#customerId")).to_contain_text(f"KARNAPHULI PAPER MILLS {rnd}", timeout=8000); ok("quick-add customer from sale form selects it")
+
+        # ── 8. Stock ledger ────────────────────────────────────────────
+        await pg.goto(BASE + "/en/inventory/items?group=Finished%20Goods", wait_until="networkidle"); await pg.wait_for_timeout(500)
+        await pg.locator("tbody tr").first.locator("td button").first.click()
+        led = pg.get_by_role("dialog"); await expect(led.get_by_text("Closing stock")).to_be_visible(timeout=8000)
+        assert "ledger=" in pg.url
+        last_bal = (await led.locator("tbody tr").last.locator("td").last.inner_text()).strip()
+        closing = (await led.locator("dl dd").nth(3).inner_text()).split()[0]
+        assert last_bal == closing, (last_bal, closing); ok(f"ledger running balance ends at closing stock ({closing})")
+        await pg.screenshot(path=f"{OUT}/45_stock_ledger.png")
+        await led.get_by_role("button", name="Sales").click(); await pg.wait_for_timeout(300)
+        types = set(await led.locator("tbody tr td:nth-child(2)").all_inner_texts())
+        assert types and all("Sale" in t for t in types), types; ok("ledger filter: sales only")
+
+        # ── 9. Saved views live on the server ──────────────────────────
+        await pg.goto(BASE + "/en/sales?mode=Foreign", wait_until="networkidle")
+        await pg.get_by_role("button", name="Views").click(); await pg.get_by_role("menuitem", name="Save current view").click()
+        await pg.get_by_label("View name").fill("E2E exports"); await pg.get_by_role("dialog").get_by_role("button", name="Save").click()
+        await expect(pg.get_by_text("View “E2E exports” saved")).to_be_visible()
+        ctx2 = await login_ctx(b, "chanchal", viewport={"width": 1440, "height": 900}); pg2 = await ctx2.new_page()
+        await pg2.goto(BASE + "/en/sales", wait_until="networkidle"); await pg2.get_by_role("button", name="Views").click()
+        await expect(pg2.get_by_role("menuitem", name="E2E exports")).to_be_visible(); ok("saved view follows the user to a new browser session")
+        await ctx2.close()
+        r = await ctx.request.delete(BASE + "/api/v1/me/views?table=sales&name=E2E%20exports"); assert r.ok
+        await ctx.close()
+
+        # ── 10. Expired session mid-work → back to the same page ───────
+        ctx = await login_ctx(b, "nusrat", viewport={"width": 1440, "height": 900})
+        pg = await ctx.new_page(); watch(pg, errs)
+        await pg.goto(BASE + "/en/purchases", wait_until="networkidle")
+        await ctx.clear_cookies()
+        await pg.get_by_role("button", name="Next page").click()
+        await pg.wait_for_url(re.compile("reason=expired"), timeout=10000)
+        await expect(pg.get_by_text("Your session has ended")).to_be_visible(); ok("API 401 → login with 'session ended' + next")
+        await ctx.close()
+
+        mm = missing_msgs(errs)
+        print("console/page errors:", len(errs), errs[:8])
+        assert not mm, mm; ok("no missing/invalid i18n messages")
+        await b.close()
+    print(f"\n{sum(1 for r in results if r[0]=='PASS')} checks passed")
+
+asyncio.run(main())

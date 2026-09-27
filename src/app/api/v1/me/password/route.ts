@@ -1,0 +1,27 @@
+import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
+import { passwordChange } from "@/lib/schemas"
+import { issueSession, meFor } from "@/lib/auth/server"
+import { SESSION_COOKIE, SESSION_TTL_SHORT, verifySession } from "@/lib/auth/session"
+import { recordAudit } from "@/lib/mock/audit"
+import { passwordOf, userStore } from "@/lib/mock/users"
+import { delay } from "@/lib/mock/query"
+import { problem, withAuth, zodProblem } from "../../_lib"
+
+/** Change own password. Other sessions are signed out; this one gets a fresh cookie. */
+export const PUT = withAuth(null, async (req, _ctx, user) => {
+  const parsed = passwordChange.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  await delay(300)
+  const { current, next } = parsed.data
+  if (current !== passwordOf(user.id)) return problem(422, "Validation failed", { current: ["pwWrong"] })
+  if (next.toLowerCase().includes(user.username)) return problem(422, "Validation failed", { next: ["pwUsername"] })
+  userStore.passwords[user.id] = next
+  userStore.revokedBefore[user.id] = Math.floor(Date.now() / 1000)
+  user.mustChangePassword = false
+  recordAudit({ actor: user, entity: "user", entityId: user.id, ref: user.username, action: "passwordChanged" })
+  const s = await verifySession((await cookies()).get(SESSION_COOKIE)?.value)
+  const res = NextResponse.json(meFor(user))
+  await issueSession(res, req, user.id, !!s && s.exp - (s.iat ?? s.exp) > SESSION_TTL_SHORT)
+  return res
+})
