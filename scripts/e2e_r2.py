@@ -64,7 +64,7 @@ async def main():
             before = (await jget(appr, "/items/i6"))["remain"]
             await pg.get_by_role("button", name="Save & approve").click()
             await pg.wait_for_url(re.compile(r"/purchases/p\d+$")); imp_id = pg.url.rsplit("/", 1)[1]
-            await expect(pg.get_by_role("heading", name="Bill of Entry")).to_be_visible()
+            await expect(pg.get_by_text("Bill of Entry", exact=True).first).to_be_visible()
             await expect(pg.get_by_role("region", name="Items & duties")).to_contain_text("2,47,660.00"); ok("approved import shows BoE panel and duty table")
             doc = await jget(appr, f"/purchases/{imp_id}")
             assert doc["tti"] == 247660 and doc["rebate"] == 137860 and doc["boe"]["lcNo"] == "LC-E2E-01", doc

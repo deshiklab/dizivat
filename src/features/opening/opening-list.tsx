@@ -218,7 +218,8 @@ function OpeningForm({ open, onOpenChange, doc, onSaved }: { open: boolean; onOp
     mutationFn: (v: FormValues) => (doc ? api.opening.update(doc.id, v) : api.opening.create(v)),
     onSuccess: (d) => { refresh("opening", d); toast.success(t(d.process === "Approved" ? "approved" : "saved", { no: d.no })); onSaved?.(d); onOpenChange(false) },
     onError: (e) => {
-      if (e instanceof ApiError && e.errors) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
+      // field errors are shown inline; a toast would cover the sheet footer
+      if (e instanceof ApiError && e.errors) { Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] })); return }
       toast.error(e.message)
     },
   })

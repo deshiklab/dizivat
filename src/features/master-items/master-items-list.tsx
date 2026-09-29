@@ -160,6 +160,7 @@ function MasterWizard({ open, id, readOnly, onOpenChange }: { open: boolean; id:
         Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
         const first = STEP_FIELDS.findIndex((f) => f.some((x) => Object.keys(e.errors!).includes(x)))
         if (first >= 0) setStep(first)
+        return // inline errors only — a toast would cover the sheet footer
       }
       toast.error(e.message)
     },
