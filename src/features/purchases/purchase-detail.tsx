@@ -145,10 +145,10 @@ export function PurchaseDetail({ id }: { id: string }) {
           <CardHeader><CardTitle>{ts("summaryTitle")}</CardTitle></CardHeader>
           <CardContent>
             <dl className="grid grid-cols-[1fr_auto] gap-y-2 text-sm">
-              <dt className="text-muted-foreground">{t("col.subtotal")}</dt><dd className="text-right"><Money value={p.subtotal} /></dd>
+              <dt className="text-muted-foreground">{p.boe ? ti("sum.av") : t("col.subtotal")}</dt><dd className="text-right"><Money value={p.subtotal} /></dd>
               <dt className="text-muted-foreground">{t("col.vat")}</dt><dd className="text-right"><Money value={p.vat} /></dd>
-              {p.lines.some((l) => l.duty) && (["cd", "rd", "sd", "vat", "ait", "at"] as const).map((k) => (
-                <div key={k} className="contents"><dt className="pl-3 text-xs text-muted-foreground">{k.toUpperCase()}</dt><dd className="text-right text-xs"><Money value={round2(p.lines.reduce((a, l) => a + (k === "sd" ? l.sd : k === "vat" ? l.vat : (l.duty?.[k] ?? 0)), 0))} /></dd></div>
+              {p.lines.some((l) => l.duty) && (["cd", "rd", "sd", "ait", "at"] as const).map((k) => (
+                <div key={k} className="contents"><dt className="pl-3 text-xs text-muted-foreground">{k.toUpperCase()}</dt><dd className="text-right text-xs"><Money value={round2(p.lines.reduce((a, l) => a + (k === "sd" ? l.sd : (l.duty?.[k] ?? 0)), 0))} /></dd></div>
               ))}
               <dt className="text-muted-foreground">{t("col.tti")}</dt><dd className="text-right"><Money value={p.tti} /></dd>
               <dt className="border-t pt-2 font-semibold">{t("col.total")}</dt><dd className="border-t pt-2 text-right font-semibold"><Money value={p.netTotal} /></dd>
@@ -156,7 +156,7 @@ export function PurchaseDetail({ id }: { id: string }) {
               <dt className="text-muted-foreground">{t("col.due")}</dt><dd className="text-right"><Money value={p.due} /></dd>
               <dt className="font-medium text-success">{t("col.rebate")}</dt><dd className="text-right font-medium text-success"><Money value={p.rebate} /></dd>
             </dl>
-            <p className="mt-3 text-xs text-muted-foreground">{t("rebateHint")}</p>
+            <p className="mt-3 text-xs text-muted-foreground">{p.boe ? ti("rebateHint") : t("rebateHint")}</p>
             <dl className="mt-4 grid gap-2 border-t pt-4 text-sm">
               {[[t("field.vendor"), p.vendorName], [t("field.bin"), p.vendorBin], ...(p.boe ? [] : [[t("field.challanDate"), fmtDate(p.challanDate, locale)]]), [ts("field.branch"), p.branchName], [ts("field.issuedBy"), `${p.issuedBy} · ${p.designation}`]].map(([k, v]) => (
                 <div key={k}><dt className="text-xs text-muted-foreground">{k}</dt><dd>{v}</dd></div>
@@ -191,7 +191,7 @@ function DutyTable({ lines }: { lines: Line[] }) {
               const pct = (n?: number) => <span className="block text-[0.6875rem] text-muted-foreground">{n ?? 0}%</span>
               return (
                 <tr key={i} className="border-b align-top last:border-0">
-                  <td className="py-2 pr-2 pl-4">{l.name}<span className="block text-xs text-muted-foreground">HS {l.hsCode}</span></td>
+                  <td className="min-w-40 py-2 pr-2 pl-4">{l.name}<span className="block text-xs text-muted-foreground">HS {l.hsCode}</span></td>
                   <td className="px-2 py-2 text-right whitespace-nowrap"><Num value={l.qty} /> {l.uom}</td>
                   <td className="px-2 py-2 text-right"><Money value={d?.usd ?? 0} /></td>
                   <td className="px-2 py-2 text-right tabular">{d?.usdRate ?? "—"}</td>

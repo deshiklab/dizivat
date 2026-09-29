@@ -136,7 +136,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
     <Field id={name} label={label} required={opts.required} error={err(name)}>
       {(a) => <Controller control={control} name={name} render={({ field }) => (
         <Select value={(field.value as string) || opts.fallback || ""} onValueChange={(v) => { field.onChange(v); field.onBlur() }} items={items}>
-          <SelectTrigger id={a.id} className="w-full" aria-invalid={a["aria-invalid"]} aria-describedby={a["aria-describedby"]}><SelectValue placeholder={t("select")} /></SelectTrigger>
+          <SelectTrigger id={a.id} className="w-full min-w-0 *:data-[slot=select-value]:truncate" aria-invalid={a["aria-invalid"]} aria-describedby={a["aria-describedby"]}><SelectValue placeholder={t("select")} /></SelectTrigger>
           <SelectContent>{items.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
         </Select>
       )} />}
@@ -203,7 +203,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
                       ))}
                       <div className="grid content-start gap-1.5">
                         <Label htmlFor={`l${i}-av`} className="text-xs">{t("col.avOverride")}</Label>
-                        <Input id={`l${i}-av`} type="number" step="0.01" min={0} className="text-right tabular" placeholder={fmtNum(round2((Number(w.lines?.[i]?.usd) || 0) * (Number(w.lines?.[i]?.usdRate) || 0)), locale, 2)} {...register(`lines.${i}.av`, { setValueAs: (v) => (v === "" || v == null || Number.isNaN(Number(v)) ? undefined : Number(v)) })} />
+                        <Input id={`l${i}-av`} type="number" step="0.01" min={0} className="text-right tabular" placeholder={Number(w.lines?.[i]?.usd) > 0 ? fmtNum(round2(Number(w.lines?.[i]?.usd) * (Number(w.lines?.[i]?.usdRate) || 0)), locale, 2) : t("auto")} {...register(`lines.${i}.av`, { setValueAs: (v) => (v === "" || v == null || Number.isNaN(Number(v)) ? undefined : Number(v)) })} />
                       </div>
                       <div className="flex items-end"><Button type="button" variant="ghost" size="icon" aria-label={ts("removeLine", { n: i + 1 })} disabled={fields.length === 1} onClick={() => remove(i)}><Trash2 /></Button></div>
                     </div>
