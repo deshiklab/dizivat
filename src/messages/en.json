@@ -479,7 +479,7 @@
     "searchCustomer": "Search name or BIN…",
     "customerMasterLater": "Customer master (create / edit) ships in R1. Use the existing list for now.",
     "addCustomer": "Add new customer",
-    "exportNote": "Export customer — VAT is zero-rated (0%). Attach the export LC / bill of export in the export module.",
+    "exportNote": "Export customer — VAT is zero-rated (0%). Fill in the export documents (LC, customs house, Bill of Export) below.",
     "deliveryHint": "Defaults to the customer's address.",
     "vehicleHint": "Required for goods in transit.",
     "sectionItems": "Items",
@@ -1230,7 +1230,15 @@
       "session": "Sign-in",
       "transfer": "Stock transfer",
       "damage": "Damage entry",
-      "unit": "Unit of measure"
+      "unit": "Unit of measure",
+      "debitNote": "Debit note",
+      "opening": "Opening stock",
+      "masterItem": "Master item",
+      "creditNote": "Credit note",
+      "bom": "Price declaration (BOM)",
+      "workOrder": "Work order",
+      "batch": "Production batch",
+      "productionConfig": "Production config"
     },
     "facet": {
       "entity": "Record type",

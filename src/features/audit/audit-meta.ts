@@ -9,7 +9,10 @@ export const AUDIT_ACTIONS: AuditAction[] = [
   "created", "edited", "approved", "cancelled", "deleted", "restored", "updated", "activated", "deactivated",
   "roleChanged", "invited", "passwordReset", "passwordChanged", "signedIn", "signedOut", "signInFailed",
 ]
-export const AUDIT_ENTITIES: AuditEntity[] = ["sale", "purchase", "transfer", "damage", "customer", "vendor", "item", "unit", "user", "company", "session"]
+export const AUDIT_ENTITIES: AuditEntity[] = [
+  "sale", "purchase", "creditNote", "debitNote", "opening", "transfer", "damage", "bom", "workOrder", "batch", "productionConfig",
+  "customer", "vendor", "item", "masterItem", "unit", "user", "company", "session",
+]
 
 export const ACTION_ICON: Record<AuditAction, LucideIcon> = {
   created: FilePlus2, edited: FilePen, approved: CheckCheck, cancelled: XCircle, deleted: Trash2, restored: RotateCcw,
@@ -24,7 +27,7 @@ export const entityIcon = (e: AuditEntity): LucideIcon => (e === "company" ? Bui
 
 /** Where a record lives in the app (null when there is no page, e.g. sign-ins or deleted records). */
 export function entityHref(e: AuditEvent): string | null {
-  if (!e.entityId && e.entity !== "company") return null
+  if (!e.entityId && e.entity !== "company" && e.entity !== "productionConfig") return null
   switch (e.entity) {
     case "sale": return `/sales/${e.entityId}`
     case "purchase": return `/purchases/${e.entityId}`
@@ -36,6 +39,14 @@ export function entityHref(e: AuditEvent): string | null {
     case "unit": return `/master/units?edit=${e.entityId}`
     case "user": return `/master/users?edit=${e.entityId}`
     case "company": return "/master/company"
+    case "creditNote": return `/sales/credit-notes?view=${e.entityId}`
+    case "debitNote": return `/purchases/debit-notes?view=${e.entityId}`
+    case "opening": return `/purchases/opening?view=${e.entityId}`
+    case "masterItem": return `/inventory/master-items?edit=${e.entityId}`
+    case "bom": return `/production/bom?view=${e.entityId}`
+    case "workOrder": return `/production/work-orders?view=${e.entityId}`
+    case "batch": return `/production/batches?view=${e.entityId}`
+    case "productionConfig": return "/production/config"
     default: return null
   }
 }

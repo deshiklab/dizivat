@@ -275,6 +275,11 @@ async def main():
         try:
             admin = await login_ctx(b, "admin", viewport=VP)
             oper = await login_ctx(b, "kamal", viewport=VP)
+            # e2e_s3 deactivates the viewer earlier in the chain — switch it back on for the read-only checks
+            u = (await jget(admin, "/users?q=auditor"))["data"][0]
+            if not u["active"]:
+                r = await admin.request.put(f"{API}/users/{u['id']}", data={k: u[k] for k in ("name", "designation", "email", "mobile", "department", "role")} | {"active": True})
+                assert r.ok, f"reactivate auditor → {r.status}"
             view = await login_ctx(b, "auditor", viewport=VP)
             r = await oper.request.put(API + "/production/config", data={"procedure": "workOrder", "consumption": "standard"})
             assert r.status == 403, r.status; ok("operator cannot change the production config (403)")

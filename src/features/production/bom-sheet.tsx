@@ -219,7 +219,7 @@ function Compare({ d, others }: { d: BomRow; others: BomRow[] }) {
           </tr>
         ))}
       </MiniTable>
-      {n.amendmentReason && <p className="text-sm"><span className="text-muted-foreground">{t("fieln.amendmentReason")}:</span> {n.amendmentReason}</p>}
+      {n.amendmentReason && <p className="text-sm"><span className="text-muted-foreground">{t("field.amendmentReason")}:</span> {n.amendmentReason}</p>}
     </div>
   )
 }

@@ -63,7 +63,7 @@ async def main():
         pg = await ctx.new_page(); watch(pg, errs)
         await pg.goto(BASE + "/en/sales/new", wait_until="networkidle")
         assert await pg.get_by_role("button", name="Save & approve").count() == 0; ok("operator: no Save & approve on the form")
-        await pg.locator("#customerId").click(); await pg.get_by_placeholder("Search name or BIN…").fill("delta"); await pg.get_by_role("option").first.click()
+        await pg.locator("#customerId").click(); await pg.get_by_placeholder("Search name or BIN…").fill("sunrise"); await pg.get_by_role("option").first.click()
         await pg.get_by_role("combobox", name="Product 1").click(); await pg.get_by_role("option", name=re.compile("Printed Blister")).click()
         await pg.get_by_label("Qty 1").fill("100")
         await pg.get_by_label("Qty 1").blur(); await expect(pg.get_by_role("listbox")).to_have_count(0); await pg.wait_for_timeout(300)
