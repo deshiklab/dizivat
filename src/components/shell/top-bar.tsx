@@ -1,7 +1,7 @@
 "use client"
 
 import { useTranslations } from "next-intl"
-import { CircleHelp, Plus, Search } from "lucide-react"
+import { BookOpen, CircleHelp, Keyboard, LifeBuoy, Plus, Search } from "lucide-react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Link, usePathname, useRouter } from "@/i18n/navigation"
 import { resolveNav } from "@/lib/nav"
+import { helpForPath } from "@/content/help/registry"
 import { cn } from "@/lib/utils"
 import { UserMenu } from "./user-menu"
 import { Notifications } from "./notifications"
@@ -19,11 +20,13 @@ import { useCan } from "@/components/auth/me-provider"
 
 export function TopBar() {
   const t = useTranslations("shell")
+  const th = useTranslations("help")
   const tn = useTranslations("nav")
   const creates = useCreateActions()
   const router = useRouter()
   const pathname = usePathname()
   const active = resolveNav(pathname)
+  const pageHelp = helpForPath(pathname)
   const can = useCan()
   // Same permission filter as the sidebar — tabs must not advertise pages the role cannot open
   const tabs = active?.group.items.filter((it) => can(it.perm)) ?? []
@@ -56,12 +59,19 @@ export function TopBar() {
             </DropdownMenuContent>
           </DropdownMenu>}
           <Notifications />
-          <Tooltip>
-            <TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden sm:inline-flex" aria-label={t("shortcuts")} onClick={() => setHelpOpen(true)} />}>
-              <CircleHelp />
-            </TooltipTrigger>
-            <TooltipContent>{t("shortcuts")} <Kbd>?</Kbd></TooltipContent>
-          </Tooltip>
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger render={<DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="hidden sm:inline-flex" aria-label={th("menu")} />} />}>
+                <CircleHelp />
+              </TooltipTrigger>
+              <TooltipContent>{th("menu")}</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="w-60">
+              {pageHelp && <DropdownMenuItem onClick={() => router.push(`/help/${pageHelp}`)}><LifeBuoy /> {th("forThisPage")}</DropdownMenuItem>}
+              <DropdownMenuItem onClick={() => router.push("/help")}><BookOpen /> {th("knowledgeBase")}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setHelpOpen(true)}><Keyboard /> {th("shortcuts")} <Kbd className="ml-auto">?</Kbd></DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <UserMenu />
         </div>
       </div>

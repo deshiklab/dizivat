@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { useTheme } from "next-themes"
-import { Boxes, Building2, Clock, FileText, Languages, Loader2, Moon, Sun, Truck, UserRound } from "lucide-react"
+import { BookOpen, Boxes, Building2, Clock, FileText, Languages, Loader2, Moon, Sun, Truck, UserRound } from "lucide-react"
 import { CommandDialog, Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from "@/components/ui/command"
 import { useRouter, usePathname } from "@/i18n/navigation"
 import { visibleNav } from "@/lib/nav"
@@ -40,6 +40,7 @@ export function CommandPalette() {
   const { paletteOpen, setPaletteOpen } = useShell()
   const t = useTranslations("palette")
   const tn = useTranslations("nav")
+  const th = useTranslations("help")
   const can = useCan()
   const savePrefs = useSavePrefs()
   const allCreates = useCreateActions()
@@ -57,8 +58,11 @@ export function CommandPalette() {
   const { data: hits = [], isFetching } = useQuery({ queryKey: ["search", dq], queryFn: () => api.search(dq), enabled: dq.length >= 2 })
 
   const pages = React.useMemo(
-    () => visibleNav(can).flatMap((g) => (g.items.length ? g.items.map((i) => ({ href: i.href, label: `${tn(g.key)} › ${tn(i.key)}`, icon: g.icon, ready: i.ready, release: i.release })) : [{ href: g.href, label: tn(g.key), icon: g.icon, ready: true, release: "S1" as const }])),
-    [tn, can]
+    () => [
+      ...visibleNav(can).flatMap((g) => (g.items.length ? g.items.map((i) => ({ href: i.href, label: `${tn(g.key)} › ${tn(i.key)}`, icon: g.icon, ready: i.ready, release: i.release })) : [{ href: g.href, label: tn(g.key), icon: g.icon, ready: true, release: "S1" as const }])),
+      { href: "/help", label: `${th("helpNav")} › ${th("knowledgeBase")}`, icon: BookOpen, ready: true, release: "S1" as const },
+    ],
+    [tn, th, can]
   )
   const match = (s: string) => !q || s.toLowerCase().includes(q.trim().toLowerCase())
   const go = (href: string) => { setPaletteOpen(false); router.push(href) }

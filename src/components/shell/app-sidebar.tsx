@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useCan, useCompany, useMe } from "@/components/auth/me-provider"
 import { useTranslations } from "next-intl"
-import { ChevronRight } from "lucide-react"
+import { BookOpen, ChevronRight } from "lucide-react"
 import { Link, usePathname } from "@/i18n/navigation"
 import { resolveNav, visibleNav } from "@/lib/nav"
 import {
@@ -18,6 +18,7 @@ export function AppSidebar() {
   const t = useTranslations("nav")
   const ts = useTranslations("shell")
   const tr = useTranslations("roles")
+  const th = useTranslations("help")
   const me = useMe()
   const can = useCan()
   const nav = React.useMemo(() => visibleNav(can), [can])
@@ -90,6 +91,13 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton isActive={pathname === "/help" || pathname.startsWith("/help/")} tooltip={th("helpNav")} render={<Link href="/help" onClick={close} />}>
+              <BookOpen /> <span>{th("helpNav")}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <div className="flex items-center gap-2 rounded-md p-2 text-xs group-data-[collapsible=icon]:hidden">
           <span className="grid size-8 shrink-0 place-items-center rounded-full bg-sidebar-accent font-semibold text-white">{me.user.initials}</span>
           <span className="grid min-w-0">
