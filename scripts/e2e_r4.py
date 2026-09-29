@@ -257,7 +257,8 @@ async def main():
             assert st == 409, st; ok("cancelling an invoice in a submitted period → 409")
             await pg.goto(f"{BASE}/en/sales/{old['id']}", wait_until="networkidle")
             await expect(pg.get_by_text(re.compile(r"Tax period 08-2026 is locked"))).to_be_visible()
-            await settle(pg); await pg.screenshot(path=f"{OUT}/100_period_lock.png"); ok("invoice in a submitted period shows the lock note")
+            await settle(pg); await pg.screenshot(path=f"{OUT}/100_period_lock.png"); await expect(pg.get_by_role("button", name="Cancel…")).to_have_count(0)
+            ok("invoice in a submitted period shows the lock note and no Cancel button")
         except Exception as e: fail(9, e)
 
         # ── 10. Compliance centre + Mushak 6.10 ───────────────────────

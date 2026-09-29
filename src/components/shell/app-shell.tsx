@@ -9,7 +9,7 @@ import { StatusFooter } from "./status-footer"
 import { MobileNav } from "./mobile-nav"
 import { CommandPalette, useTrackRecent } from "./command-palette"
 import { ShortcutsDialog } from "./shortcuts-dialog"
-import { PasswordDialog } from "./password-dialog"
+import { LazyPasswordDialog } from "./password-dialog-lazy"
 import { ShellCtx } from "./shell-context"
 import { ConfirmProvider } from "@/components/common/confirm"
 import { useGlobalHotkeys } from "./use-hotkeys"
@@ -35,7 +35,7 @@ export function AppShell({ children, defaultOpen }: { children: React.ReactNode;
         <MobileNav />
         <CommandPalette />
         <ShortcutsDialog />
-        <PasswordDialog />
+        <LazyPasswordDialog />
         <Hotkeys />
       </SidebarProvider>
       </ConfirmProvider>

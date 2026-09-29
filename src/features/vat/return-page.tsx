@@ -88,7 +88,8 @@ export function ReturnPage() {
           </div>
         } />
 
-      {q.isFetching && <div role="status" aria-live="polite" className="no-print mb-3 grid gap-1"><div className="h-1 overflow-hidden rounded bg-muted"><div className="h-1 w-1/3 animate-[progress_1.2s_ease-in-out_infinite] rounded bg-primary" /></div><span className="text-xs text-muted-foreground">{t("computing")}</span></div>}
+      {/* overlay, not in flow: recomputing must not shift the page (CLS) */}
+      <div className="relative h-0">{q.isFetching && <div role="status" aria-live="polite" className="no-print absolute inset-x-0 -top-5 z-10 grid gap-0.5 md:-top-6"><div className="h-1 overflow-hidden rounded bg-muted"><div className="h-1 w-1/3 animate-[progress_1.2s_ease-in-out_infinite] rounded bg-primary" /></div><span className="text-xs text-muted-foreground">{t("computing")}</span></div>}</div>
 
       {!period || (!r && q.isLoading) ? <div className="grid gap-3"><Skeleton className="h-28" /><Skeleton className="h-96" /></div>
         : q.error ? <EmptyState title={t("error")} hint={q.error.message} />
@@ -150,7 +151,7 @@ export function ReturnPage() {
           </div>
         )}
 
-      <ReturnHistory periods={periods} rows={list.data?.data ?? []} onPick={(x) => { setPeriod(x); setNote(null); window.scrollTo({ top: 0 }) }} csvUrl={api.vat.returns.csvUrl({})} />
+      {r && <ReturnHistory periods={periods} rows={list.data?.data ?? []} onPick={(x) => { setPeriod(x); setNote(null); window.scrollTo({ top: 0 }) }} csvUrl={api.vat.returns.csvUrl({})} />}
 
       {formMounted && r && draft && <ReturnForm open={editOpen} onOpenChange={setEditOpen} ret={r} />}
       {subMounted && period && <SubFormSheet period={period} note={note} onOpenChange={(o) => { if (!o) setNote(null) }} />}

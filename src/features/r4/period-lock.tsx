@@ -12,6 +12,12 @@ export function usePeriods() {
   return useQuery({ queryKey: ["periods"], queryFn: () => api.vat.periods(), staleTime: 30_000 })
 }
 
+/** True when the document date falls in a tax period whose 9.1 return has been submitted (the API answers 409/422). */
+export function usePeriodLocked(date?: string) {
+  const periods = usePeriods()
+  return !!date && !!periods.data?.some((x) => x.period === date.slice(0, 7) && x.locked)
+}
+
 /** "Tax period locked" note for documents dated in a period whose Mushak 9.1 return has been submitted. */
 export function PeriodLockNote({ date }: { date?: string }) {
   const t = useTranslations("ret")

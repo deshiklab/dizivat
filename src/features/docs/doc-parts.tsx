@@ -9,6 +9,7 @@ import { Link } from "@/i18n/navigation"
 import { fmtDateTime } from "@/lib/format"
 import type { HistoryAction, HistoryEntry, Purchase, Sale } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { usePeriodLocked } from "@/features/r4/period-lock"
 
 type Doc = Sale | Purchase
 // Audit timestamps are UTC instants — shown in Bangladesh time by the shared formatter
@@ -83,12 +84,13 @@ export function DocActionButtons({ doc, base, actions }: {
   const t = useTranslations("docs")
   const can = useCan()
   const draft = doc.process === "Created"
+  const locked = usePeriodLocked(doc.issueDate) // submitted 9.1 period: only deleting a draft is still possible
   return (
     <>
-      {draft && can("doc.edit") && <Button variant="outline" size="sm" render={<Link href={`${base}/${doc.id}/edit`} />}><Pencil /> {t("edit")}</Button>}
+      {draft && !locked && can("doc.edit") && <Button variant="outline" size="sm" render={<Link href={`${base}/${doc.id}/edit`} />}><Pencil /> {t("edit")}</Button>}
       {draft && can("doc.delete") && <Button variant="outline" size="sm" disabled={actions.busy} onClick={() => actions.askDelete(doc)}><Trash2 /> {t("delete")}</Button>}
-      {draft && can("doc.approve") && <Button size="sm" disabled={actions.busy} onClick={() => actions.approve(doc)}><CheckCheck /> {t("approve")}</Button>}
-      {doc.process !== "Cancelled" && can("doc.cancel") && <Button variant="destructive" size="sm" disabled={actions.busy} onClick={() => actions.askCancel(doc)}><XCircle /> {t("cancel")}</Button>}
+      {draft && !locked && can("doc.approve") && <Button size="sm" disabled={actions.busy} onClick={() => actions.approve(doc)}><CheckCheck /> {t("approve")}</Button>}
+      {doc.process !== "Cancelled" && !locked && can("doc.cancel") && <Button variant="destructive" size="sm" disabled={actions.busy} onClick={() => actions.askCancel(doc)}><XCircle /> {t("cancel")}</Button>}
     </>
   )
 }

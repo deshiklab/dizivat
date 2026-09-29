@@ -12,7 +12,7 @@ import { Money, Num } from "@/components/common/money"
 import { Pill, ProcessBadge } from "@/components/common/status-badge"
 import { EmptyState } from "@/components/common/empty-state"
 import { useCan } from "@/components/auth/me-provider"
-import { PeriodLockNote } from "@/features/r4/period-lock"
+import { PeriodLockNote, usePeriodLocked } from "@/features/r4/period-lock"
 import { DocBanner, HistoryCard } from "@/features/docs/doc-parts"
 import { RecordHistory } from "@/features/audit/record-history"
 import { Link } from "@/i18n/navigation"
@@ -36,6 +36,7 @@ export function DebitSheet({ id, onOpenChange, onEdit, initialTab }: { id: strin
   const { data: d, isLoading, error } = useQuery({ queryKey: ["debit", id], queryFn: () => api.debitNotes.get(id!), enabled: !!id })
   const actions = useR2Actions("debit", { onDeleted: () => onOpenChange(false) })
   const draft = d?.process === "Created"
+  const locked = usePeriodLocked(d?.issueDate)
   const print = () => { setTab("mushak"); setTimeout(() => window.print(), 200) }
 
   return (
@@ -67,10 +68,10 @@ export function DebitSheet({ id, onOpenChange, onEdit, initialTab }: { id: strin
           )}
         <SheetFooter className="no-print flex-row flex-wrap justify-end gap-2 border-t">
           {d && <Button variant="outline" onClick={print}><Printer /> {t("print")}</Button>}
-          {d && draft && can("doc.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
+          {d && draft && !locked && can("doc.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
           {d && draft && can("doc.delete") && <Button variant="outline" disabled={actions.busy} onClick={() => actions.askDelete(d)}><Trash2 /> {td("delete")}</Button>}
-          {d && d.process !== "Cancelled" && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}
-          {d && draft && can("doc.approve") && <Button disabled={actions.busy} onClick={() => actions.approve(d)}><CheckCheck /> {td("approve")}</Button>}
+          {d && d.process !== "Cancelled" && !locked && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}
+          {d && draft && !locked && can("doc.approve") && <Button disabled={actions.busy} onClick={() => actions.approve(d)}><CheckCheck /> {td("approve")}</Button>}
           <Button variant="outline" onClick={() => onOpenChange(false)}>{tc("close")}</Button>
         </SheetFooter>
         {actions.dialog}

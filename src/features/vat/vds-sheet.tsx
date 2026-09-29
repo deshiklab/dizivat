@@ -19,6 +19,7 @@ import { api } from "@/lib/api/client"
 import { fmtDate } from "@/lib/format"
 import { periodLabel } from "@/lib/r4"
 import { DefList, PeriodLockNote, useR4Actions } from "@/features/r4/r4-actions"
+import { usePeriodLocked } from "@/features/r4/period-lock"
 import { Mushak66 } from "./mushak-66"
 
 /** VDS entry read view with the Mushak 6.6 certificate and history. */
@@ -33,6 +34,7 @@ export function VdsSheet({ id, onOpenChange, onEdit, initialTab }: { id: string 
   const { data: d, isLoading, error } = useQuery({ queryKey: ["r4doc", "vds", id], queryFn: () => api.vat.vds.get(id!), enabled: !!id })
   const actions = useR4Actions("vds", { onDeleted: () => onOpenChange(false) })
   const draft = d?.process === "Created"
+  const locked = usePeriodLocked(d?.certificateDate)
   const print = () => { setTab("print"); setTimeout(() => window.print(), 200) }
 
   return (
@@ -75,10 +77,10 @@ export function VdsSheet({ id, onOpenChange, onEdit, initialTab }: { id: string 
           )}
         <SheetFooter className="no-print flex-row flex-wrap justify-end gap-2 border-t">
           {d && <Button variant="outline" onClick={print}><Printer /> {t("print")}</Button>}
-          {d && draft && can("doc.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
+          {d && draft && !locked && can("doc.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
           {d && draft && can("doc.delete") && <Button variant="outline" disabled={actions.busy} onClick={() => actions.askDelete(d)}><Trash2 /> {td("delete")}</Button>}
-          {d && d.process !== "Cancelled" && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}
-          {d && draft && can("doc.approve") && <Button disabled={actions.busy} onClick={() => actions.approve(d)}><CheckCheck /> {td("approve")}</Button>}
+          {d && d.process !== "Cancelled" && !locked && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}
+          {d && draft && !locked && can("doc.approve") && <Button disabled={actions.busy} onClick={() => actions.approve(d)}><CheckCheck /> {td("approve")}</Button>}
           <Button variant="outline" onClick={() => onOpenChange(false)}>{tc("close")}</Button>
         </SheetFooter>
         {actions.dialog}

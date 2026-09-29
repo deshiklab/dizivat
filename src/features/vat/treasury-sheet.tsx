@@ -19,6 +19,7 @@ import { api } from "@/lib/api/client"
 import { fmtDate } from "@/lib/format"
 import { HEAD_NOTE, HEAD_TONE, periodLabel } from "@/lib/r4"
 import { DefList, PeriodLockNote, useR4Actions } from "@/features/r4/r4-actions"
+import { usePeriodLocked } from "@/features/r4/period-lock"
 import { Tr6Print } from "./tr6-print"
 
 /** Treasury deposit read view with the TR-6 challan print and history. */
@@ -33,6 +34,7 @@ export function TreasurySheet({ id, onOpenChange, onEdit, initialTab }: { id: st
   const { data: d, isLoading, error } = useQuery({ queryKey: ["r4doc", "treasury", id], queryFn: () => api.vat.treasury.get(id!), enabled: !!id })
   const actions = useR4Actions("treasury", { onDeleted: () => onOpenChange(false) })
   const draft = d?.process === "Created"
+  const locked = usePeriodLocked(d ? `${d.taxPeriod}-01` : undefined)
   const print = () => { setTab("print"); setTimeout(() => window.print(), 200) }
 
   return (
@@ -74,10 +76,10 @@ export function TreasurySheet({ id, onOpenChange, onEdit, initialTab }: { id: st
           )}
         <SheetFooter className="no-print flex-row flex-wrap justify-end gap-2 border-t">
           {d && <Button variant="outline" onClick={print}><Printer /> {t("print")}</Button>}
-          {d && draft && can("doc.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
+          {d && draft && !locked && can("doc.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
           {d && draft && can("doc.delete") && <Button variant="outline" disabled={actions.busy} onClick={() => actions.askDelete(d)}><Trash2 /> {td("delete")}</Button>}
-          {d && d.process !== "Cancelled" && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}
-          {d && draft && can("doc.approve") && <Button disabled={actions.busy} onClick={() => actions.approve(d)}><CheckCheck /> {td("approve")}</Button>}
+          {d && d.process !== "Cancelled" && !locked && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}
+          {d && draft && !locked && can("doc.approve") && <Button disabled={actions.busy} onClick={() => actions.approve(d)}><CheckCheck /> {td("approve")}</Button>}
           <Button variant="outline" onClick={() => onOpenChange(false)}>{tc("close")}</Button>
         </SheetFooter>
         {actions.dialog}
