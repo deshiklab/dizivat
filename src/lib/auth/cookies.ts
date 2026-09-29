@@ -5,7 +5,11 @@
  * handlers run inside the browser (see `lib/demo`), where those two headers are forbidden, so a small
  * localStorage jar stands in. Nothing else in the handlers knows which runtime it is in.
  */
-export interface CookieOptions { maxAge: number; httpOnly?: boolean; sameSite?: "lax" | "strict"; secure?: boolean; path?: string }
+export interface CookieOptions {
+  maxAge: number; httpOnly?: boolean; sameSite?: "lax" | "strict" | "none"; secure?: boolean; path?: string
+  /** CHIPS: cookie keyed to the embedding site — lets the app work inside a cross-site iframe (e.g. a hosted preview) */
+  partitioned?: boolean
+}
 
 const inBrowser = typeof window !== "undefined"
 export const DEMO_COOKIE_JAR = "rbs-vat-demo-cookies"
@@ -35,8 +39,9 @@ export function setCookie(res: Response, name: string, value: string, o: CookieO
     localStorage.setItem(DEMO_COOKIE_JAR, JSON.stringify(jar))
     return
   }
-  const parts = [`${name}=${encodeURIComponent(value)}`, `Path=${o.path ?? "/"}`, `Max-Age=${o.maxAge}`, `SameSite=${o.sameSite === "strict" ? "Strict" : "Lax"}`]
+  const parts = [`${name}=${encodeURIComponent(value)}`, `Path=${o.path ?? "/"}`, `Max-Age=${o.maxAge}`, `SameSite=${o.sameSite === "strict" ? "Strict" : o.sameSite === "none" ? "None" : "Lax"}`]
   if (o.httpOnly !== false) parts.push("HttpOnly")
-  if (o.secure) parts.push("Secure")
+  if (o.secure || o.sameSite === "none") parts.push("Secure")
+  if (o.partitioned) parts.push("Partitioned")
   res.headers.append("set-cookie", parts.join("; "))
 }
