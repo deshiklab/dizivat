@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { HistorySection } from "@/features/audit/record-history"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Field } from "@/components/common/field"
+import { Combobox } from "@/components/common/combobox"
 import { api, ApiError } from "@/lib/api/client"
 import { itemInput } from "@/lib/schemas"
 import type { ItemWithStock } from "@/lib/types"
@@ -36,8 +37,12 @@ export function ItemSheet({ open, onOpenChange, item }: { open: boolean; onOpenC
   const { register, control, handleSubmit, reset, setError, setValue, formState: { errors } } = form
   const [hs, vatRate, sdRate] = useWatch({ control, name: ["hsCode", "vatRate", "sdRate"] })
   React.useEffect(() => {
-    if (open) reset(item ? { name: item.name, hsCode: item.hsCode, group: item.group, unit: item.unit, sku: item.sku, purchasePrice: item.purchasePrice, salePrice: item.salePrice, vatRate: item.vatRate, sdRate: item.sdRate, reorderLevel: item.reorderLevel, active: item.active } : blank)
+    if (open) reset(item ? { name: item.name, hsCode: item.hsCode, group: item.group, unit: item.unit, sku: item.sku, purchasePrice: item.purchasePrice, salePrice: item.salePrice, vatRate: item.vatRate, sdRate: item.sdRate, reorderLevel: item.reorderLevel, active: item.active, masterItemId: undefined } : blank)
   }, [open, item, reset])
+  // R2: master item (HS-level product + tax profile) — picking one pre-fills HS code, group, unit and VAT/SD
+  const masters = useQuery({ queryKey: ["masterItems", "options"], queryFn: () => api.masterItems.options(), enabled: open, staleTime: 60_000 })
+  const masterId = useWatch({ control, name: "masterItemId" })
+  const currentMaster = masterId ?? masters.data?.find((m) => m.name === item?.masterItem)?.id ?? ""
   const save = useMutation({
     mutationFn: (v: Out) => (item ? api.items.update(item.id, v) : api.items.create(v)),
     onSuccess: (r) => { qc.invalidateQueries({ queryKey: ["items"] }); toast.success(item ? t("updated", { name: r.name }) : t("created", { name: r.name })); onOpenChange(false) },
@@ -58,6 +63,17 @@ export function ItemSheet({ open, onOpenChange, item }: { open: boolean; onOpenC
           </SheetHeader>
           <div className="grid flex-1 content-start gap-4 overflow-y-auto p-4 sm:grid-cols-2">
             <Field id="name" label={t("field.name")} required error={errors.name?.message} className="sm:col-span-2">{(a) => <Input autoFocus {...a} {...register("name")} />}</Field>
+            <Field id="masterItemId" label={t("field.masterItem")} error={errors.masterItemId?.message} hint={t("masterHint")} className="sm:col-span-2">
+              {(a) => (
+                <Combobox id={a.id} describedBy={a["aria-describedby"]} value={currentMaster} placeholder={t("pickMaster")} searchPlaceholder={t("searchMaster")} empty={tc("noResults")}
+                  options={(masters.data ?? []).map((m) => ({ value: m.id, label: m.name, description: `HS ${m.hsCode} · ${tg(m.group.replace(/ /g, ""))} · VAT ${m.rates.vat}%${m.overrides.length ? " · override" : ""}`, keywords: [m.hsCode] }))}
+                  onChange={(v) => {
+                    const m = masters.data?.find((x) => x.id === v)
+                    setValue("masterItemId", v, { shouldDirty: true })
+                    if (m) { setValue("hsCode", m.hsCode, { shouldValidate: true }); setValue("group", m.group); setValue("unit", m.unit); setValue("vatRate", m.rates.vat); setValue("sdRate", m.rates.sd) }
+                  }} />
+              )}
+            </Field>
             <Field id="sku" label={t("field.sku")} required error={errors.sku?.message}>{(a) => <Input {...a} {...register("sku")} />}</Field>
             <Field id="hsCode" label={t("field.hsCode")} required error={errors.hsCode?.message} hint={t("hsHint")}>{(a) => <Input inputMode="numeric" maxLength={8} className="tabular" {...a} {...register("hsCode")} />}</Field>
             <HsLookup hs={hs} vatRate={vatRate} sdRate={sdRate} onUse={(vat, sd) => { setValue("vatRate", vat, { shouldDirty: true }); setValue("sdRate", sd, { shouldDirty: true }) }} />
