@@ -182,14 +182,19 @@ async def main():
             r = await appr.request.get(f"{API}/mushak/6.2?item=i6&from=2026-07-01&to=2026-09-25"); assert r.status == 422; ok("6.2 rejects an input item (422)")
         except Exception as e: fail(6, e)
 
-        # ── 7. Role gating (viewer) ───────────────────────────────────
+        # ── 7. Role gating (operator: may create, may not approve or edit master data) ──
+        # (auditor is deactivated by e2e_s3.py earlier in the chain, so the operator carries this check)
         try:
-            v = await login_ctx(b, "auditor", viewport=VP); vp = await v.new_page(); watch(vp, errs)
-            for u, btn in (("/en/purchases/debit-notes", "New debit note"), ("/en/purchases/opening", "New opening entry"), ("/en/inventory/master-items", "New master item"), ("/en/purchases/services", "New service purchase")):
-                await vp.goto(BASE + u, wait_until="networkidle")
-                await expect(vp.get_by_role("heading", level=1)).to_be_visible()
-                assert await vp.get_by_role("button", name=btn).count() == 0 and await vp.get_by_role("link", name=btn).count() == 0, u
-            ok("viewer sees R2 lists without create actions")
+            v = await login_ctx(b, "kamal", viewport=VP); vp = await v.new_page(); watch(vp, errs)
+            await vp.goto(BASE + "/en/inventory/master-items", wait_until="networkidle")
+            await expect(vp.get_by_role("heading", name="Master items")).to_be_visible()
+            assert await vp.get_by_role("button", name="New master item").count() == 0; ok("operator cannot create master items")
+            await vp.goto(BASE + "/en/purchases/debit-notes?new=1", wait_until="networkidle")
+            dlg = vp.get_by_role("dialog")
+            await expect(dlg.get_by_role("button", name="Save draft")).to_be_visible()
+            assert await dlg.get_by_role("button", name="Save & approve").count() == 0; ok("operator can draft a debit note but not approve it")
+            r = await v.request.post(f"{API}/opening-stock", data={"itemId": "i1", "branchId": "b1", "date": "2026-09-20", "inputTax": "standard", "qty": 1, "price": 10, "process": "Approved"})
+            assert r.status == 403, r.status; ok("API refuses an operator approving on create (403)")
             await v.close()
         except Exception as e: fail(7, e)
 

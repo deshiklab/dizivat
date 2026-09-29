@@ -18,10 +18,10 @@ import { Link } from "@/i18n/navigation"
 import { api } from "@/lib/api/client"
 import { fmtDate } from "@/lib/format"
 import type { DebitNote } from "@/lib/types"
+import { DEBIT_REASON_TONE } from "@/lib/r2"
 import { useR2Actions } from "@/features/r2/use-r2-actions"
 import { Mushak68 } from "@/features/r2/mushak-68"
 
-export const DEBIT_REASON_TONE = { damaged: "danger", quality: "warning", excess: "info", wrongItem: "neutral", priceDispute: "neutral" } as const
 
 /** Read view of a debit note with its Mushak 6.8 print and history. Linkable via ?view=<id> (&tab=mushak). */
 export function DebitSheet({ id, onOpenChange, onEdit, initialTab }: { id: string | null; onOpenChange: (o: boolean) => void; onEdit: (id: string) => void; initialTab?: string }) {

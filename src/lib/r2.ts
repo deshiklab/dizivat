@@ -28,6 +28,7 @@ export const SERVICES: ServiceType[] = [
 export const findService = (id: string) => SERVICES.find((s) => s.id === id)
 
 export const DEBIT_REASONS: DebitReason[] = ["damaged", "quality", "excess", "wrongItem", "priceDispute"]
+export const DEBIT_REASON_TONE = { damaged: "danger", quality: "warning", excess: "info", wrongItem: "neutral", priceDispute: "neutral" } as const
 export const INPUT_TAX_CLASSES: InputTaxClass[] = ["standard", "reduced", "zero", "exempt"]
 export const MASTER_CATEGORIES: MasterCategory[] = ["general", "commercialImporter", "medicine", "petroleum", "superShop"]
 export const PRICE_METHODS: PriceMethod[] = ["average", "standard"]

@@ -24,10 +24,10 @@ pages=[
  ("13_bn_dashboard","/bn",None),
  ("14_bn_sales","/bn/sales",None),
  # R2: purchase & inventory
- ("15_import_new","/en/purchases/new?type=import",None),
- ("16_debit_notes","/en/purchases/debit-notes",None),
- ("17_master_items","/en/inventory/master-items",None),
- ("18_mushak61","/en/vat/mushak-6-1?item=i6",None),
+ ("r1_import_new","/en/purchases/new?type=import",None),
+ ("r2_debit_notes","/en/purchases/debit-notes",None),
+ ("r3_master_items","/en/inventory/master-items",None),
+ ("r4_mushak61","/en/vat/mushak-6-1?item=i6",None),
 ]
 # Sprint 3: visual coverage beyond light desktop — dark theme, 390 px phone, Bangla form
 variants=[

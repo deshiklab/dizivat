@@ -161,7 +161,7 @@ export function MushakBookPage({ form }: { form: "6.1" | "6.2" }) {
                 </tfoot>
               </table>
             </div>
-            <p className="p-4 text-xs text-muted-foreground">{t("footNote")} <Link href={`/inventory/items?ledger=${b.item.id}`} className="text-primary hover:underline print:hidden">{t("openLedger")}</Link></p>
+            <p className="p-4 text-xs text-muted-foreground">{t("footNote")} <Link href={`/inventory/items?ledger=${b.item.id}`} className="text-primary underline underline-offset-2 print:hidden">{t("openLedger")}</Link></p>
           </article>
         )}
     </>

@@ -18,18 +18,13 @@ import { api } from "@/lib/api/client"
 import { fmtCompact, fmtNum } from "@/lib/format"
 import type { ItemWithStock } from "@/lib/types"
 import dynamic from "next/dynamic"
+import { useOnceOpen } from "@/hooks/use-once-open"
 import { useCan } from "@/components/auth/me-provider"
 import { AlertTriangle, CircleSlash } from "lucide-react"
 
 // The sheets (form + HS lookup, ledger + history) open on demand — keep them off the list's critical path (S4-03).
 const ItemSheet = dynamic(() => import("./item-sheet").then((m) => m.ItemSheet), { ssr: false })
 const LedgerSheet = dynamic(() => import("./ledger-sheet").then((m) => m.LedgerSheet), { ssr: false })
-/** true from the first time `open` is set, so a lazily loaded sheet stays mounted for its close animation */
-function useOnceOpen(open: boolean) {
-  const [once, setOnce] = React.useState(open)
-  React.useEffect(() => { if (open) setOnce(true) }, [open])
-  return once || open
-}
 
 const FACETS = ["group", "unit", "stock"] as const
 

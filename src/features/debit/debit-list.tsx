@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { useLocale, useTranslations } from "next-intl"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
@@ -17,11 +18,14 @@ import { useCan } from "@/components/auth/me-provider"
 import { Link } from "@/i18n/navigation"
 import { api } from "@/lib/api/client"
 import { fmtCompact, fmtDate, fmtNum } from "@/lib/format"
-import { DEBIT_REASONS } from "@/lib/r2"
+import { DEBIT_REASON_TONE, DEBIT_REASONS } from "@/lib/r2"
 import type { DebitNote } from "@/lib/types"
 import { useR2Actions } from "@/features/r2/use-r2-actions"
-import { DEBIT_REASON_TONE, DebitSheet } from "./debit-sheet"
-import { DebitForm } from "./debit-form"
+import { useOnceOpen } from "@/hooks/use-once-open"
+
+// sheet + form (incl. the Mushak 6.8 print view) load on first open, keeping the list under the 400 KB initial-JS budget
+const DebitSheet = dynamic(() => import("./debit-sheet").then((m) => m.DebitSheet), { ssr: false })
+const DebitForm = dynamic(() => import("./debit-form").then((m) => m.DebitForm), { ssr: false })
 
 const FACETS = ["process", "reason", "vendor", "branch"] as const
 type Facet = (typeof FACETS)[number]
@@ -45,6 +49,9 @@ export function DebitList() {
   const editing = useQuery({ queryKey: ["debit", editId], queryFn: () => api.debitNotes.get(editId!), enabled: !!editId })
   const actions = useR2Actions("debit")
   const labels = q.data?.facetLabels ?? {}
+  const formOpen = (!!isNew && can("doc.create")) || (!!editId && !!editing.data && can("doc.edit"))
+  const sheetMounted = useOnceOpen(!!viewId)
+  const formMounted = useOnceOpen(formOpen)
 
   const columns = React.useMemo<ColumnDef<DebitNote, unknown>[]>(() => [
     { id: "no", accessorKey: "no", meta: { label: t("col.no"), hideable: false }, header: t("col.no"),
@@ -120,9 +127,9 @@ export function DebitList() {
         )}
       />
       {actions.dialog}
-      <DebitSheet id={viewId} initialTab={tab ?? undefined} onOpenChange={(o) => { if (!o) { setViewId(null); setTab(null) } }} onEdit={(id) => { setViewId(null); setTab(null); setEditId(id) }} />
-      <DebitForm open={(isNew && can("doc.create")) || (!!editId && !!editing.data && can("doc.edit"))} doc={editId ? editing.data : null} purchaseId={forPurchase}
-        onOpenChange={(o) => { if (!o) { setNew(null); setEditId(null); setForPurchase(null) } }} onSaved={(d) => setViewId(d.id)} />
+      {sheetMounted && <DebitSheet id={viewId} initialTab={tab ?? undefined} onOpenChange={(o) => { if (!o) { setViewId(null); setTab(null) } }} onEdit={(id) => { setViewId(null); setTab(null); setEditId(id) }} />}
+      {formMounted && <DebitForm open={formOpen} doc={editId ? editing.data : null} purchaseId={forPurchase}
+        onOpenChange={(o) => { if (!o) { setNew(null); setEditId(null); setForPurchase(null) } }} onSaved={(d) => setViewId(d.id)} />}
     </>
   )
 }
