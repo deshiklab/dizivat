@@ -42,7 +42,9 @@
     "audit": "Audit trail",
     "transfers": "Stock transfers",
     "damage": "Damage & wastage",
-    "units": "Units of measure"
+    "units": "Units of measure",
+    "purchaseBook": "Purchase book (6.1)",
+    "salesBook": "Sales book (6.2)"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -270,7 +272,17 @@
     "unitCode": "1–12 letters, digits or dots, starting with a letter (e.g. Kg, Pcs, Sq.m).",
     "unitInUse": "This unit is used by items — its code can't change.",
     "unknownUnit": "Pick an active unit from the Units master.",
-    "branchInUse": "This branch has documents and stock history — it can't become an office."
+    "branchInUse": "This branch has documents and stock history — it can't become an office.",
+    "exceedsRemaining": "More than the quantity left to return",
+    "notApproved": "Only approved purchases can be returned",
+    "lcAfterBoe": "LC date must be on or before the Bill of Entry date",
+    "overrideReason": "Give a reason for rates that differ from the tariff",
+    "notInTariff": "HS code not found in the NBR tariff",
+    "foreignService": "Foreign vendors cannot supply a local service purchase",
+    "finishedGoodsOnly": "Choose a finished-goods item",
+    "inputsOnly": "Choose a raw-material or input item",
+    "toBeforeFrom": "End date is before the start date",
+    "beforePurchase": "Date is before the purchase date"
   },
   "form": {
     "discardTitle": "Discard unsaved changes?",
@@ -507,7 +519,8 @@
     "line": {
       "rebate": "Rebate",
       "item": "Item",
-      "unitPrice": "Unit price"
+      "unitPrice": "Unit price",
+      "service": "Service"
     },
     "rebateHint": "Rebateable VAT is claimed as input tax credit in Mushak 9.1 (note 12–14) within the permitted tax periods.",
     "field": {
@@ -528,7 +541,7 @@
     "searchVendor": "Search name, BIN or NID…",
     "nonRegistered": "Non-registered · NID",
     "nonRegNote": "Non-registered supplier — no input VAT credit is available on this purchase.",
-    "importNote": "Imports are recorded from the Bill of Entry in the import purchase form (R2).",
+    "importNote": "Buying from abroad? Record it from the Bill of Entry.",
     "challanHint": "As printed on the supplier's Mushak 6.3.",
     "sectionItemsHint": "Toggle Rebate off for items not eligible for input credit.",
     "selectItem": "Select item…",
@@ -536,7 +549,19 @@
     "editTitle": "Edit {no}",
     "cancelPurchase": "Cancel purchase",
     "addVendor": "Add new vendor",
-    "branchHint": "Goods are added to this branch's stock on approval."
+    "branchHint": "Goods are added to this branch's stock on approval.",
+    "servicesTitle": "Service purchases",
+    "servicesSummary": "{count} service purchases · ৳ {total} · input VAT credit ৳ {rebate} · payable ৳ {due}",
+    "newService": "New service purchase",
+    "newServiceTitle": "New service purchase",
+    "newServiceSub": "Services received from a local supplier (transport, security, C&F, repairs …). No stock movement.",
+    "serviceNote": "Lines use NBR service codes. VDS is pre-ticked for services where VAT must be deducted at source.",
+    "serviceBadge": "Service",
+    "newImport": "New import",
+    "raiseDebit": "Raise debit note",
+    "perUnit": "per {unit}",
+    "selectService": "Select service…",
+    "searchService": "Search service name or code…"
   },
   "items": {
     "title": "Items",
@@ -594,7 +619,8 @@
       "vatRate": "VAT rate (%)",
       "sdRate": "SD rate (%)",
       "reorder": "Re-order level",
-      "active": "Active"
+      "active": "Active",
+      "masterItem": "Master item"
     },
     "hsHint": "8-digit Bangladesh customs tariff code.",
     "reorderHint": "Dashboard warns below this quantity.",
@@ -607,7 +633,10 @@
       "rates": "Tariff: VAT {vat} · SD {sd} · CD {cd}",
       "match": "Item rates match the tariff",
       "use": "Use tariff rates"
-    }
+    },
+    "masterHint": "Optional. Picking one copies its HS code, group, unit and VAT/SD.",
+    "pickMaster": "No master item",
+    "searchMaster": "Search master items or HS…"
   },
   "placeholder": {
     "subtitle": "{group} module",
@@ -749,7 +778,8 @@
       "prodIssue": "Issued to production",
       "damage": "Damage / wastage",
       "transferIn": "Transfer in",
-      "transferOut": "Transfer out"
+      "transferOut": "Transfer out",
+      "purchaseReturn": "Purchase return"
     },
     "summaryRow": "Monthly summary",
     "monthly": "Monthly total",
@@ -1401,5 +1431,328 @@
     "created": "Unit {code} added",
     "updated": "Unit {code} updated",
     "deleted": "Unit {code} deleted"
+  },
+  "imports": {
+    "new": "New import",
+    "newTitle": "New import purchase",
+    "newSub": "Record goods cleared through customs against a Bill of Entry. Duty rates pre-fill from the NBR tariff.",
+    "badge": "Import",
+    "sectionBoe": "Bill of Entry",
+    "sectionBoeHint": "Supplier, BoE and LC details exactly as printed on the customs document.",
+    "sectionDuty": "Items & duties",
+    "sectionDutyHint": "AV = USD × exchange rate unless customs re-assessed it. CD, RD, SD, VAT, AIT and AT are computed per line.",
+    "selectVendor": "Select foreign supplier…",
+    "select": "Select…",
+    "line": "Line {n}",
+    "fromTariff": "Rates from tariff HS {hs} (TTI {tti}%)",
+    "notInTariff": "HS {hs} is not in the tariff — enter the rates from the BoE",
+    "rebateable": "VAT + AT claimable as input tax credit",
+    "unitLanded": "Landed cost ৳ {v} / unit",
+    "summaryTitle": "Duty summary",
+    "rebateHint": "Only VAT and AT are creditable in Mushak 9.1; CD, RD, SD and AIT become part of the cost.",
+    "field": {
+      "boeNo": "Bill of Entry no.",
+      "boeDate": "Bill of Entry date",
+      "lcNo": "LC no.",
+      "lcDate": "LC date",
+      "customsHouse": "Customs house",
+      "origin": "Country of origin",
+      "cnfFirm": "C&F agent",
+      "receiveAddress": "Receiving address"
+    },
+    "hint": {
+      "lcDate": "On or before the BoE date"
+    },
+    "col": {
+      "qty": "Qty",
+      "usd": "Value (USD)",
+      "usdRate": "Rate (৳/USD)",
+      "avOverride": "Assessed value (৳)",
+      "rebate": "Rebate",
+      "total": "Total"
+    },
+    "sum": {
+      "av": "Assessable value",
+      "tti": "Total tax incidence",
+      "rebate": "Input tax credit",
+      "landed": "Landed cost"
+    }
+  },
+  "debit": {
+    "title": "Debit notes",
+    "subtitle": "Goods returned to vendors (Mushak 6.8) — reverses stock and input tax credit",
+    "titleOne": "Debit note",
+    "notFound": "Debit note not found",
+    "new": "New debit note",
+    "searchPlaceholder": "Search note no., purchase, vendor…",
+    "summary": "{count} notes · ৳ {value} returned · credit reversed ৳ {rebate} · {pending} drafts",
+    "tabDetails": "Details",
+    "tabMushak": "Mushak 6.8",
+    "tabHistory": "History",
+    "draftNote": "Draft — stock and input tax are adjusted when it is approved.",
+    "print": "Print 6.8",
+    "rebateNote": "Input tax credit to reverse in Mushak 9.1 (note 16): ৳",
+    "approved": "{no} approved — stock returned",
+    "saved": "{no} saved as draft",
+    "deleted": "Draft {no} deleted",
+    "deleteBody": "The draft debit note is removed. Stock and VAT were never affected.",
+    "editTitle": "Edit {no}",
+    "newTitle": "New debit note",
+    "newSub": "Return goods from an approved purchase to the vendor.",
+    "pickPurchase": "Select purchase…",
+    "searchPurchase": "Search purchase no., challan or vendor…",
+    "pickPurchaseFirst": "Select a purchase to list its items.",
+    "alreadyReturned": "{qty} already returned",
+    "returnQtyFor": "Return quantity for {item}",
+    "onSave": "on save",
+    "overNote": "A return quantity exceeds what is left on the purchase.",
+    "formNote": "Values are the returned share of the purchase line (incl. import duties). Approving reduces stock and reverses input tax credit.",
+    "saveDraft": "Save draft",
+    "saveApprove": "Save & approve",
+    "viewDoc": "View {no}",
+    "printDoc": "Print {no}",
+    "approveDoc": "Approve {no}",
+    "hint": {
+      "purchase": "Only approved goods purchases with quantity left to return."
+    },
+    "field": {
+      "purchase": "Purchase",
+      "challan": "Challan / BoE",
+      "vendor": "Vendor",
+      "branch": "Branch",
+      "issued": "Issued",
+      "reason": "Reason",
+      "note": "Note",
+      "issuedBy": "Issued by",
+      "lines": "Returned items",
+      "issueDate": "Issue date",
+      "issueTime": "Issue time",
+      "issuedByName": "Responsible person",
+      "designation": "Designation"
+    },
+    "reason": {
+      "damaged": "Damaged in transit",
+      "quality": "Quality rejected",
+      "excess": "Excess supply",
+      "wrongItem": "Wrong item",
+      "priceDispute": "Price dispute"
+    },
+    "col": {
+      "no": "Note no.",
+      "date": "Date",
+      "purchase": "Purchase",
+      "vendor": "Vendor",
+      "reason": "Reason",
+      "items": "Items",
+      "item": "Item",
+      "purchased": "Purchased",
+      "returned": "Returned",
+      "remaining": "Left",
+      "returnQty": "Return qty",
+      "value": "Value",
+      "vat": "VAT",
+      "total": "Total",
+      "rebate": "Credit reversed",
+      "status": "Status"
+    },
+    "facet": {
+      "process": "Status",
+      "reason": "Reason",
+      "vendor": "Vendor",
+      "branch": "Branch"
+    }
+  },
+  "opening": {
+    "title": "Opening stock",
+    "subtitle": "Quantities brought forward with their value and input-tax class",
+    "titleOne": "Opening stock entry",
+    "notFound": "Entry not found",
+    "new": "New opening entry",
+    "searchPlaceholder": "Search entry no., item, SKU…",
+    "summary": "{count} entries · ৳ {value} · {pending} drafts",
+    "tabDetails": "Details",
+    "tabHistory": "History",
+    "draftNote": "Draft — stock and the item opening balance update when it is approved.",
+    "approved": "{no} approved — stock updated",
+    "saved": "{no} saved as draft",
+    "deleted": "Draft {no} deleted",
+    "deleteBody": "The draft entry is removed. Stock was never affected.",
+    "editTitle": "Edit {no}",
+    "newTitle": "New opening entry",
+    "newSub": "Bring forward stock held before go-live or at the start of the fiscal year.",
+    "pickItem": "Select item…",
+    "searchItem": "Search name, SKU or HS…",
+    "currentOpening": "Current opening balance: {qty} {unit}",
+    "formNote": "Approving adds the quantity to the branch stock and to the opening row of Mushak 6.1 / 6.2.",
+    "saveDraft": "Save draft",
+    "saveApprove": "Save & approve",
+    "viewDoc": "View {no}",
+    "approveDoc": "Approve {no}",
+    "bookFor": "Open Mushak book for {item}",
+    "book": "Mushak book",
+    "ledger": "Stock ledger",
+    "hint": {
+      "price": "Unit cost (purchase price, or production cost for finished goods).",
+      "vatPaid": "Input VAT already paid on this stock (not claimed again)."
+    },
+    "field": {
+      "note": "Note",
+      "issuedBy": "Entered by"
+    },
+    "col": {
+      "no": "Entry no.",
+      "date": "Date",
+      "item": "Item",
+      "branch": "Branch",
+      "inputTax": "Input tax",
+      "qty": "Qty",
+      "price": "Unit cost",
+      "value": "Value",
+      "vatPaid": "VAT paid",
+      "status": "Status"
+    },
+    "tax": {
+      "standard": "Standard (15%)",
+      "reduced": "Reduced rate",
+      "zero": "Zero-rated",
+      "exempt": "Exempt"
+    },
+    "facet": {
+      "process": "Status",
+      "branch": "Branch",
+      "inputTax": "Input tax"
+    }
+  },
+  "master": {
+    "title": "Master items",
+    "subtitle": "HS-level products with their tax profile; SKUs inherit from them",
+    "summary": "{count} master items · {overrides} with tariff overrides",
+    "titleOne": "Master item",
+    "new": "New master item",
+    "newTitle": "New master item",
+    "newSub": "Start from the HS code — rates are taken from the NBR tariff.",
+    "searchPlaceholder": "Search name or HS code…",
+    "created": "{name} created",
+    "updated": "{name} updated",
+    "active": "Active",
+    "inactive": "Inactive",
+    "overridden": "Overridden",
+    "asTariff": "As tariff",
+    "overrideTitle": "Tariff rate: {tariff}",
+    "skuCount": "{n, plural, =0 {no SKUs} one {# SKU} other {# SKUs}}",
+    "steps": "Steps",
+    "step": {
+      "hs": "HS code",
+      "identity": "Identity",
+      "tax": "Tax profile"
+    },
+    "pickHs": "Search the tariff…",
+    "searchHs": "HS code or description…",
+    "prefillNote": "These rates will pre-fill the tax profile. You can override them in step 3 with a reason.",
+    "taxIntro": "Rates default to the tariff. Changed rates are highlighted and need a reason (kept in the audit log).",
+    "noTariff": "This HS code is not in the tariff — enter the rates manually.",
+    "tariffRate": "Tariff {rate}",
+    "overrideWarn": "Differs from the tariff: {fields}. Returns will use your rates.",
+    "resetToTariff": "Reset to tariff rates",
+    "linkedSkus": "Linked SKUs",
+    "skuMismatch": "Some SKUs use a different VAT rate than this profile.",
+    "back": "Back",
+    "next": "Next",
+    "create": "Create master item",
+    "saveChanges": "Save changes",
+    "field": {
+      "hs": "HS code",
+      "name": "Name",
+      "priceMethod": "Price method",
+      "description": "Description",
+      "overrideReason": "Reason for override",
+      "active": "Active (available for new SKUs)"
+    },
+    "hint": {
+      "hs": "8-digit code from the NBR customs tariff."
+    },
+    "col": {
+      "hs": "HS code",
+      "name": "Name",
+      "group": "Group",
+      "category": "Category",
+      "unit": "Unit",
+      "override": "Override",
+      "skus": "SKUs"
+    },
+    "category": {
+      "general": "General",
+      "commercialImporter": "Commercial importer",
+      "medicine": "Medicine",
+      "petroleum": "Petroleum",
+      "superShop": "Super-shop"
+    },
+    "priceMethod": {
+      "average": "Weighted average",
+      "standard": "Standard cost"
+    },
+    "facet": {
+      "group": "Group",
+      "status": "Status",
+      "override": "Override"
+    }
+  },
+  "book": {
+    "b61": {
+      "title": "Purchase book — Mushak 6.1",
+      "subtitle": "Inputs bought, consumed and in hand, per item (rule 40(1)(ka) & 41(ka))",
+      "official": "Purchase account book",
+      "rule": "For taxpayers registered or enlisted under rule 40(1)(ka) and 41(ka)",
+      "pickItem": "Select an input item",
+      "emptyHint": "Choose a raw material, consumable or packing item to generate its purchase book.",
+      "inTotal": "Purchased",
+      "outTotal": "Consumed / out"
+    },
+    "b62": {
+      "title": "Sales book — Mushak 6.2",
+      "subtitle": "Finished goods produced, sold and in hand, per item (rule 40(1)(kha) & 41(kha))",
+      "official": "Sales account book",
+      "rule": "For taxpayers registered or enlisted under rule 40(1)(kha) and 41(kha)",
+      "pickItem": "Select a finished-goods item",
+      "emptyHint": "Choose a finished-goods item to generate its sales book.",
+      "inTotal": "Produced / in",
+      "outTotal": "Sold / out"
+    },
+    "filters": "Book filters",
+    "item": "Item",
+    "searchItem": "Search name, SKU or HS…",
+    "from": "From",
+    "to": "To",
+    "toBeforeFrom": "End date is before the start date.",
+    "govt": "Government of the People’s Republic of Bangladesh · National Board of Revenue",
+    "form": "Mushak-{no}",
+    "company": "Taxpayer",
+    "address": "Address",
+    "period": "Period",
+    "openingBal": "Opening balance",
+    "closingBal": "Closing balance",
+    "noRows": "No movements in this period.",
+    "total": "Total",
+    "footNote": "Generated from the stock ledger; the closing balance equals stock on hand.",
+    "openLedger": "Open stock ledger",
+    "col": {
+      "sl": "SL",
+      "date": "Date",
+      "opening": "Opening stock",
+      "produced": "Production",
+      "challan": "Challan / Bill of Entry",
+      "invoice": "Tax invoice",
+      "seller": "Seller",
+      "buyer": "Buyer",
+      "description": "Description",
+      "purchased": "Purchased",
+      "sold": "Sold / supplied",
+      "consumed": "Used in production / out",
+      "closing": "Closing stock",
+      "qty": "Qty",
+      "value": "Value",
+      "no": "No.",
+      "name": "Name / address"
+    }
   }
 }
