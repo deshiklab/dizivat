@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { ArrowLeft, Download, FileMinus2, Link2, Mail, Printer, Ship } from "lucide-react"
+import { ArrowLeft, Download, FileMinus2, HandCoins, Link2, Mail, Printer, ShieldCheck, Ship } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -24,9 +24,12 @@ import { Mushak63 } from "./mushak-63"
 import { RecordHistory } from "@/features/audit/record-history"
 import { useDocActions } from "@/features/docs/use-doc-actions"
 import { DocActionButtons, DocBanner, HistoryCard } from "@/features/docs/doc-parts"
+import { PeriodLockNote } from "@/features/r4/period-lock"
 
 export function SaleDetail({ id }: { id: string }) {
   const t = useTranslations("sales")
+  const can = useCan()
+  const tr4 = useTranslations("r4link")
   const tc = useTranslations("common")
   const tpm = useTranslations("method")
   const tt = useTranslations("table")
@@ -70,6 +73,7 @@ export function SaleDetail({ id }: { id: string }) {
         }
       />
       {actions.dialog}
+      <PeriodLockNote date={s.issueDate} />
       <DocBanner doc={s} />
       <Tabs value={tab} onValueChange={(v) => setTab(v as string)}>
         <TabsList className="no-print mb-4">
@@ -118,6 +122,12 @@ export function SaleDetail({ id }: { id: string }) {
                     <dt className="text-muted-foreground">{t("col.received")}</dt><dd className="text-right"><Money value={s.paid} /></dd>
                     <dt className="font-medium">{t("col.due")}</dt><dd className="text-right font-medium">{s.due > 0 ? <Pill tone="warning"><Money value={s.due} /></Pill> : <Pill tone="success">{t("payment.paid")}</Pill>}</dd>
                   </dl>
+                  {s.process === "Approved" && can("doc.create") && (s.due > 0 || s.vds) && (
+                    <div className="no-print mt-4 grid gap-2">
+                      {s.due > 0 && <Button variant="outline" size="sm" render={<Link href={`/accounting/receipts?new=1&party=${s.customerId}&invoice=${s.id}`} />}><HandCoins /> {tr4("recordReceipt")}</Button>}
+                      {s.vds && <Button variant="outline" size="sm" render={<Link href={`/vat/vds?new=1&vdsMode=sales&doc=${s.id}`} />}><ShieldCheck /> {tr4("recordVds")}</Button>}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
               <Card>

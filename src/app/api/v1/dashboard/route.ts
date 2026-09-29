@@ -3,10 +3,31 @@ import { db, withStock } from "@/lib/mock/db"
 import { delay } from "@/lib/mock/query"
 import type { DashboardData } from "@/lib/types"
 import { round2 } from "@/lib/vat"
+import { computeReturn } from "@/lib/mock/vat-return"
+import { periodOf, returnDue } from "@/lib/r4"
 import { json, withAuth } from "../_lib"
+import { vdsEligible } from "../_r4"
 
 const ym = (d: string) => d.slice(0, 7)
 const sum = <T,>(rows: T[], f: (r: T) => number) => round2(rows.reduce((a, r) => a + f(r), 0))
+
+/** Live compliance deadlines: this period's deposit, VDS certificates and return, plus last period's return. */
+function deadlines(cur: string, prev: string): DashboardData["deadlines"] {
+  const ret = (p: string) => db.returns.find((r) => r.period === p)
+  const r = ret(cur), rp = ret(prev)
+  const c = computeReturn(db, cur, r?.manual)
+  const due = returnDue(cur), duePrev = returnDue(prev)
+  const toIssue = vdsEligible("purchase").filter((e) => periodOf(e.date) === cur && e.remaining > 0.004).length
+  const past = (d: string) => TODAY > d
+  const st = (done: boolean, d: string) => (done ? "done" : past(d) ? "overdue" : "due") as "done" | "due" | "overdue"
+  const short = Math.ceil(c.shortVat)
+  return [
+    { id: "r91prev", title: "return91Prev", due: duePrev, status: st(rp?.status === "submitted", duePrev), href: `/vat/return-9-1?period=${prev}` },
+    { id: "tr6", title: "treasuryDeposit", due, status: st(r?.status === "submitted" || short <= 0, due), href: short > 0 ? `/vat/tr-6?new=1&period=${cur}&head=vat&amount=${short}` : `/vat/tr-6?period=${cur}` },
+    { id: "vds", title: "vdsCertificates", due, status: st(toIssue === 0, due), href: "/vat/vds?vdsMode=purchase" },
+    { id: "r91", title: "return91", due, status: st(r?.status === "submitted", due), href: `/vat/return-9-1?period=${cur}` },
+  ]
+}
 
 export const GET = withAuth(null, async () => {
   await delay(250)
@@ -49,7 +70,7 @@ export const GET = withAuth(null, async () => {
   }
 
   const end = new Date(y, m, 0).getDate()
-  const due = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, "0")}-15`
+  const due = returnDue(cur)
   const data: DashboardData = {
     period: { label: cur, start: `${cur}-01`, end: `${cur}-${end}`, returnDue: due, daysLeft: Math.round((Date.parse(due) - Date.parse(TODAY)) / 864e5) },
     kpis: {
@@ -65,12 +86,7 @@ export const GET = withAuth(null, async () => {
     mix: [...mix.entries()].map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 5),
     recentSales: [...db.sales].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 6),
     lowStock: db.items.map(withStock).filter((i) => i.remain < i.reorderLevel).sort((a, b) => a.remain / a.reorderLevel - b.remain / b.reorderLevel).slice(0, 5),
-    deadlines: [
-      { id: "tr6", title: "treasuryDeposit", due: `${due.slice(0, 8)}14`, status: "due", href: "/vat/tr-6" },
-      { id: "r91", title: "return91", due, status: "due", href: "/vat/return-9-1" },
-      { id: "vds", title: "vdsCertificates", due, status: "due", href: "/vat/vds" },
-      { id: "r91prev", title: "return91Prev", due: `${cur}-15`, status: "done", href: "/vat/return-9-1" },
-    ],
+    deadlines: deadlines(cur, prev),
   }
   return json(data)
 })

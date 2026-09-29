@@ -3,7 +3,7 @@
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { ArrowLeft, Link2, Printer, Ship, Undo2 } from "lucide-react"
+import { ArrowLeft, HandCoins, Link2, Printer, ShieldCheck, Ship, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,6 +17,7 @@ import { EmptyState } from "@/components/common/empty-state"
 import { Link, useRouter } from "@/i18n/navigation"
 import { useDocActions } from "@/features/docs/use-doc-actions"
 import { DocActionButtons, DocBanner, HistoryCard } from "@/features/docs/doc-parts"
+import { PeriodLockNote } from "@/features/r4/period-lock"
 import { api } from "@/lib/api/client"
 import { useCan, useCompany } from "@/components/auth/me-provider"
 import { customsHouseName } from "@/lib/r2"
@@ -27,6 +28,7 @@ import { fmtDate } from "@/lib/format"
 export function PurchaseDetail({ id }: { id: string }) {
   const company = useCompany()
   const t = useTranslations("purchases")
+  const tr4 = useTranslations("r4link")
   const ts = useTranslations("sales")
   const tc = useTranslations("common")
   const tt = useTranslations("table")
@@ -60,6 +62,7 @@ export function PurchaseDetail({ id }: { id: string }) {
         }
       />
       {actions.dialog}
+      <PeriodLockNote date={p.issueDate} />
       <DocBanner doc={p} />
       <Tabs value={tab} onValueChange={(v) => setTab(v as string)}>
       <TabsList className="no-print mb-4">
@@ -157,6 +160,12 @@ export function PurchaseDetail({ id }: { id: string }) {
               <dt className="font-medium text-success">{t("col.rebate")}</dt><dd className="text-right font-medium text-success"><Money value={p.rebate} /></dd>
             </dl>
             <p className="mt-3 text-xs text-muted-foreground">{p.boe ? ti("rebateHint") : t("rebateHint")}</p>
+            {p.process === "Approved" && can("doc.create") && (p.due > 0 || p.lines.some((l) => l.vds)) && (
+              <div className="no-print mt-4 grid gap-2">
+                {p.due > 0 && <Button variant="outline" size="sm" render={<Link href={`/accounting/payments?new=1&party=${p.vendorId}&invoice=${p.id}`} />}><HandCoins /> {tr4("recordPayment")}</Button>}
+                {p.lines.some((l) => l.vds) && <Button variant="outline" size="sm" render={<Link href={`/vat/vds?new=1&vdsMode=purchase&doc=${p.id}`} />}><ShieldCheck /> {tr4("issueVds")}</Button>}
+              </div>
+            )}
             <dl className="mt-4 grid gap-2 border-t pt-4 text-sm">
               {[[t("field.vendor"), p.vendorName], [t("field.bin"), p.vendorBin], ...(p.boe ? [] : [[t("field.challanDate"), fmtDate(p.challanDate, locale)]]), [ts("field.branch"), p.branchName], [ts("field.issuedBy"), `${p.issuedBy} · ${p.designation}`]].map(([k, v]) => (
                 <div key={k}><dt className="text-xs text-muted-foreground">{k}</dt><dd>{v}</dd></div>

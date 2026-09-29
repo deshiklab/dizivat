@@ -123,12 +123,12 @@ export function Dashboard() {
                 const days = Math.round((Date.parse(d.due) - Date.parse(TODAY)) / 864e5)
                 return (
                   <li key={d.id} className="flex items-start gap-3">
-                    {d.status === "done" ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden /> : <span className="mt-1.5 size-2 shrink-0 rounded-full bg-warning" aria-hidden />}
+                    {d.status === "done" ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden /> : <span className={`mt-1.5 size-2 shrink-0 rounded-full ${d.status === "overdue" ? "bg-destructive" : "bg-warning"}`} aria-hidden />}
                     <div className="grid flex-1 gap-0.5">
                       <Link href={d.href ?? "/"} className="text-sm font-medium hover:underline">{t(`deadline.${d.title}`)}</Link>
                       <span className="text-xs text-muted-foreground">{fmtDate(d.due, locale)}</span>
                     </div>
-                    {d.status === "done" ? <Pill tone="success">{t("submitted")}</Pill> : <Pill tone={days <= 7 ? "danger" : "warning"}>{t("inDays", { days: fmtNum(days, locale) })}</Pill>}
+                    {d.status === "done" ? <Pill tone="success">{t(d.id.startsWith("r91") ? "submitted" : "done")}</Pill> : d.status === "overdue" ? <Pill tone="danger">{t("overdueDays", { days: fmtNum(-days, locale) })}</Pill> : <Pill tone={days <= 7 ? "danger" : "warning"}>{t("inDays", { days: fmtNum(days, locale) })}</Pill>}
                   </li>
                 )
               })}

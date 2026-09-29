@@ -7,7 +7,7 @@ import type { Permission } from "@/lib/auth/roles"
 /**
  * Single module registry (replaces the prototype's GROUPS object + 851 inline onclick handlers).
  * `release` = the R-milestone from the development plan in which the page ships.
- * `ready` = built (Sprints 1–4 + R2 + R3) (renders a real page); others render a "Planned for Rx" page.
+ * `ready` = built (Sprints 1–4 + R2 + R3 + R4) (renders a real page); others render a "Planned for Rx" page.
  */
 export type Release = "S1" | "R1" | "R2" | "R3" | "R4"
 export interface NavItem { key: string; href: string; release: Release; ready?: boolean; legacy?: string; perm?: Permission }
@@ -64,9 +64,11 @@ export const NAV: NavGroup[] = [
   {
     key: "accounting", icon: Landmark, href: "/accounting/receipts",
     items: [
-      { key: "receipts", href: "/accounting/receipts", release: "R4" },
-      { key: "payments", href: "/accounting/payments", release: "R4" },
-      { key: "bankAccounts", href: "/accounting/bank-accounts", release: "R4" },
+      { key: "receipts", href: "/accounting/receipts", release: "R4", ready: true },
+      { key: "payments", href: "/accounting/payments", release: "R4", ready: true },
+      { key: "bankAccounts", href: "/accounting/bank-accounts", release: "R4", ready: true },
+      { key: "statements", href: "/accounting/statements", release: "R4", ready: true },
+      { key: "accountingConfig", href: "/accounting/config", release: "R4", ready: true, perm: "settings.manage" },
     ],
   },
   {
@@ -74,11 +76,13 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "purchaseBook", href: "/vat/mushak-6-1", release: "R2", ready: true },
       { key: "salesBook", href: "/vat/mushak-6-2", release: "R2", ready: true },
-      { key: "mushakReports", href: "/vat/mushak", release: "R4" },
-      { key: "return91", href: "/vat/return-9-1", release: "R4" },
-      { key: "treasury", href: "/vat/tr-6", release: "R4" },
-      { key: "vds", href: "/vat/vds", release: "R4" },
-      { key: "adjustments", href: "/vat/adjustments", release: "R4" },
+      { key: "mushakReports", href: "/vat/mushak", release: "R4", ready: true },
+      { key: "return91", href: "/vat/return-9-1", release: "R4", ready: true },
+      { key: "treasury", href: "/vat/tr-6", release: "R4", ready: true },
+      { key: "vds", href: "/vat/vds", release: "R4", ready: true },
+      { key: "adjustments", href: "/vat/adjustments", release: "R4", ready: true },
+      { key: "mushak610", href: "/vat/mushak-6-10", release: "R4", ready: true },
+      { key: "vatSettings", href: "/vat/settings", release: "R4", ready: true, perm: "settings.manage" },
       { key: "tariff", href: "/vat/tariff", release: "R1", ready: true, legacy: "/en/nbrvat/taxtarrif/" },
     ],
   },

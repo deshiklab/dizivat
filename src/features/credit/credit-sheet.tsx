@@ -12,6 +12,7 @@ import { Money, Num } from "@/components/common/money"
 import { Pill, ProcessBadge } from "@/components/common/status-badge"
 import { EmptyState } from "@/components/common/empty-state"
 import { useCan } from "@/components/auth/me-provider"
+import { PeriodLockNote } from "@/features/r4/period-lock"
 import { DocBanner, HistoryCard } from "@/features/docs/doc-parts"
 import { RecordHistory } from "@/features/audit/record-history"
 import { Link } from "@/i18n/navigation"
@@ -54,6 +55,7 @@ export function CreditSheet({ id, onOpenChange, onEdit, initialTab }: { id: stri
                 <TabsTrigger value="history">{t("tabHistory")}</TabsTrigger>
               </TabsList>
               <TabsContent value="details" className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto p-4">
+                <PeriodLockNote date={d.issueDate} />
                 <DocBanner doc={d} draftNote={t("draftNote")} />
                 <Details d={d} />
                 <Lines d={d} />
