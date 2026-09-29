@@ -8,6 +8,7 @@ import { TAX_KEYS } from "@/lib/r2"
 import type { AuditChange, DebitLine, DebitNote, HistoryEntry, MasterItem, MasterItemRow, OpeningEntry, Purchase, TaxProfile } from "@/lib/types"
 import { calcDebitLine, round2 } from "@/lib/vat"
 import { deny, json, problem, withAuth, zodProblem } from "./_lib"
+import { lockedConflict, lockedField } from "./_r4"
 
 type Ctx = { params: Promise<{ id: string }> }
 type Entity = "debitNote" | "opening" | "masterItem"
@@ -53,6 +54,7 @@ function buildDebit(body: unknown, excludeId?: string) {
   if (!p || p.category === "service") return { error: problem(422, "Validation failed", { purchaseId: ["unknown"] }) }
   if (p.process !== "Approved") return { error: problem(422, "Validation failed", { purchaseId: ["notApproved"] }) }
   if (d.issueDate < p.issueDate) return { error: problem(422, "Validation failed", { issueDate: ["beforePurchase"] }) }
+  { const lock = lockedField(d.issueDate, "issueDate"); if (lock) return { error: lock } }
   const avail = returnable(p, excludeId)
   const errors: Record<string, string[]> = {}
   const lines: DebitLine[] = []
@@ -173,6 +175,7 @@ export function debitDocRoutes() {
       if (n.process !== "Created") return problem(409, `Cannot approve — ${n.no} is ${n.process}.`)
       const p = db.purchases.find((x) => x.id === n.purchaseId)
       if (!p || p.process !== "Approved") return problem(409, `Purchase ${n.purchaseNo} is no longer approved.`)
+      const lock = lockedConflict(n.issueDate, n.no); if (lock) return lock
       return approveDebit(n, user.name) ?? json(n)
     }
     if (body.process === "Cancelled") {
@@ -180,6 +183,7 @@ export function debitDocRoutes() {
       if (n.process === "Cancelled") return problem(409, `${n.no} is already cancelled.`)
       const r = cancelInput.safeParse({ reason: body.reason ?? "" })
       if (!r.success) return zodProblem(r.error)
+      if (n.process === "Approved") { const lock = lockedConflict(n.issueDate, n.no); if (lock) return lock }
       if (n.process === "Approved") postDebit(n, -1) // the goods come back on the books
       n.process = "Cancelled"
       n.cancelReason = r.data.reason

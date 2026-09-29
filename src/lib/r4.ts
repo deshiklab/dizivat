@@ -1,5 +1,5 @@
 type Tone = "success" | "warning" | "info" | "danger" | "neutral"
-import type { AccountKind, AdjustmentKind, MoneyMethod, ReturnPart, ReturnType, TreasuryHead, TreasuryMode, VdsMode } from "./types"
+import type { AccountKind, AdjustmentKind, MoneyMethod, ReturnPart, VatReturnType, TreasuryHead, TreasuryMode, VdsMode } from "./types"
 
 /* ── Accounting ────────────────────────────────────────────────────────── */
 
@@ -72,9 +72,9 @@ export const ADJUSTMENT_TONE: Record<AdjustmentKind, Tone> = { otherIncrease: "d
 
 /* ── Mushak 9.1 ────────────────────────────────────────────────────────── */
 
-export const RETURN_TYPES: ReturnType[] = ["original", "amended", "full", "late"]
+export const RETURN_TYPES: VatReturnType[] = ["original", "amended", "full", "late"]
 /** Section of the VAT & SD Act 2012 each return type is filed under. */
-export const RETURN_SECTION: Record<ReturnType, string> = { original: "64", amended: "66", full: "67", late: "65" }
+export const RETURN_SECTION: Record<VatReturnType, string> = { original: "64", amended: "66", full: "67", late: "65" }
 /** Purchases above this, paid other than through a bank, lose their input-tax credit (9.1 note 25). */
 export const NON_BANK_LIMIT = 100_000
 /** Mushak 6.10: individual purchases / sales above Tk 2 lakh. */

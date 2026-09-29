@@ -6,6 +6,8 @@ import { cancelInput, importInput, purchaseInput } from "@/lib/schemas"
 import type { Party, Purchase, Sale } from "@/lib/types"
 import { deny, json, problem, withAuth, zodProblem } from "./_lib"
 import { lotShortfall, parseSale } from "./_r3"
+import { lockedConflict, lockedField, settlementsOf } from "./_r4"
+import { lockingReturn } from "@/lib/mock/vat-return"
 import type { z } from "zod"
 
 type Kind = "sale" | "purchase"
@@ -26,6 +28,7 @@ export function parsePurchase(body: unknown): Response | { data: z.output<typeof
   const bad = (d.category === "service" ? unknownServices(d.lines) : unknownItems(d.lines, "buyable")) ?? unknownBranch(d.branchId)
   if (bad) return problem(422, "Validation failed", bad)
   if (isImport && (d as z.output<typeof importInput>).boe.lcDate > d.challanDate) return problem(422, "Validation failed", { "boe.lcDate": ["lcAfterBoe"] })
+  const lock = lockedField(d.issueDate, "issueDate"); if (lock) return lock
   return { data: d, vendor }
 }
 type Doc = Sale | Purchase
@@ -114,6 +117,7 @@ export function docRoutes(k: Kind) {
     if (body.process === "Approved") {
       const no = deny(user, "doc.approve"); if (no) return no
       if (d.process !== "Created") return problem(409, `Cannot approve — ${d.invoiceNo} is ${d.process}.`)
+      const lock = lockedConflict(d.issueDate, d.invoiceNo); if (lock) return lock
       const err = approve(k, d, user.name)
       if (err) return err
       return json(d)
@@ -126,6 +130,9 @@ export function docRoutes(k: Kind) {
       const dns = k === "purchase" ? db.debitNotes.filter((n) => n.purchaseId === d.id && n.process !== "Cancelled") : db.creditNotes.filter((n) => n.saleId === d.id && n.process !== "Cancelled")
       if (dns.length) return problem(409, `${d.invoiceNo} has ${k === "purchase" ? "debit" : "credit"} notes (${dns.map((n) => n.no).join(", ")}) — cancel them first.`)
       if (d.process === "Approved") {
+        const lock = lockedConflict(d.issueDate, d.invoiceNo); if (lock) return lock
+        const st = settlementsOf(k, d.id)
+        if (st.length) return problem(409, `${d.invoiceNo} has ${k === "sale" ? "receipts" : "payments"} / VDS against it (${st.join(", ")}) — cancel them first.`)
         if (k === "purchase") {
           const short = stockShortfall(d.lines, d.branchId)
           if (short) return problem(409, `Stock from this purchase has already been used — ${short.detail}`)
@@ -178,7 +185,7 @@ export function bulkRoute(k: Kind) {
     const done: string[] = [], skipped: string[] = []
     for (const id of ids) {
       const d = list(k).find((x) => x.id === id)
-      if (d && d.process === "Created" && !approve(k, d, user.name)) done.push(id)
+      if (d && d.process === "Created" && !lockingReturn(db, d.issueDate) && !approve(k, d, user.name)) done.push(id)
       else skipped.push(id)
     }
     return json({ done, skipped })

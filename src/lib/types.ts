@@ -717,7 +717,7 @@ export interface VatAdjustment {
 }
 
 /** Mushak 9.1 VAT return. */
-export type ReturnType = "original" | "amended" | "full" | "late"
+export type VatReturnType = "original" | "amended" | "full" | "late"
 export type ReturnStatus = "draft" | "submitted"
 export interface ReturnManual {
   /** notes 41–49 */
@@ -759,7 +759,7 @@ export interface ReturnComputation {
 export interface VatReturn {
   id: string
   period: string
-  type: ReturnType
+  type: VatReturnType
   amendReason?: string
   activities: boolean
   submissionDate?: string
@@ -773,7 +773,7 @@ export interface VatReturn {
   createdAt: string; updatedAt?: string; history?: HistoryEntry[]
 }
 export type VatReturnRow = VatReturn & { due: string; netPayable: number; deposited: number; closing: number; late: boolean }
-export interface ReturnView extends VatReturnRow { computation: ReturnComputation; live: boolean }
+export interface ReturnView extends VatReturnRow { computation: ReturnComputation; live: boolean; notStarted?: boolean }
 /** One line of a 9.1 sub-form (the source documents behind a note). */
 export interface SubFormRow { date: string; ref: string; refId?: string; href?: string; party?: string; bin?: string; value: number; sd?: number; vat: number; note?: string }
 
@@ -781,3 +781,21 @@ export interface SubFormRow { date: string; ref: string; refId?: string; href?: 
 export interface TaxPeriod { period: string; due: string; status: "open" | "draft" | "submitted" | "overdue"; returnId?: string; submittedAt?: string; locked: boolean }
 
 export interface VatSettings { zoneCode: string; updatedAt?: string; updatedBy?: string }
+
+/** Compliance centre summary for one tax period. */
+export interface ComplianceSummary {
+  period: string; due: string; daysLeft: number; status: ReturnStatus; notStarted: boolean; locked: boolean
+  submissionDate?: string; ackNo?: string
+  computation: Pick<ReturnComputation, "outputVat" | "inputVat" | "increasing" | "decreasing" | "netVat" | "payableVat" | "payableSd" | "depositedVat" | "shortVat" | "shortSd" | "closingVat" | "openingVat" | "drafts">
+  deposits: { count: number; amount: number; pending: number }
+  vds: { toIssue: number; toIssueAmount: number; awaited: number; awaitedAmount: number }
+  periods: TaxPeriod[]
+}
+export interface M610Row { sl: number; id: string; date: string; no: string; challanNo: string; party: string; address: string; bin: string; value: number; vat: number; total: number }
+export interface Mushak610 {
+  from: string; to: string; limit: number
+  company: { name: string; address: string; bin: string }
+  purchases: M610Row[]; sales: M610Row[]
+  totals: Record<"purchases" | "sales", { value: number; vat: number; total: number }>
+}
+export interface SubForm { period: string; note: number; rows: SubFormRow[]; total: { value: number; sd: number; vat: number } }

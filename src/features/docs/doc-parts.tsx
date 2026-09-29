@@ -1,7 +1,7 @@
 "use client"
 
 import { useLocale, useTranslations } from "next-intl"
-import { Ban, CheckCheck, CircleDot, FilePen, FilePlus2, Info, Pencil, RotateCcw, Trash2, XCircle } from "lucide-react"
+import { Ban, CheckCheck, CircleDot, FilePen, FilePlus2, Info, Pencil, RotateCcw, Send, Trash2, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useCan } from "@/components/auth/me-provider"
@@ -41,7 +41,7 @@ export function DocBanner({ doc, draftNote }: { doc: Pick<Doc, "process" | "hist
   return null
 }
 
-const ICON: Record<HistoryAction, typeof CircleDot> = { created: FilePlus2, edited: FilePen, approved: CheckCheck, cancelled: XCircle, deleted: Trash2, restored: RotateCcw }
+const ICON: Record<HistoryAction, typeof CircleDot> = { created: FilePlus2, edited: FilePen, approved: CheckCheck, cancelled: XCircle, deleted: Trash2, restored: RotateCcw, submitted: Send }
 const TONE: Partial<Record<HistoryAction, string>> = { approved: "text-success bg-success/10", cancelled: "text-destructive bg-destructive/10", deleted: "text-destructive bg-destructive/10" }
 
 /** Audit trail — who did what and when (Mushak records must be traceable for NBR audits). */

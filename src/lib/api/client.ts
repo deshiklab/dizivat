@@ -1,5 +1,5 @@
-import type { Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
+import type { ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import { appPathname, appUrl } from "../base-path"
 
@@ -214,6 +214,49 @@ export const api = {
   mushak: {
     book: (form: "6.1" | "6.2", p: { item: string; from: string; to: string }) => req<MushakBook>(`/mushak/${form}${qs(p)}`),
     csvUrl: (form: "6.1" | "6.2", p: { item: string; from: string; to: string }) => `${BASE}/mushak/${form}${qs({ ...p, format: "csv" })}`,
+    m610: (p: { from: string; to: string }) => req<Mushak610>(`/mushak/6.10${qs(p)}`),
+    m610CsvUrl: (p: { from: string; to: string }) => `${BASE}/mushak/6.10${qs({ ...p, format: "csv" })}`,
+  },
+  /* ── R4 ── */
+  accounting: {
+    accounts: {
+      list: (p: ListParams) => req<ListResult<MoneyAccountRow>>(`/accounting/accounts${qs(p)}`),
+      /** active accounts for pickers */
+      options: () => req<ListResult<MoneyAccountRow>>(`/accounting/accounts${qs({ status: "active", size: 100 })}`).then((r) => r.data),
+      get: (id: string) => req<MoneyAccountRow>(`/accounting/accounts/${id}`),
+      create: (b: AccountInput) => req<MoneyAccountRow>("/accounting/accounts", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: AccountInput) => req<MoneyAccountRow>(`/accounting/accounts/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true }>(`/accounting/accounts/${id}`, { method: "DELETE" }),
+      csvUrl: (p: ListParams) => `${BASE}/accounting/accounts${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
+    receipts: docResource<MoneyDoc, MoneyInput>("/accounting/receipts"),
+    payments: docResource<MoneyDoc, MoneyInput>("/accounting/payments"),
+    openInvoices: (kind: "receipt" | "payment", party: string) => req<OpenInvoice[]>(`/accounting/open-invoices${qs({ kind, party })}`),
+    statement: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => req<PartyStatement>(`/accounting/statement${qs(p)}`),
+    statementCsvUrl: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => `${BASE}/accounting/statement${qs({ ...p, format: "csv" })}`,
+    config: () => req<AccountingConfig>("/accounting/config"),
+    saveConfig: (b: AccountingConfigInput) => req<AccountingConfig>("/accounting/config", { method: "PUT", body: JSON.stringify(b) }),
+  },
+  vat: {
+    treasury: docResource<TreasuryDeposit, TreasuryInput>("/vat/treasury"),
+    vds: docResource<VdsEntry, VdsInput>("/vat/vds"),
+    vdsEligible: (mode: "purchase" | "sales", exclude?: string) => req<VdsEligible[]>(`/vat/vds/eligible${qs({ mode, exclude })}`),
+    adjustments: docResource<VatAdjustment, AdjustmentInput>("/vat/adjustments"),
+    returns: {
+      list: (p: ListParams) => req<ListResult<VatReturnRow> & { periods: TaxPeriod[] }>(`/vat/returns${qs(p)}`),
+      get: (period: string) => req<ReturnView>(`/vat/returns/${period}`),
+      start: (period: string) => req<ReturnView>("/vat/returns", { method: "POST", body: JSON.stringify({ period }) }),
+      update: (period: string, b: ReturnInput) => req<ReturnView>(`/vat/returns/${period}`, { method: "PUT", body: JSON.stringify(b) }),
+      submit: (period: string) => req<ReturnView>(`/vat/returns/${period}`, { method: "PATCH", body: JSON.stringify({ action: "submit" }) }),
+      remove: (period: string) => req<{ ok: true }>(`/vat/returns/${period}`, { method: "DELETE" }),
+      note: (period: string, note: number) => req<SubForm>(`/vat/returns/${period}/notes/${note}`),
+      noteCsvUrl: (period: string, note: number) => `${BASE}/vat/returns/${period}/notes/${note}?format=csv`,
+      csvUrl: (p: ListParams) => `${BASE}/vat/returns${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
+    periods: () => req<TaxPeriod[]>("/vat/periods"),
+    compliance: (period?: string) => req<ComplianceSummary>(`/vat/compliance${qs({ period })}`),
+    settings: () => req<VatSettings>("/vat/settings"),
+    saveSettings: (b: VatSettingsInput) => req<VatSettings>("/vat/settings", { method: "PUT", body: JSON.stringify(b) }),
   },
 }
 

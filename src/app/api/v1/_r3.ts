@@ -8,6 +8,7 @@ import { batchInput, batchReceiveInput, bomInput, cancelInput, creditNoteInput, 
 import type { AuditChange, Batch, BatchLine, Bom, BomRow, BomStatus, Consumption, CreditLine, CreditNote, HistoryEntry, Lot, Party, Sale, WorkOrder } from "@/lib/types"
 import { calcBom, calcCreditLine, round2, round4 } from "@/lib/vat"
 import { deny, json, problem, withAuth, zodProblem } from "./_lib"
+import { lockedConflict, lockedField } from "./_r4"
 
 type Ctx = { params: Promise<{ id: string }> }
 type Entity = "creditNote" | "bom" | "workOrder" | "batch"
@@ -67,6 +68,7 @@ export function parseSale(body: unknown, self?: Sale): Response | { data: SaleDa
     })
     if (has(errors)) return invalid(errors)
   }
+  const lock = lockedField(d.issueDate, "issueDate"); if (lock) return lock
   return { data: d, cust, fields: buildSaleFields(d, cust) }
 }
 
@@ -145,6 +147,7 @@ function buildCredit(body: unknown, excludeId?: string) {
   if (!s) return { error: invalid({ saleId: ["unknown"] }) }
   if (s.process !== "Approved") return { error: invalid({ saleId: ["notApproved"] }) }
   if (d.issueDate < s.issueDate) return { error: invalid({ issueDate: ["beforeSale"] }) }
+  { const lock = lockedField(d.issueDate, "issueDate"); if (lock) return { error: lock } }
   const avail = creditable(s, excludeId)
   const errors: Record<string, string[]> = {}
   const lines: CreditLine[] = []
@@ -256,6 +259,7 @@ export function creditDocRoutes() {
       if (n.process !== "Created") return problem(409, `Cannot approve — ${n.no} is ${n.process}.`)
       const s = db.sales.find((x) => x.id === n.saleId)
       if (!s || s.process !== "Approved") return problem(409, `Sales invoice ${n.saleNo} is no longer approved.`)
+      const lock = lockedConflict(n.issueDate, n.no); if (lock) return lock
       approveCredit(n, user.name)
       return json(n)
     }
@@ -265,6 +269,7 @@ export function creditDocRoutes() {
       const r = cancelInput.safeParse({ reason: body.reason ?? "" })
       if (!r.success) return zodProblem(r.error)
       if (n.process === "Approved") {
+        const lock = lockedConflict(n.issueDate, n.no); if (lock) return lock
         // the returned goods leave again — they must still be on hand
         const short = stockShortfall(n.lines, n.branchId)
         if (short) return problem(409, `The returned goods have already been used — ${short.detail}`)
