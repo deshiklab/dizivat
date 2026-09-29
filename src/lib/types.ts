@@ -199,7 +199,7 @@ export interface SearchHit {
   href: string
 }
 
-export type LedgerType = "opening" | "purchase" | "sale" | "prodReceive" | "prodIssue" | "damage" | "transferIn" | "transferOut" | "purchaseReturn"
+export type LedgerType = "opening" | "purchase" | "sale" | "prodReceive" | "prodIssue" | "damage" | "transferIn" | "transferOut" | "purchaseReturn" | "saleReturn"
 export interface LedgerEntry {
   date: string
   type: LedgerType
@@ -501,7 +501,7 @@ export type BomStatus = "active" | "draft" | "superseded" | "cancelled"
 export type BomRow = Bom & { status: BomStatus; salePrice: number }
 
 /** Production work order (PW-MMYY####): what the floor must produce, tracked by the batches that reference it. */
-export interface WorkOrderLine { itemId: string; name: string; sku: string; uom: string; qty: number; received: number; damaged: number; remaining: number }
+export interface WorkOrderLine { itemId: string; name: string; sku: string; uom: string; qty: number; /** put into production by approved batches */ issued?: number; received: number; damaged: number; /** still to put into production */ remaining: number }
 export type WorkOrderStatus = "draft" | "open" | "partial" | "completed" | "cancelled"
 export interface WorkOrder {
   id: string

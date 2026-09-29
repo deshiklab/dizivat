@@ -21,7 +21,8 @@ import { cn } from "@/lib/utils"
 const FY_START = `${Number(TODAY.slice(5, 7)) >= 7 ? TODAY.slice(0, 4) : Number(TODAY.slice(0, 4)) - 1}-07-01`
 const href = (kind: LedgerType, id: string) =>
   kind === "sale" ? `/sales/${id}` : kind === "purchase" ? `/purchases/${id}` : kind === "damage" ? `/inventory/damage?view=${id}`
-    : kind === "opening" ? `/purchases/opening?view=${id}` : kind === "purchaseReturn" ? `/purchases/debit-notes?view=${id}`
+    : kind === "opening" ? `/purchases/opening?view=${id}` : kind === "purchaseReturn" ? `/purchases/debit-notes?view=${id}` : kind === "saleReturn" ? `/sales/credit-notes?view=${id}`
+      : kind === "prodReceive" || kind === "prodIssue" ? `/production/batches?view=${id}`
       : kind === "transferIn" || kind === "transferOut" ? `/inventory/transfers?view=${id}` : null
 
 /**

@@ -23,15 +23,16 @@ import type { LedgerEntry, LedgerType } from "@/lib/types"
 type Filter = "all" | "purchase" | "sale" | "production" | "other"
 const FILTERS: Filter[] = ["all", "purchase", "sale", "production", "other"]
 const inFilter = (f: Filter, e: LedgerEntry) =>
-  f === "all" || (f === "production" ? e.type === "prodReceive" || e.type === "prodIssue" : f === "purchase" ? e.type === "purchase" || e.type === "purchaseReturn" : f === "other" ? !["purchase", "purchaseReturn", "sale", "prodReceive", "prodIssue"].includes(e.type) : e.type === f)
+  f === "all" || (f === "production" ? e.type === "prodReceive" || e.type === "prodIssue" : f === "purchase" ? e.type === "purchase" || e.type === "purchaseReturn" : f === "sale" ? e.type === "sale" || e.type === "saleReturn" : f === "other" ? !["purchase", "purchaseReturn", "sale", "saleReturn", "prodReceive", "prodIssue"].includes(e.type) : e.type === f)
 const TONE: Record<LedgerType, "neutral" | "info" | "success" | "warning" | "danger"> = {
-  opening: "neutral", purchase: "info", sale: "success", prodReceive: "info", prodIssue: "warning", damage: "danger", transferIn: "info", transferOut: "warning", purchaseReturn: "danger",
+  opening: "neutral", purchase: "info", sale: "success", prodReceive: "info", prodIssue: "warning", damage: "danger", transferIn: "info", transferOut: "warning", purchaseReturn: "danger", saleReturn: "warning",
 }
 /** Where a ledger reference opens. */
 const refHref = (e: LedgerEntry) =>
   e.type === "sale" ? `/sales/${e.refId}` : e.type === "purchase" ? `/purchases/${e.refId}`
     : e.type === "damage" ? `/inventory/damage?view=${e.refId}` : e.type === "opening" ? `/purchases/opening?view=${e.refId}`
-    : e.type === "purchaseReturn" ? `/purchases/debit-notes?view=${e.refId}` : `/inventory/transfers?view=${e.refId}`
+    : e.type === "purchaseReturn" ? `/purchases/debit-notes?view=${e.refId}` : e.type === "saleReturn" ? `/sales/credit-notes?view=${e.refId}`
+    : e.type === "prodReceive" || e.type === "prodIssue" ? `/production/batches?view=${e.refId}` : `/inventory/transfers?view=${e.refId}`
 const ALL = "all"
 
 /**

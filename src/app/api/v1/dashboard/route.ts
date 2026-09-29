@@ -17,6 +17,7 @@ export const GET = withAuth(null, async () => {
   const live = db.sales.filter((s) => s.process === "Approved")
   const livePur = db.purchases.filter((p) => p.process === "Approved")
   const liveDn = db.debitNotes.filter((n) => n.process === "Approved")
+  const liveCn = db.creditNotes.filter((n) => n.process === "Approved")
   const inMonth = <T extends { issueDate: string }>(rows: T[], k: string) => rows.filter((r) => ym(r.issueDate) === k)
 
   const months: string[] = []
@@ -25,10 +26,11 @@ export const GET = withAuth(null, async () => {
     months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`)
   }
   const kpi = (k: string) => {
-    const s = inMonth(live, k), p = inMonth(livePur, k), dn = inMonth(liveDn, k)
+    const s = inMonth(live, k), p = inMonth(livePur, k), dn = inMonth(liveDn, k), cn = inMonth(liveCn, k)
     // Debit notes (6.8) give back input tax and reduce purchases in the month they are issued
-    const outputVat = sum(s, (x) => x.vat), inputVat = round2(sum(p, (x) => x.rebate) - sum(dn, (x) => x.rebate))
-    return { sales: sum(s, (x) => x.netTotal), outputVat, inputVat, netPayable: round2(outputVat - inputVat), purchases: round2(sum(p, (x) => x.netTotal) - sum(dn, (x) => x.total)) }
+    // Credit notes (6.7) reduce output VAT and sales in the month they are issued
+    const outputVat = round2(sum(s, (x) => x.vat) - sum(cn, (x) => x.vat)), inputVat = round2(sum(p, (x) => x.rebate) - sum(dn, (x) => x.rebate))
+    return { sales: round2(sum(s, (x) => x.netTotal) - sum(cn, (x) => x.total)), outputVat, inputVat, netPayable: round2(outputVat - inputVat), purchases: round2(sum(p, (x) => x.netTotal) - sum(dn, (x) => x.total)) }
   }
   const c = kpi(cur), pv = kpi(prev)
 
@@ -55,7 +57,8 @@ export const GET = withAuth(null, async () => {
       inputVat: c.inputVat, inputVatPrev: pv.inputVat, netPayable: c.netPayable, netPayablePrev: pv.netPayable,
       purchases: c.purchases, purchasesPrev: pv.purchases,
       receivable: sum(live, (s) => s.due), payable: sum(livePur, (p) => p.due),
-      pendingApproval: db.sales.filter((s) => s.process === "Created").length + db.purchases.filter((p) => p.process === "Created").length + db.debitNotes.filter((n) => n.process === "Created").length,
+      pendingApproval: db.sales.filter((s) => s.process === "Created").length + db.purchases.filter((p) => p.process === "Created").length + db.debitNotes.filter((n) => n.process === "Created").length
+        + db.creditNotes.filter((n) => n.process === "Created").length + db.batches.filter((b) => b.process === "Created").length,
     },
     monthly: months.map((k) => { const x = kpi(k); return { month: k, sales: x.sales, purchases: x.purchases, outputVat: x.outputVat, inputVat: x.inputVat } }),
     topCustomers: [...byCustomer.values()].sort((a, b) => b.amount - a.amount).slice(0, 5).map((x) => ({ ...x, amount: round2(x.amount) })),

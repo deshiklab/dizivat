@@ -5,6 +5,8 @@ import type { Party, PartyRow } from "@/lib/types"
 import { round2 } from "@/lib/vat"
 import { json, problem, withAuth, zodProblem } from "./_lib"
 import { diff, recordAudit } from "@/lib/mock/audit"
+import { TODAY } from "@/lib/company"
+import { customerCredit } from "./_r3"
 
 const PARTY_FIELDS = ["name", "bin", "mode", "mobile", "email", "address", "contactPerson", "active"]
 
@@ -23,6 +25,7 @@ function toRow(k: Kind, p: Party): PartyRow {
     turnover: round2(approved.reduce((a, d) => a + d.netTotal, 0)),
     due: round2(approved.reduce((a, d) => a + d.due, 0)),
     lastDate: docs.map((d) => d.issueDate).sort().pop(),
+    ...(k === "customer" ? (({ overdue, dueInvoices }) => ({ overdue, dueInvoices }))(customerCredit(p.id, TODAY)) : {}),
   }
 }
 

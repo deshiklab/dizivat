@@ -4,7 +4,7 @@ import type { BookRow, Item, LedgerEntry, LedgerType } from "@/lib/types"
 import { round2 } from "@/lib/vat"
 
 export const FY_START = "2025-07-01"
-export const ORDER: Record<LedgerType, number> = { opening: 0, purchase: 1, prodReceive: 2, transferIn: 3, sale: 4, purchaseReturn: 5, transferOut: 6, prodIssue: 7, damage: 8 }
+export const ORDER: Record<LedgerType, number> = { opening: 0, purchase: 1, prodReceive: 2, saleReturn: 2.5, transferIn: 3, sale: 4, purchaseReturn: 5, transferOut: 6, prodIssue: 7, damage: 8 }
 
 /** A movement with its branch (`at`, undefined = main) and — for documents — value and tax (Mushak 6.1/6.2). */
 export type Row = Omit<LedgerEntry, "balance"> & {
@@ -38,7 +38,8 @@ function allocate(total: number, weights: number[]) {
 
 /**
  * Every stock movement of one item (unsorted, all branches). Purchases, returns, sales, damage, transfers and opening
- * entries are real approved documents; production is a monthly summary until R3.
+ * entries are real approved documents. R3: production batches post real issue / receive rows and credit notes post sale
+ * returns; production before the first batch (legacy history) stays a monthly summary.
  */
 export function ledgerRows(it: Item): Row[] {
   const id = it.id
@@ -72,6 +73,20 @@ export function ledgerRows(it: Item): Row[] {
     const x = pick(s.lines)
     if (x.q) rows.push({ date: s.issueDate, type: "sale", ref: s.invoiceNo, refId: s.id, party: s.customerName, partyAddress: s.customerAddress, partyBin: s.customerBin, challan: s.challanNo, refDate: s.issueDate, in: 0, out: x.q, at: s.branchId, value: x.value, sd: x.sd, vat: x.vat })
   }
+  for (const n of db.creditNotes) {
+    if (n.process !== "Approved") continue
+    const x = pick(n.lines)
+    if (x.q) rows.push({ date: n.issueDate, type: "saleReturn", ref: n.no, refId: n.id, party: n.customerName, partyAddress: n.customerAddress, partyBin: n.customerBin, challan: n.saleNo, refDate: n.saleDate, in: x.q, out: 0, at: n.branchId, value: x.value, sd: x.sd, vat: x.vat })
+  }
+  let batchIn = 0, batchOut = 0
+  for (const b of db.batches) {
+    if (b.process !== "Approved") continue
+    const party = b.vendorName ?? b.branchName
+    const rq = round2(b.lines.filter((l) => l.itemId === id).reduce((a, l) => a + l.receiveQty, 0))
+    if (rq) { batchIn += rq; rows.push({ date: b.receiveDate ?? b.issueDate, type: "prodReceive", ref: b.no, refId: b.id, party, in: rq, out: 0, at: b.branchId, value: round2(b.lines.filter((l) => l.itemId === id).reduce((a, l) => a + l.value, 0)) }) }
+    const c = b.consumption.find((x) => x.itemId === id)
+    if (c?.qty) { batchOut += c.qty; rows.push({ date: b.issueDate, type: "prodIssue", ref: b.no, refId: b.id, party, in: 0, out: c.qty, at: b.branchId, value: c.value }) }
+  }
   let damageDocs = 0
   for (const d of db.damages) {
     if (d.process !== "Approved") continue
@@ -88,14 +103,15 @@ export function ledgerRows(it: Item): Row[] {
 
   const months = monthsBetween(FY_START.slice(0, 7), TODAY.slice(0, 7))
   const byMonth = (type: "sale" | "purchase") => months.map((ym) => rows.filter((r) => r.type === type && r.date.startsWith(ym)).reduce((a, r) => a + r.in + r.out, 0))
-  if (it.prodReceive) {
-    allocate(it.prodReceive, byMonth("sale").map((v, i) => v + (i === 0 ? 1e-6 : 0))).forEach((q, i) => {
+  const legacyReceive = round2(it.prodReceive - batchIn), legacyIssue = round2(it.prodIssue - batchOut)
+  if (legacyReceive > 0) {
+    allocate(legacyReceive, byMonth("sale").map((v, i) => v + (i === 0 ? 1e-6 : 0))).forEach((q, i) => {
       if (q) rows.push({ date: `${months[i]}-01`, type: "prodReceive", in: q, out: 0, summary: true })
     })
   }
-  if (it.prodIssue) {
+  if (legacyIssue > 0) {
     const pur = byMonth("purchase")
-    allocate(it.prodIssue, pur.map((v) => v + it.opening / months.length)).forEach((q, i) => {
+    allocate(legacyIssue, pur.map((v) => v + it.opening / months.length)).forEach((q, i) => {
       if (q) rows.push({ date: monthEnd(months[i]), type: "prodIssue", in: 0, out: q, summary: true })
     })
   }
@@ -109,7 +125,7 @@ export const sortRows = <T extends Pick<Row, "date" | "type">>(rows: T[]) => row
 
 const DESC: Record<LedgerType, string> = {
   opening: "Opening balance", purchase: "Purchase", purchaseReturn: "Purchase return (debit note 6.8)", sale: "Sale", prodReceive: "Received from production",
-  prodIssue: "Issued to production", damage: "Damage / wastage", transferIn: "Transfer in", transferOut: "Transfer out",
+  prodIssue: "Issued to production", saleReturn: "Sales return (credit note 6.7)", damage: "Damage / wastage", transferIn: "Transfer in", transferOut: "Transfer out",
 }
 
 /**
@@ -145,7 +161,7 @@ export function buildBook(form: "6.1" | "6.2", it: Item, from: string, to: strin
       inQty: r.in, inValue: round2(inValue), sd: r.sd ?? 0, vat: r.vat ?? 0, outQty: r.out, outValue: round2(outValue),
       closeQty: round2(qty), closeValue: round2(value), kind: r.type, summary: r.summary,
     }
-    if (r.type === "purchaseReturn") { row.sd = -(r.sd ?? 0); row.vat = -(r.vat ?? 0) }
+    if (r.type === "purchaseReturn" || r.type === "saleReturn") { row.sd = -(r.sd ?? 0); row.vat = -(r.vat ?? 0) }
     totals.inQty += row.inQty; totals.inValue += row.inValue; totals.outQty += row.outQty; totals.outValue += row.outValue; totals.sd += row.sd; totals.vat += row.vat
     out.push(row)
   }

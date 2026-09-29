@@ -1,10 +1,11 @@
 import { addHistory, db, postStock, stockShortfall } from "@/lib/mock/db"
 import { diff } from "@/lib/mock/audit"
-import { buildPurchaseFields, buildSaleFields, unknownBranch, unknownItems, unknownServices } from "@/lib/mock/build"
+import { buildPurchaseFields, unknownBranch, unknownItems, unknownServices } from "@/lib/mock/build"
 import { delay } from "@/lib/mock/query"
-import { cancelInput, importInput, purchaseInput, saleInput } from "@/lib/schemas"
+import { cancelInput, importInput, purchaseInput } from "@/lib/schemas"
 import type { Party, Purchase, Sale } from "@/lib/types"
 import { deny, json, problem, withAuth, zodProblem } from "./_lib"
+import { lotShortfall, parseSale } from "./_r3"
 import type { z } from "zod"
 
 type Kind = "sale" | "purchase"
@@ -41,7 +42,7 @@ const find = (k: Kind, id: string) => list(k).find((x) => x.id === id || x.invoi
  */
 function approve(k: Kind, d: Doc, by: string) {
   if (k === "sale") {
-    const short = stockShortfall(d.lines, d.branchId)
+    const short = stockShortfall(d.lines, d.branchId) ?? lotShortfall(d.lines, d.id)
     if (short) return problem(409, `Insufficient stock — ${short.detail}`, short.errors)
   }
   d.process = "Approved"
@@ -75,19 +76,16 @@ export function docRoutes(k: Kind) {
     if (d.process !== "Created") return problem(409, `Only drafts can be edited — ${d.invoiceNo} is ${d.process}.`)
     const body = await req.json().catch(() => ({}))
     if (k === "sale") {
-      const parsed = saleInput.safeParse(body)
-      if (!parsed.success) return zodProblem(parsed.error)
-      if (parsed.data.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
-      const cust = db.customers.find((c) => c.id === parsed.data.customerId && c.active !== false)
-      if (!cust) return problem(422, "Validation failed", { customerId: ["unknown"] })
-      const bad = unknownItems(parsed.data.lines, "Finished Goods") ?? unknownBranch(parsed.data.branchId)
-      if (bad) return problem(422, "Validation failed", bad)
-      const fields = buildSaleFields(parsed.data, cust)
+      const parsed = parseSale(body, d as Sale)
+      if (parsed instanceof Response) return parsed
+      const fields = parsed.fields
       if (parsed.data.process === "Approved") {
-        const short = stockShortfall(fields.lines, fields.branchId)
+        const no = deny(user, "doc.approve"); if (no) return no
+        const short = stockShortfall(fields.lines, fields.branchId) ?? lotShortfall(fields.lines, d.id)
         if (short) return problem(422, `Insufficient stock — ${short.detail}`, short.errors)
       }
       const before = structuredClone(d)
+      if (!("export" in fields)) delete (d as Sale).export
       Object.assign(d, fields)
       addHistory(d, user.name, "edited", undefined, docDiff(before, d))
       if (parsed.data.process === "Approved") approve(k, d, user.name)
@@ -123,8 +121,8 @@ export function docRoutes(k: Kind) {
     if (body.process === "Cancelled") {
       const no = deny(user, "doc.cancel"); if (no) return no
       if (d.process === "Cancelled") return problem(409, `${d.invoiceNo} is already cancelled.`)
-      const dns = k === "purchase" ? db.debitNotes.filter((n) => n.purchaseId === d.id && n.process !== "Cancelled") : []
-      if (dns.length) return problem(409, `${d.invoiceNo} has debit notes (${dns.map((n) => n.no).join(", ")}) — cancel them first.`)
+      const dns = k === "purchase" ? db.debitNotes.filter((n) => n.purchaseId === d.id && n.process !== "Cancelled") : db.creditNotes.filter((n) => n.saleId === d.id && n.process !== "Cancelled")
+      if (dns.length) return problem(409, `${d.invoiceNo} has ${k === "purchase" ? "debit" : "credit"} notes (${dns.map((n) => n.no).join(", ")}) — cancel them first.`)
       const r = cancelInput.safeParse({ reason: body.reason ?? "" })
       if (!r.success) return zodProblem(r.error)
       if (d.process === "Approved") {
