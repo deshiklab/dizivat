@@ -107,6 +107,38 @@ ENDPOINTS = [
     E("PUT", "/master-items/m1", "master.edit", "Update (renames flow to linked SKUs; 422 overrideReason)"),
     E("GET", "/mushak/6.1?item=i6&from=2026-07-01&to=2026-09-25", None, "Mushak 6.1 purchase book for an input item {company, item, rows, totals, opening, closing}; from/to default to the fiscal year to date; format=csv", csv=True),
     E("GET", "/mushak/6.2?item=i17&from=2026-07-01&to=2026-09-25", None, "Mushak 6.2 sales book for a finished-goods item; other forms 404 until R4", csv=True),
+    # R3 — sales & production
+    E("GET", "/sales?category=service", None, "Service sales (R3) — same Page<Sale>; category=goods (default, incl. exports) | service | all; facet trade=local|export|deemed", page=True, csv=True),
+    E("GET", "/sale-services", None, "Service codes for service sales [{id, code, name, vatRate, vds, unit}]"),
+    E("GET", "/sales/{sale}/creditable", None, "Lines still returnable on an approved sale {sale, lines[{itemId, soldQty, returnedQty, remaining, …}]}; ?exclude=<creditNoteId>"),
+    E("GET", "/credit-notes", None, "Credit notes (Mushak 6.7) — Page<CreditNote>; facets process/reason/customer/branch; ?sale=<id>", page=True, csv=True),
+    E("POST", "/credit-notes", "doc.create", "Create {saleId, issueDate, issueTime, reason, note?, issuedBy, designation, lines[{itemId, qty}], process} (422 notApproved/exceedsRemaining; approve restores stock, reduces output VAT)"),
+    E("GET", "/credit-notes/{credit}", None, "One credit note with history"),
+    E("PUT", "/credit-notes/{credit}", "doc.edit", "Replace a draft (409 if not a draft)"),
+    E("PATCH", "/credit-notes/{credit}", None, "Approve (doc.approve) / cancel {reason≥10} (doc.cancel; 409 if the returned goods were used)"),
+    E("DELETE", "/credit-notes/{credit}", "doc.delete", "Delete a draft (409 if not a draft)"),
+    E("GET", "/production/boms", None, "Price declarations (Mushak 4.3), one row per version — Page<Bom>; facets process/item", page=True, csv=True),
+    E("POST", "/production/boms", "master.edit", "Create {itemId, effectiveDate, licenseDate?, inputs[{itemId, qty, wastagePct, price}], costs[{head, amount}], amendmentReason (v2+), note?, process}; 409 when the item already has a draft"),
+    E("GET", "/production/boms/{bom}", None, "One declaration with all versions of the item"),
+    E("PUT", "/production/boms/{bom}", "master.edit", "Replace a draft (409 if not a draft — amend instead)"),
+    E("PATCH", "/production/boms/{bom}", None, "Approve (doc.approve; supersedes the previous version) / cancel a draft (doc.cancel)"),
+    E("DELETE", "/production/boms/{bom}", "master.edit", "Delete a draft"),
+    E("GET", "/production/work-orders", None, "Work orders — Page<WorkOrder>; facets process/status; ?item=<id>", page=True, csv=True),
+    E("POST", "/production/work-orders", "doc.create", "Create {requisitionNo?, issueDate, dueDate?, remark?, lines[{itemId, qty}], process} (items need an approved BOM)"),
+    E("GET", "/production/work-orders/{wo}", None, "One work order with progress and its batches"),
+    E("PUT", "/production/work-orders/{wo}", "doc.edit", "Replace a draft"),
+    E("PATCH", "/production/work-orders/{wo}", None, "Approve / cancel (409 while live batches exist)"),
+    E("DELETE", "/production/work-orders/{wo}", "doc.delete", "Delete a draft"),
+    E("GET", "/production/batches", None, "Production batches — Page<Batch>; facets mode (inHouse|contractual|opening)/process; ?workOrder=<id>", page=True, csv=True),
+    E("POST", "/production/batches", "doc.create", "Create {mode, issueDate, receiveDate?, vendorId?, remark?, issuedBy, designation, lines[{itemId, workOrderId?, issueQty, receiveQty, damageQty, unitCost?}], consumption?, process} (approve consumes inputs at the BOM, adds finished goods)"),
+    E("GET", "/production/batches/{batch}", None, "One batch with consumption and history"),
+    E("PUT", "/production/batches/{batch}", "doc.edit", "Replace a draft"),
+    E("PATCH", "/production/batches/{batch}", None, "Approve (input stock checked) / cancel (409 if its goods were sold)"),
+    E("DELETE", "/production/batches/{batch}", "doc.delete", "Delete a draft"),
+    E("POST", "/production/batches/{batch}/receive", "doc.edit", "Contractual batch: goods back from the contractor {receiveDate, lines[{receiveQty, damageQty}]} (409 if not contractual/approved or already received)"),
+    E("GET", "/production/config", None, "Production procedure (directStock|workOrder) and consumption method (standard|actual)"),
+    E("PUT", "/production/config", "settings.manage", "Update the production config"),
+    E("GET", "/production/lots?item=i18", None, "Finished-goods lots with stock left [{batchId, batchNo, date, itemId, received, sold, available}]; ?all=1, ?exclude=<saleId>"),
     E("GET", "/audit", "audit.view", "Audit trail — Page<AuditEvent>; filters q/from/to/entity/action/actor/entityId", page=True, csv=True),
 ]
 
@@ -135,7 +167,12 @@ def fixtures():
     opening = s.get(BASE + "/opening-stock?process=Approved&size=1").json()["data"][0]["id"]
     draft = s.get(BASE + "/purchases?category=all&process=Created&size=1").json()["data"][0]["id"]
     line = s.get(BASE + f"/purchases/{purchase}").json()["lines"][0]["itemId"]
-    return {"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
+    goods_sale = s.get(BASE + "/sales?process=Approved&trade=local&size=1").json()["data"][0]
+    credit = s.get(BASE + "/credit-notes?process=Approved&size=1").json()["data"][0]["id"]
+    bom = s.get(BASE + "/production/boms?process=Approved&size=1").json()["data"][0]["id"]
+    wo = s.get(BASE + "/production/work-orders?process=Approved&size=1").json()["data"][0]["id"]
+    batch = s.get(BASE + "/production/batches?process=Approved&mode=inHouse&size=1").json()["data"][0]["id"]
+    return {"goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
 
 def run():
     fx = fixtures()
@@ -166,6 +203,8 @@ def run():
     pbody = {"issueDate": "2026-09-20", "challanNo": "CT-1", "challanDate": "2026-09-20", "method": "Bank", "discount": 0, "paid": 0, "issuedBy": "Contract", "designation": "Tester", "process": "Created"}
     imp_line = {"itemId": "i6", "qty": 10, "usd": 100, "usdRate": 122, "cdRate": 10, "rdRate": 0, "sdRate": 0, "vatRate": 15, "aitRate": 5, "atRate": 5}
     dnbody = {"purchaseId": fx["purchase"], "issueDate": "2026-09-24", "issueTime": "10:00", "reason": "damaged", "issuedBy": "Contract", "designation": "Tester", "process": "Created", "lines": [{"itemId": fx["purchaseLine"], "qty": 1}]}
+    sbody = {"issueDate": "2026-09-24", "issueTime": "10:00", "method": "Bank", "discount": 0, "paid": 0, "vds": False, "issuedBy": "Contract", "designation": "Tester", "process": "Created"}
+    cnbody = {"saleId": fx["goodsSale"], "issueDate": "2026-09-25", "issueTime": "10:00", "reason": "quality", "issuedBy": "Contract", "designation": "Tester", "process": "Created", "lines": [{"itemId": fx["saleLine"], "qty": 1}]}
     cases = [
         (None, "POST", "/auth/login", {}, 422, "username"),
         (None, "POST", "/auth/login", {"username": rnd, "password": "x"}, 401, "_"),
@@ -233,6 +272,33 @@ def run():
         ("arif", "GET", "/mushak/6.1?item=i6&from=2026-09-10&to=2026-09-01", None, 422, "to"),
         ("arif", "GET", "/mushak/6.1?item=i6&from=bad&to=2026-09-25", None, 422, "from"),
         ("arif", "GET", "/mushak/9.1?item=i6&from=2026-07-01&to=2026-09-25", None, 404, None),
+        # R3 — sales & production
+        ("arif", "POST", "/sales", {**sbody, "customerId": "c8", "lines": [{"itemId": "i17", "qty": 1, "price": 100, "sdRate": 0, "vatRate": 0}]}, 422, "export"),
+        ("arif", "POST", "/sales", {**sbody, "customerId": "c8", "category": "service", "lines": [{"itemId": "ss1", "qty": 1, "price": 100, "sdRate": 0, "vatRate": 15}]}, 422, "customerId"),
+        ("arif", "POST", "/sales", {**sbody, "customerId": "c1", "lines": [{"itemId": "i17", "qty": 1, "price": 100, "sdRate": 0, "vatRate": 0}], "export": {"deemed": False, "lcNo": "L", "lcDate": "2026-09-01", "customsHouse": "301", "country": "UAE", "billNo": "B", "billDate": "2026-09-24", "shippingAddress": "x"}}, 422, "export.deemed"),
+        ("arif", "POST", "/sales", {**sbody, "customerId": "c1", "lines": [{"itemId": "i17", "qty": 1, "price": 100, "sdRate": 0, "vatRate": 0}], "export": {"deemed": True, "lcNo": "L"}}, 422, "export.lcDate"),
+        ("arif", "GET", "/sales/nope/creditable", None, 404, None),
+        ("arif", "GET", "/credit-notes/nope", None, 404, None),
+        ("arif", "POST", "/credit-notes", {}, 422, "saleId"),
+        ("arif", "POST", "/credit-notes", {**cnbody, "lines": [{"itemId": fx["saleLine"], "qty": 99999999}]}, 422, "lines.0.qty"),
+        ("arif", "PUT", f"/credit-notes/{fx['credit']}", {}, 409, None),
+        ("arif", "DELETE", f"/credit-notes/{fx['credit']}", None, 409, None),
+        ("arif", "PATCH", f"/credit-notes/{fx['credit']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
+        ("arif", "GET", "/production/boms/nope", None, 404, None),
+        ("arif", "POST", "/production/boms", {}, 422, "itemId"),
+        ("arif", "POST", "/production/boms", {"itemId": "i20", "effectiveDate": "2026-10-01", "inputs": [{"itemId": "i1", "qty": 1, "wastagePct": 0, "price": 1}], "costs": [], "amendmentReason": "Contract test amendment", "process": "Created"}, 409, None),
+        ("arif", "PUT", f"/production/boms/{fx['bom']}", {}, 409, None),
+        ("arif", "DELETE", f"/production/boms/{fx['bom']}", None, 409, None),
+        ("arif", "GET", "/production/work-orders/nope", None, 404, None),
+        ("arif", "POST", "/production/work-orders", {}, 422, "lines"),
+        ("arif", "PUT", f"/production/work-orders/{fx['wo']}", {}, 409, None),
+        ("arif", "GET", "/production/batches/nope", None, 404, None),
+        ("arif", "POST", "/production/batches", {}, 422, "mode"),
+        ("arif", "PUT", f"/production/batches/{fx['batch']}", {}, 409, None),
+        ("arif", "DELETE", f"/production/batches/{fx['batch']}", None, 409, None),
+        ("arif", "POST", f"/production/batches/{fx['batch']}/receive", {"receiveDate": "2026-09-25", "lines": [{"receiveQty": 1}]}, 409, None),
+        ("arif", "POST", "/production/batches/nope/receive", {}, 404, None),
+        ("admin", "PUT", "/production/config", {}, 422, "procedure"),
     ]
     for user, m, path, body, status, key in cases:
         r = S(user).request(m, BASE + path, json=body)

@@ -121,10 +121,10 @@ export function docRoutes(k: Kind) {
     if (body.process === "Cancelled") {
       const no = deny(user, "doc.cancel"); if (no) return no
       if (d.process === "Cancelled") return problem(409, `${d.invoiceNo} is already cancelled.`)
-      const dns = k === "purchase" ? db.debitNotes.filter((n) => n.purchaseId === d.id && n.process !== "Cancelled") : db.creditNotes.filter((n) => n.saleId === d.id && n.process !== "Cancelled")
-      if (dns.length) return problem(409, `${d.invoiceNo} has ${k === "purchase" ? "debit" : "credit"} notes (${dns.map((n) => n.no).join(", ")}) — cancel them first.`)
       const r = cancelInput.safeParse({ reason: body.reason ?? "" })
       if (!r.success) return zodProblem(r.error)
+      const dns = k === "purchase" ? db.debitNotes.filter((n) => n.purchaseId === d.id && n.process !== "Cancelled") : db.creditNotes.filter((n) => n.saleId === d.id && n.process !== "Cancelled")
+      if (dns.length) return problem(409, `${d.invoiceNo} has ${k === "purchase" ? "debit" : "credit"} notes (${dns.map((n) => n.no).join(", ")}) — cancel them first.`)
       if (d.process === "Approved") {
         if (k === "purchase") {
           const short = stockShortfall(d.lines, d.branchId)

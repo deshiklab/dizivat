@@ -135,8 +135,9 @@ export function BatchForm({ open, onOpenChange, variant, doc, workOrderId, onSav
     },
     onSuccess: (d) => { refresh("batch", d); toast.success(t(d.process === "Approved" ? "approved" : "saved", { no: d.no })); onSaved?.(d); onOpenChange(false) },
     onError: (e) => {
-      if (e instanceof ApiError && e.errors) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
-      toast.error(e.message)
+      // field errors show inline — a toast would cover the sheet footer
+      if (e instanceof ApiError && e.errors && Object.keys(e.errors).length) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
+      else toast.error(e.message)
     },
   })
   const submit = (process: FormValues["process"]) => { setValue("process", process); return handleSubmit((v) => save.mutate({ ...v, process }))() }
@@ -199,10 +200,10 @@ export function BatchForm({ open, onOpenChange, variant, doc, workOrderId, onSav
                 const woOpts = wos.filter((x) => x.lines.some((y) => y.itemId === l.itemId))
                 const woLine = wos.find((x) => x.id === l.workOrderId)?.lines.find((y) => y.itemId === l.itemId)
                 const over = !contractual && (Number(l.receiveQty) || 0) + (Number(l.damageQty) || 0) > (Number(l.issueQty) || 0) + 1e-9
-                const woItems = [...(procedure === "workOrder" ? [] : [{ value: NONE, label: t("noWorkOrder") }]), ...woOpts.map((x) => ({ value: x.id, label: `${x.no}${x.requisitionNo ? ` · ${x.requisitionNo}` : ""}` }))]
+                const woItems = [...(procedure === "workOrder" ? [] : [{ value: NONE, label: t("noWorkOrder") }]), ...woOpts.map((x) => ({ value: x.id, label: x.no }))]
                 return (
-                  <div key={f.id} className={`grid gap-2 rounded-md border p-3 sm:items-start ${opening ? "sm:grid-cols-[1fr_7rem_7rem_7rem_8rem_auto]" : contractual ? "sm:grid-cols-[1fr_12rem_8rem_auto]" : "sm:grid-cols-[1fr_11rem_7rem_7rem_7rem_auto]"}`}>
-                    <Field id={`lines.${i}.itemId`} label={t("field.itemN", { n: i + 1 })} required error={err?.itemId?.message}>
+                  <div key={f.id} className={`grid gap-2 rounded-md border p-3 sm:items-start ${opening ? "sm:grid-cols-[1fr_7rem_7rem_7rem_8rem_auto]" : contractual ? "sm:grid-cols-[minmax(0,1fr)_12rem_8rem_auto]" : "sm:grid-cols-[minmax(0,1fr)_10rem_7rem_7rem_7rem_auto]"}`}>
+                    <Field id={`lines.${i}.itemId`} label={t("field.itemN", { n: i + 1 })} required error={err?.itemId?.message} className="min-w-0">
                       {(a) => <Controller control={control} name={`lines.${i}.itemId`} render={({ field }) => (
                         <Combobox id={a.id} describedBy={a["aria-describedby"]} invalid={!!a["aria-invalid"]} value={field.value}
                           onChange={(v) => { field.onChange(v); setValue(`lines.${i}.workOrderId`, "") }}
@@ -210,10 +211,10 @@ export function BatchForm({ open, onOpenChange, variant, doc, workOrderId, onSav
                       )} />}
                     </Field>
                     {!opening && (
-                      <Field id={`lines.${i}.workOrderId`} label={t("field.workOrder")} required={procedure === "workOrder"} error={err?.workOrderId?.message}>
+                      <Field id={`lines.${i}.workOrderId`} label={t("field.workOrder")} required={procedure === "workOrder"} error={err?.workOrderId?.message} className="min-w-0">
                         {(a) => <Controller control={control} name={`lines.${i}.workOrderId`} render={({ field }) => (
                           <Select value={field.value || (procedure === "workOrder" ? "" : NONE)} onValueChange={(v) => field.onChange(v === NONE ? "" : v)} items={woItems} disabled={!l.itemId}>
-                            <SelectTrigger id={a.id} className="w-full" aria-invalid={a["aria-invalid"]} aria-describedby={a["aria-describedby"]}><SelectValue placeholder={t("pickWorkOrder")} /></SelectTrigger>
+                            <SelectTrigger id={a.id} className="w-full min-w-0 overflow-hidden" aria-invalid={a["aria-invalid"]} aria-describedby={a["aria-describedby"]}><SelectValue className="truncate" placeholder={t("pickWorkOrder")} /></SelectTrigger>
                             <SelectContent>{woItems.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
                           </Select>
                         )} />}

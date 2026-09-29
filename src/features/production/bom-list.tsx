@@ -110,7 +110,7 @@ export function BomList() {
         page={state.page} size={state.size} sort={state.sort}
         onPage={(page) => set({ page }, false)} onSize={(size) => set({ size })} onSort={(sort) => set({ sort })}
         getRowId={(r) => r.id} onRowClick={(r) => setViewId(r.id)} filtered={activeCount > 0}
-        defaultHidden={["uom", "licenseDate", "inputs", "wastageValue", "salePrice"]}
+        defaultHidden={["uom", "licenseDate", "inputs", "wastageValue", "salePrice", "unitCost"]}
         filters={
           <>
             <SearchInput value={state.q} onChange={(v) => set({ q: v })} placeholder={t("searchPlaceholder")} />

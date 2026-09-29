@@ -96,8 +96,9 @@ export function BomForm({ open, onOpenChange, doc, base, itemId, onSaved }: {
       onOpenChange(false)
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.errors) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
-      toast.error(e.message)
+      // field errors show inline — a toast would cover the sheet footer
+      if (e instanceof ApiError && e.errors && Object.keys(e.errors).length) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
+      else toast.error(e.message)
     },
   })
   const submit = (process: FormValues["process"]) => { setValue("process", process); return handleSubmit((v) => save.mutate({ ...v, process }))() }

@@ -155,8 +155,8 @@ function ReceiveForm({ d, onDone }: { d: Batch; onDone: () => void }) {
     mutationFn: () => api.production.batches.receive(d.id, { receiveDate: date, lines: rows }),
     onSuccess: (b) => { refresh("batch", b); toast.success(t("received", { no: b.no })); onDone() },
     onError: (e) => {
-      if (e instanceof ApiError && e.errors) setErrs(Object.fromEntries(Object.entries(e.errors).map(([k, v]) => [k, v[0]])))
-      toast.error(e.message)
+      if (e instanceof ApiError && e.errors && Object.keys(e.errors).length) setErrs(Object.fromEntries(Object.entries(e.errors).map(([k, v]) => [k, v[0]])))
+      else toast.error(e.message)
     },
   })
   const set = (i: number, k: "receiveQty" | "damageQty", v: number) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: Number.isFinite(v) ? v : 0 } : x)))

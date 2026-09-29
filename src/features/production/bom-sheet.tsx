@@ -166,9 +166,11 @@ function Compare({ d, others }: { d: BomRow; others: BomRow[] }) {
   const locale = useLocale()
   const prev = others.filter((o) => o.version < d.version).sort((a, b) => b.version - a.version)[0] ?? others[0]
   const [otherId, setOtherId] = React.useState(prev.id)
-  const o = others.find((x) => x.id === otherId) ?? prev
-  const ids = [...new Set([...o.inputs.map((i) => i.itemId), ...d.inputs.map((i) => i.itemId)])]
-  const heads = [...new Set([...o.costs, ...d.costs].filter((c) => c.amount > 0).map((c) => c.head))]
+  const picked = others.find((x) => x.id === otherId) ?? prev
+  // always older → newer, so "change" reads as what the newer version did
+  const [o, n] = picked.version < d.version ? [picked, d] : [d, picked]
+  const ids = [...new Set([...o.inputs.map((i) => i.itemId), ...n.inputs.map((i) => i.itemId)])]
+  const heads = [...new Set([...o.costs, ...n.costs].filter((c) => c.amount > 0).map((c) => c.head))]
   const delta = (a: number, b: number, money = true) => {
     const x = round2(b - a)
     if (Math.abs(x) < 0.00005) return <span className="text-muted-foreground">—</span>
@@ -176,7 +178,7 @@ function Compare({ d, others }: { d: BomRow; others: BomRow[] }) {
     return <span className={`inline-flex items-center gap-0.5 tabular ${x > 0 ? "text-destructive" : "text-success"}`}><Icon className="size-3" aria-hidden />{money ? fmtMoney(Math.abs(x), locale) : fmtNum(Math.abs(x), locale, 4)}<span className="sr-only">{x > 0 ? t("increase") : t("decrease")}</span></span>
   }
   const label = (b: BomRow) => `v${fmtNum(b.version, locale)} · ${fmtDate(b.effectiveDate, locale)} · ${t(`status.${b.status}`)}`
-  const vA = `v${fmtNum(o.version, locale)}`, vB = `v${fmtNum(d.version, locale)}`
+  const vA = `v${fmtNum(o.version, locale)}`, vB = `v${fmtNum(n.version, locale)}`
   return (
     <div className="grid gap-4">
       <div className="grid max-w-sm gap-1.5">
@@ -191,7 +193,7 @@ function Compare({ d, others }: { d: BomRow; others: BomRow[] }) {
         { label: `${t("col.value")} ${vA}`, right: true }, { label: `${t("col.value")} ${vB}`, right: true }, { label: t("col.change"), right: true },
       ]}>
         {ids.map((id) => {
-          const a = o.inputs.find((i) => i.itemId === id), b = d.inputs.find((i) => i.itemId === id)
+          const a = o.inputs.find((i) => i.itemId === id), b = n.inputs.find((i) => i.itemId === id)
           return (
             <tr key={id} className="border-b last:border-0">
               <td className="px-3 py-2">{(b ?? a)!.name}{!a && <span className="ml-1 text-xs text-primary">({t("added")})</span>}{!b && <span className="ml-1 text-xs text-destructive">({t("removed")})</span>}</td>
@@ -207,17 +209,17 @@ function Compare({ d, others }: { d: BomRow; others: BomRow[] }) {
       </MiniTable>
       <MiniTable caption={t("compareTotals")} minWidth={480} head={[{ label: t("col.head") }, { label: vA, right: true }, { label: vB, right: true }, { label: t("col.change"), right: true }]}>
         {[
-          ...heads.map((h) => [t(`head.${h}`), o.costs.find((c) => c.head === h)?.amount ?? 0, d.costs.find((c) => c.head === h)?.amount ?? 0] as const),
-          [t("col.material"), o.materialValue, d.materialValue] as const,
-          [t("col.valueAdded"), o.valueAdded, d.valueAdded] as const,
-          [t("col.price"), o.price, d.price] as const,
+          ...heads.map((h) => [t(`head.${h}`), o.costs.find((c) => c.head === h)?.amount ?? 0, n.costs.find((c) => c.head === h)?.amount ?? 0] as const),
+          [t("col.material"), o.materialValue, n.materialValue] as const,
+          [t("col.valueAdded"), o.valueAdded, n.valueAdded] as const,
+          [t("col.price"), o.price, n.price] as const,
         ].map(([k, a, b], i, arr) => (
           <tr key={k} className={`border-b last:border-0 ${i === arr.length - 1 ? "font-semibold" : ""}`}>
             <td className="px-3 py-2">{k}</td><td className="px-3 py-2 text-right"><Money value={a} /></td><td className="px-3 py-2 text-right"><Money value={b} /></td><td className="px-3 py-2 text-right">{delta(a, b)}</td>
           </tr>
         ))}
       </MiniTable>
-      {d.amendmentReason && <p className="text-sm"><span className="text-muted-foreground">{t("field.amendmentReason")}:</span> {d.amendmentReason}</p>}
+      {n.amendmentReason && <p className="text-sm"><span className="text-muted-foreground">{t("fieln.amendmentReason")}:</span> {n.amendmentReason}</p>}
     </div>
   )
 }

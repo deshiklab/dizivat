@@ -80,8 +80,9 @@ export function CreditForm({ open, onOpenChange, doc, saleId, onSaved }: {
     mutationFn: (v: FormValues) => { const body = { ...v, lines: v.lines.filter((l) => l.qty > 0) }; return doc ? api.creditNotes.update(doc.id, body) : api.creditNotes.create(body) },
     onSuccess: (d) => { refresh("credit", d); toast.success(t(d.process === "Approved" ? "approved" : "saved", { no: d.no })); onSaved?.(d); onOpenChange(false) },
     onError: (e) => {
-      if (e instanceof ApiError && e.errors) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
-      toast.error(e.message)
+      // field errors show inline — a toast would cover the sheet footer
+      if (e instanceof ApiError && e.errors && Object.keys(e.errors).length) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
+      else toast.error(e.message)
     },
   })
   const submit = (process: FormValues["process"]) => { setValue("process", process); return handleSubmit((v) => save.mutate({ ...v, process }))() }
