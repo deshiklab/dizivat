@@ -7,7 +7,7 @@ import type { Permission } from "@/lib/auth/roles"
 /**
  * Single module registry (replaces the prototype's GROUPS object + 851 inline onclick handlers).
  * `release` = the R-milestone from the development plan in which the page ships.
- * `ready` = built (Sprints 1–4 + R2) (renders a real page); others render a "Planned for Rx" page.
+ * `ready` = built (Sprints 1–4 + R2 + R3) (renders a real page); others render a "Planned for Rx" page.
  */
 export type Release = "S1" | "R1" | "R2" | "R3" | "R4"
 export interface NavItem { key: string; href: string; release: Release; ready?: boolean; legacy?: string; perm?: Permission }
@@ -27,9 +27,9 @@ export const NAV: NavGroup[] = [
     key: "sales", icon: ShoppingCart, href: "/sales", shortcut: "g s",
     items: [
       { key: "salesInvoices", href: "/sales", release: "R3", ready: true, legacy: "/en/sales" },
-      { key: "serviceSales", href: "/sales/services", release: "R3" },
-      { key: "creditNotes", href: "/sales/credit-notes", release: "R3" },
-      { key: "exports", href: "/sales/exports", release: "R3" },
+      { key: "serviceSales", href: "/sales/services", release: "R3", ready: true },
+      { key: "creditNotes", href: "/sales/credit-notes", release: "R3", ready: true },
+      { key: "exports", href: "/sales/exports", release: "R3", ready: true },
     ],
   },
   {
@@ -54,9 +54,11 @@ export const NAV: NavGroup[] = [
   {
     key: "production", icon: Factory, href: "/production/bom",
     items: [
-      { key: "bom", href: "/production/bom", release: "R3" },
-      { key: "batches", href: "/production/batches", release: "R3" },
-      { key: "workOrders", href: "/production/work-orders", release: "R3" },
+      { key: "bom", href: "/production/bom", release: "R3", ready: true },
+      { key: "batches", href: "/production/batches", release: "R3", ready: true },
+      { key: "workOrders", href: "/production/work-orders", release: "R3", ready: true },
+      { key: "productionOpening", href: "/production/opening", release: "R3", ready: true },
+      { key: "productionConfig", href: "/production/config", release: "R3", ready: true, perm: "settings.manage" },
     ],
   },
   {

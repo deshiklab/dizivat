@@ -60,7 +60,7 @@ const eslintConfig = [
   },
   {
     // Mushak 6.3 / 6.8 reproduce the NBR-prescribed bilingual forms; its captions are fixed by law, not UI copy
-    files: ["src/features/sales/mushak-63.tsx", "src/features/r2/mushak-68.tsx"],
+    files: ["src/features/sales/mushak-63.tsx", "src/features/r2/mushak-68.tsx", "src/features/credit/mushak-67.tsx", "src/features/production/mushak-43.tsx", "src/features/production/mushak-64.tsx"],
     rules: { "no-restricted-syntax": ["error", ...noHex] },
   },
   {

@@ -14,6 +14,8 @@ const num = (id: string) => Number(id.slice(1)) || 0
 
 /** R2 seeds service purchases after the goods purchases (p77 …); they share the id sequence. */
 const R2_SEEDED_PURCHASES = 30
+/** R3 seeds service sales and deemed exports after the goods sales (s215 …). */
+const R3_SEEDED_SALES = 15
 
 function docIds(prefix: "s" | "p", docs: { id: string }[], extraSeeded = 0) {
   const seeded = docs.map((d) => d.id)
@@ -25,7 +27,7 @@ function docIds(prefix: "s" | "p", docs: { id: string }[], extraSeeded = 0) {
 /** /sales/[id] (+ /edit) and /purchases/[id] (+ /edit): documents plus the "coming soon" siblings (/sales/services …). */
 export function docParams(kind: "sales" | "purchases") {
   if (!STATIC_DEMO) return []
-  const ids = kind === "sales" ? docIds("s", seed.sales) : docIds("p", seed.purchases, R2_SEEDED_PURCHASES)
+  const ids = kind === "sales" ? docIds("s", seed.sales, R3_SEEDED_SALES) : docIds("p", seed.purchases, R2_SEEDED_PURCHASES)
   const extra = placeholders.filter((h) => h.split("/").length === 3 && h.startsWith(`/${kind}/`)).map((h) => h.split("/")[2])
   return [...ids, ...extra].map((id) => ({ id }))
 }

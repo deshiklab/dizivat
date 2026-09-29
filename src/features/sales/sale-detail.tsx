@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { ArrowLeft, Download, Link2, Mail, Printer } from "lucide-react"
+import { ArrowLeft, Download, FileMinus2, Link2, Mail, Printer, Ship } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,6 +17,9 @@ import { EmptyState } from "@/components/common/empty-state"
 import { Link, useRouter } from "@/i18n/navigation"
 import { api, ApiError } from "@/lib/api/client"
 import { fmtDate } from "@/lib/format"
+import { customsHouseName } from "@/lib/r2"
+import { useCan } from "@/components/auth/me-provider"
+import type { Sale } from "@/lib/types"
 import { Mushak63 } from "./mushak-63"
 import { RecordHistory } from "@/features/audit/record-history"
 import { useDocActions } from "@/features/docs/use-doc-actions"
@@ -33,7 +36,7 @@ export function SaleDetail({ id }: { id: string }) {
   const [printFlag, setPrintFlag] = useQueryState("print")
   const { data: s, isLoading, error } = useQuery({ queryKey: ["sale", id], queryFn: () => api.sales.get(id) })
 
-  const actions = useDocActions("sale", { onDeleted: () => router.push("/sales") })
+  const actions = useDocActions("sale", { onDeleted: () => router.push(s?.category === "service" ? "/sales/services" : "/sales") })
 
   const print = React.useCallback(() => { setTab("mushak"); setTimeout(() => window.print(), 150) }, [setTab])
   React.useEffect(() => {
@@ -52,7 +55,9 @@ export function SaleDetail({ id }: { id: string }) {
     <>
       <PageHeader
         crumbs={[{ label: s.invoiceNo }]}
-        title={<span className="flex flex-wrap items-center gap-2">{s.invoiceNo} <ProcessBadge value={s.process} /> <ModeBadge value={s.mode} /></span>}
+        title={<span className="flex flex-wrap items-center gap-2">{s.invoiceNo} <ProcessBadge value={s.process} /> <ModeBadge value={s.mode} />
+          {s.category === "service" && <Pill tone="info">{t("services.badge")}</Pill>}
+          {s.export && <Pill tone={s.export.deemed ? "info" : "success"}>{t(`trade.${s.export.deemed ? "deemed" : "export"}`)}</Pill>}</span>}
         description={t("detailSub", { challan: s.challanNo, customer: s.customerName, date: fmtDate(s.issueDate, locale) })}
         actions={
           <>
@@ -86,7 +91,7 @@ export function SaleDetail({ id }: { id: string }) {
                   <tbody>
                     {s.lines.map((l, i) => (
                       <tr key={i} className="border-b last:border-0">
-                        <td className="px-4 py-2">{l.name}</td>
+                        <td className="px-4 py-2">{l.name}{l.batchNo && <span className="block text-xs text-muted-foreground">{t("lot.label")}: <Link href={`/production/batches?view=${l.batchId}`} className="tabular hover:underline">{l.batchNo}</Link></span>}</td>
                         <td className="px-4 py-2 tabular text-muted-foreground">{l.hsCode}</td>
                         <td className="px-4 py-2 text-right whitespace-nowrap"><Num value={l.qty} /> {l.uom}</td>
                         <td className="px-4 py-2 text-right"><Money value={l.price} /></td>
@@ -127,6 +132,8 @@ export function SaleDetail({ id }: { id: string }) {
                   </dl>
                 </CardContent>
               </Card>
+              {s.export && <ExportCard s={s} />}
+              <CreditNotesCard s={s} />
               <HistoryCard history={s.history} />
             </div>
           </div>
@@ -136,5 +143,55 @@ export function SaleDetail({ id }: { id: string }) {
         </TabsContent>
       </Tabs>
     </>
+  )
+}
+
+function ExportCard({ s }: { s: Sale }) {
+  const t = useTranslations("sales")
+  const locale = useLocale()
+  const e = s.export!
+  const rows: [string, string][] = [
+    [t("export.lcNo"), `${e.lcNo} · ${fmtDate(e.lcDate, locale)}`],
+    ...(!e.deemed ? [
+      [t("export.billNo"), `${e.billNo} · ${e.billDate ? fmtDate(e.billDate, locale) : "—"}`], [t("export.customsHouse"), customsHouseName(e.customsHouse)],
+      [t("export.country"), e.country], [t("export.shippingAddress"), e.shippingAddress], [t("export.cnfFirm"), e.cnfFirm || "—"],
+    ] as [string, string][] : []),
+  ]
+  return (
+    <Card>
+      <CardHeader><CardTitle className="flex items-center gap-2"><Ship className="size-4" aria-hidden /> {e.deemed ? t("export.deemedTitle") : t("export.title")}</CardTitle></CardHeader>
+      <CardContent><dl className="grid gap-2 text-sm">{rows.map(([k, v]) => <div key={k} className="grid gap-0.5"><dt className="text-xs text-muted-foreground">{k}</dt><dd className="break-words">{v}</dd></div>)}</dl></CardContent>
+    </Card>
+  )
+}
+
+/** Credit notes (Mushak 6.7) issued against this invoice, with a shortcut to issue one. */
+function CreditNotesCard({ s }: { s: Sale }) {
+  const t = useTranslations("sales")
+  const tc = useTranslations("credit")
+  const locale = useLocale()
+  const can = useCan()
+  const { data } = useQuery({ queryKey: ["creditNotes", { sale: s.id }], queryFn: () => api.creditNotes.list({ sale: s.id, size: 50 }) })
+  const notes = data?.data ?? []
+  if (!notes.length && (s.process !== "Approved" || !can("doc.create"))) return null
+  return (
+    <Card>
+      <CardHeader><CardTitle className="flex items-center gap-2"><FileMinus2 className="size-4" aria-hidden /> {t("creditNotes")}</CardTitle></CardHeader>
+      <CardContent className="grid gap-3">
+        {notes.length ? (
+          <ul className="grid gap-2 text-sm">
+            {notes.map((n) => (
+              <li key={n.id} className="flex items-center justify-between gap-2">
+                <Link href={`/sales/credit-notes?view=${n.id}`} className="font-medium text-primary tabular hover:underline">{n.no}</Link>
+                <span className="text-xs text-muted-foreground">{fmtDate(n.issueDate, locale)}</span>
+                <ProcessBadge value={n.process} />
+                <Money value={n.total} />
+              </li>
+            ))}
+          </ul>
+        ) : <p className="text-sm text-muted-foreground">{t("noCreditNotes")}</p>}
+        {s.process === "Approved" && can("doc.create") && <Button variant="outline" size="sm" render={<Link href={`/sales/credit-notes?new=1&sale=${s.id}`} />}><FileMinus2 /> {tc("new")}</Button>}
+      </CardContent>
+    </Card>
   )
 }

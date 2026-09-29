@@ -66,7 +66,7 @@ export function Mushak63({ sale }: { sale: Sale }) {
             {sale.lines.map((l, i) => (
               <tr key={i} className="tabular">
                 <td className="border border-neutral-400 p-1 text-center">{i + 1}</td>
-                <td className="border border-neutral-400 p-1">{l.name}<span className="block text-[0.625rem] text-neutral-500">HS {l.hsCode}</span></td>
+                <td className="border border-neutral-400 p-1">{l.name}<span className="block text-[0.625rem] text-neutral-500">{sale.category === "service" ? "Service code" : "HS"} {l.hsCode}{l.batchNo ? ` · Batch ${l.batchNo}` : ""}</span></td>
                 <td className="border border-neutral-400 p-1 text-center">{l.uom}</td>
                 <td className="border border-neutral-400 p-1 text-right">{fmtNum(l.qty, "en", 2)}</td>
                 <td className="border border-neutral-400 p-1 text-right">{m(l.price)}</td>
@@ -99,7 +99,9 @@ export function Mushak63({ sale }: { sale: Sale }) {
         </table>
       </div>
       <p className="mt-2 text-[0.6875rem]"><strong>In words:</strong> {amountInWords(sale.netTotal)}</p>
-      {sale.mode === "Foreign" && <p className="mt-1 text-[0.6875rem]">Zero-rated export supply (VAT 0%) under the First Schedule, VAT &amp; SD Act 2012.</p>}
+      {sale.mode === "Foreign" && !sale.export?.deemed && <p className="mt-1 text-[0.6875rem]">Zero-rated export supply (VAT 0%) under the First Schedule, VAT &amp; SD Act 2012.</p>}
+      {sale.export?.deemed && <p className="mt-1 text-[0.6875rem]">Deemed export — zero-rated local supply against back-to-back LC {sale.export.lcNo} ({fmtDate(sale.export.lcDate, "en", "dd/MM/yyyy")}).</p>}
+      {sale.export && !sale.export.deemed && <p className="mt-1 text-[0.6875rem] tabular">LC {sale.export.lcNo} ({fmtDate(sale.export.lcDate, "en", "dd/MM/yyyy")}) · Bill of Export {sale.export.billNo}{sale.export.billDate ? ` (${fmtDate(sale.export.billDate, "en", "dd/MM/yyyy")})` : ""} · {sale.export.country}</p>}
 
       <footer className="mt-10 grid grid-cols-2 gap-8">
         <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
