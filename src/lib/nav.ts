@@ -7,7 +7,7 @@ import type { Permission } from "@/lib/auth/roles"
 /**
  * Single module registry (replaces the prototype's GROUPS object + 851 inline onclick handlers).
  * `release` = the R-milestone from the development plan in which the page ships.
- * `ready` = built (Sprints 1–3) (renders a real page); others render a "Planned for Rx" page.
+ * `ready` = built (Sprints 1–4 + R2) (renders a real page); others render a "Planned for Rx" page.
  */
 export type Release = "S1" | "R1" | "R2" | "R3" | "R4"
 export interface NavItem { key: string; href: string; release: Release; ready?: boolean; legacy?: string; perm?: Permission }
@@ -36,9 +36,9 @@ export const NAV: NavGroup[] = [
     key: "purchase", icon: PackageOpen, href: "/purchases", shortcut: "g p",
     items: [
       { key: "purchases", href: "/purchases", release: "R2", ready: true, legacy: "/en/purchase" },
-      { key: "servicePurchases", href: "/purchases/services", release: "R2" },
-      { key: "debitNotes", href: "/purchases/debit-notes", release: "R2" },
-      { key: "openingStock", href: "/purchases/opening", release: "R2" },
+      { key: "servicePurchases", href: "/purchases/services", release: "R2", ready: true },
+      { key: "debitNotes", href: "/purchases/debit-notes", release: "R2", ready: true },
+      { key: "openingStock", href: "/purchases/opening", release: "R2", ready: true },
     ],
   },
   {
@@ -48,7 +48,7 @@ export const NAV: NavGroup[] = [
       { key: "finishedGoods", href: "/inventory/finished-goods", release: "R2", ready: true },
       { key: "transfers", href: "/inventory/transfers", release: "R2", ready: true },
       { key: "damage", href: "/inventory/damage", release: "R2", ready: true },
-      { key: "masterItems", href: "/inventory/master-items", release: "R2" },
+      { key: "masterItems", href: "/inventory/master-items", release: "R2", ready: true },
     ],
   },
   {
@@ -70,6 +70,8 @@ export const NAV: NavGroup[] = [
   {
     key: "nbrVat", icon: FileSpreadsheet, href: "/vat/mushak",
     items: [
+      { key: "purchaseBook", href: "/vat/mushak-6-1", release: "R2", ready: true },
+      { key: "salesBook", href: "/vat/mushak-6-2", release: "R2", ready: true },
       { key: "mushakReports", href: "/vat/mushak", release: "R4" },
       { key: "return91", href: "/vat/return-9-1", release: "R4" },
       { key: "treasury", href: "/vat/tr-6", release: "R4" },

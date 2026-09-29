@@ -12,17 +12,20 @@ export const NEW_DOC_HEADROOM = 50
 const placeholders = NAV.flatMap((g) => g.items).filter((i) => !i.ready).map((i) => i.href)
 const num = (id: string) => Number(id.slice(1)) || 0
 
-function docIds(prefix: "s" | "p", docs: { id: string }[]) {
+/** R2 seeds service purchases after the goods purchases (p77 …); they share the id sequence. */
+const R2_SEEDED_PURCHASES = 30
+
+function docIds(prefix: "s" | "p", docs: { id: string }[], extraSeeded = 0) {
   const seeded = docs.map((d) => d.id)
   const max = docs.reduce((m, d) => Math.max(m, num(d.id)), 0)
-  const fresh = Array.from({ length: NEW_DOC_HEADROOM }, (_, i) => `${prefix}${max + i + 1}`)
+  const fresh = Array.from({ length: NEW_DOC_HEADROOM + extraSeeded }, (_, i) => `${prefix}${max + i + 1}`)
   return [...seeded, ...fresh]
 }
 
 /** /sales/[id] (+ /edit) and /purchases/[id] (+ /edit): documents plus the "coming soon" siblings (/sales/services …). */
 export function docParams(kind: "sales" | "purchases") {
   if (!STATIC_DEMO) return []
-  const ids = kind === "sales" ? docIds("s", seed.sales) : docIds("p", seed.purchases)
+  const ids = kind === "sales" ? docIds("s", seed.sales) : docIds("p", seed.purchases, R2_SEEDED_PURCHASES)
   const extra = placeholders.filter((h) => h.split("/").length === 3 && h.startsWith(`/${kind}/`)).map((h) => h.split("/")[2])
   return [...ids, ...extra].map((id) => ({ id }))
 }
