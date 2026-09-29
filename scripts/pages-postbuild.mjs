@@ -18,11 +18,11 @@ main{max-width:30rem;padding:2rem;text-align:center}a{color:#1d5fd1;font-weight:
 </head><body><main>${body}</main></body></html>
 `
 
-writeFileSync("out/index.html", page("RBS VAT", `<p>Opening <a href="${base}/en/">RBS VAT</a> …</p>`,
+writeFileSync("out/index.html", page("DiziVAT", `<p>Opening <a href="${base}/en/">DiziVAT</a> …</p>`,
   `<script>(function(){var l=(navigator.languages||[navigator.language||""]).join(",");location.replace("${base}/"+(/(^|,)bn/i.test(l)?"bn":"en")+"/")})()</script>
 <noscript><meta http-equiv="refresh" content="0;url=${base}/en/"></noscript>`))
 
-writeFileSync("out/404.html", page("Page not found · RBS VAT", `
+writeFileSync("out/404.html", page("Page not found · DiziVAT", `
 <p style="font-size:2.5rem;margin:0">404</p>
 <h1>Page not found</h1><p>This page doesn't exist in the demo.</p>
 <h1 lang="bn">পৃষ্ঠাটি পাওয়া যায়নি</h1><p lang="bn">এই পৃষ্ঠাটি ডেমোতে নেই।</p>

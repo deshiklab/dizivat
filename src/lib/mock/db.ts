@@ -154,8 +154,8 @@ function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], 
 
 /** In-memory store kept on globalThis so it survives dev hot-reloads (resets on server restart). */
 // NB: init() runs at module load — helpers it calls must be hoisted `function` declarations, not `const` arrows (TDZ).
-const g = globalThis as unknown as { __rbsDb6?: DB }
-export const db: DB = (g.__rbsDb6 ??= init())
+const g = globalThis as unknown as { __dzDb?: DB }
+export const db: DB = (g.__dzDb ??= init())
 
 export const withStock = (i: Item): ItemWithStock => ({
   ...i,

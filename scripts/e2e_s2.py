@@ -3,7 +3,7 @@ import asyncio, re, sys
 from playwright.async_api import async_playwright, expect
 from _auth import BASE, login_ctx
 
-OUT = __import__("os").environ.get("SHOT_DIR", "/home/user/RBS_VAT_Frontend_Plan/screenshots")
+OUT = __import__("os").environ.get("SHOT_DIR", "/tmp/dizivat-screens")
 __import__("os").makedirs(OUT, exist_ok=True)
 results = []
 def ok(m): results.append(("PASS", m)); print("PASS", m)

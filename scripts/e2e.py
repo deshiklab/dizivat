@@ -1,7 +1,7 @@
 import asyncio, re
 from playwright.async_api import async_playwright, expect
 from _auth import login_ctx
-BASE=__import__("os").environ.get("BASE_URL", "http://localhost:3000"); OUT=__import__("os").environ.get("SHOT_DIR", "/home/user/RBS_VAT_Frontend_Plan/screenshots")
+BASE=__import__("os").environ.get("BASE_URL", "http://localhost:3000"); OUT=__import__("os").environ.get("SHOT_DIR", "/tmp/dizivat-screens")
 __import__("os").makedirs(OUT, exist_ok=True)
 ok=lambda m: print("PASS", m)
 async def main():
@@ -68,7 +68,7 @@ async def main():
         await pg.get_by_role("button", name="Account and preferences").click(); await pg.get_by_role("menuitem", name="Accent colour").click(); await pg.wait_for_timeout(300)
         await pg.screenshot(path=f"{OUT}/23_user_menu.png"); await pg.get_by_role("menuitemradio", name="Emerald").click(); await pg.wait_for_timeout(300)
         acc=await pg.evaluate("document.documentElement.dataset.accent"); ok("accent applied: "+acc)
-        await pg.evaluate("localStorage.setItem('rbs-prefs', JSON.stringify({accent:'blue',density:'cozy',text:'md'}))")
+        await pg.evaluate("localStorage.setItem('dizivat-prefs', JSON.stringify({accent:'blue',density:'cozy',text:'md'}))")
         await pg.wait_for_timeout(500)
         # prefs are now server-side per user (S2-03): check persistence, then reset for the following runs
         pr=await (await ctx.request.get(BASE+"/api/v1/me")).json(); assert pr["preferences"].get("accent")=="emerald", pr; ok("accent persisted to server profile")

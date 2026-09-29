@@ -12,7 +12,7 @@ export interface CookieOptions {
 }
 
 const inBrowser = typeof window !== "undefined"
-export const DEMO_COOKIE_JAR = "rbs-vat-demo-cookies"
+export const DEMO_COOKIE_JAR = "dizivat-demo-cookies"
 type Jar = Record<string, { v: string; exp: number }>
 
 const readJar = (): Jar => {

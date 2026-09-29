@@ -15,7 +15,7 @@ import type { SearchHit } from "@/lib/types"
 import { useShell } from "./shell-context"
 import { useSwitchLocale } from "./user-menu"
 
-const RECENT_KEY = "rbs-recent"
+const RECENT_KEY = "dizivat-recent"
 const icons: Record<SearchHit["type"], React.ElementType> = { sale: FileText, purchase: Truck, item: Boxes, customer: UserRound, vendor: Building2 }
 
 function useDebounced<T>(v: T, ms = 200) {

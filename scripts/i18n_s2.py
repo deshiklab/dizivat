@@ -5,7 +5,7 @@ EN = {
  "roles": {"admin": "Administrator", "approver": "Approver", "operator": "Operator", "viewer": "Viewer"},
  "auth": {
   "noAccessTitle": "You don't have access to this page", "noAccessHint": "Your role doesn't include this action. Ask an administrator if you need it.", "goBack": "Go back",
-  "brandPanel": "About RBS VAT", "tagline": "VAT management for Bangladesh manufacturers",
+  "brandPanel": "About DiziVAT", "tagline": "VAT management for Bangladesh manufacturers",
   "hero": "Mushak-ready sales, purchases and stock — in one place.",
   "feature": {"f1": "Mushak 6.3 invoices with VAT, SD and VDS computed for you", "f2": "Input-tax rebate tracked per purchase line for the 9.1 return", "f3": "Every approval and cancellation recorded with who, when and why"},
   "title": "Sign in", "subtitle": "Use your {company} account.",
@@ -101,7 +101,7 @@ BN = {
  "roles": {"admin": "অ্যাডমিনিস্ট্রেটর", "approver": "অনুমোদনকারী", "operator": "অপারেটর", "viewer": "দর্শক"},
  "auth": {
   "noAccessTitle": "এই পাতায় আপনার প্রবেশাধিকার নেই", "noAccessHint": "আপনার ভূমিকায় এই কাজটি অন্তর্ভুক্ত নয়। প্রয়োজনে অ্যাডমিনিস্ট্রেটরকে বলুন।", "goBack": "ফিরে যান",
-  "brandPanel": "RBS VAT সম্পর্কে", "tagline": "বাংলাদেশের উৎপাদকদের জন্য ভ্যাট ব্যবস্থাপনা",
+  "brandPanel": "DiziVAT সম্পর্কে", "tagline": "বাংলাদেশের উৎপাদকদের জন্য ভ্যাট ব্যবস্থাপনা",
   "hero": "মূসক-উপযোগী বিক্রয়, ক্রয় ও মজুদ — এক জায়গায়।",
   "feature": {"f1": "ভ্যাট, এসডি ও ভিডিএস স্বয়ংক্রিয় হিসাবসহ মূসক ৬.৩ চালান", "f2": "৯.১ রিটার্নের জন্য প্রতিটি ক্রয় লাইনে উপকরণ কর রেয়াত", "f3": "প্রতিটি অনুমোদন ও বাতিল — কে, কখন, কেন — সংরক্ষিত"},
   "title": "সাইন ইন", "subtitle": "আপনার {company} অ্যাকাউন্ট ব্যবহার করুন।",

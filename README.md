@@ -1,8 +1,8 @@
-# RBS VAT — new frontend (Sprints 1–4 + R2 + R3 + R4)
+# DiziVAT — VAT management frontend (Sprints 1–4 + R2–R4 + Knowledge base)
 
 Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (Base UI) · next-intl (EN/বাংলা) · TanStack Query + Table · React Hook Form + Zod · Recharts.
 
-This is the **strangler** frontend for RUPSHA FLEXIPACK LTD's RBS VAT system.
+**DiziVAT** (formerly *RBS VAT*) is the **strangler** frontend for RUPSHA FLEXIPACK LTD's VAT system.
 
 - **Sprint 1:** app shell, design system, Dashboard, Sales invoices (Mushak 6.3), Purchases and Items.
 - **Sprint 2:** sign-in with roles and permissions, customers and vendors CRUD, draft edit, cancel with a reason, undo, the item stock ledger, preferences and saved views stored on the server, and CI quality gates.
@@ -12,7 +12,7 @@ This is the **strangler** frontend for RUPSHA FLEXIPACK LTD's RBS VAT system.
 - **R3 — Sales + Production (v0.6.0):** export invoices (direct export to a foreign buyer with LC, customs house, destination and Bill of Export; deemed export to a local buyer against a back-to-back LC — both zero-rated) with their own list; service sales (`SS-`, service codes, VDS, no stock); inline customer credit (receivable, overdue, credit limit) and batch (lot) availability on the sale form, with lots enforced on approval; credit notes (Mushak 6.7) capped at the returnable quantity, which restore stock and reduce output VAT; price declarations (Mushak 4.3) with versions, amendment reasons, version compare and supersede-on-approve; work orders with progress; production batches — in-house, contractual with the contractor's return (Mushak 6.4) and from a work order — that consume inputs at the BOM coefficients (or actual quantities) and receive finished goods at BOM unit cost; production opening; and the production config (direct stock or work order; standard or actual consumption). The legacy screen typos ("Opeining", "Requsition", "Purachse", "Comapny", "In-Houe") are fixed.
 - **R4 — NBR VAT + Accounting (v0.7.0):** bank, mobile-wallet and cash accounts with running balances; customer receipts and supplier payments (cash, bank transfer, cheque with cheque details, mobile with transaction ID) allocated to open invoices, so invoice due amounts update on approval and return on cancel, with a printable money receipt / payment voucher and books closed up to a date; party statements (ledger, ageing, open invoices) that reconcile with the invoice registers; the accounting config. NBR VAT: a compliance centre (period status, shortfall, deposits, VDS to issue and awaited, a sorted and de-duplicated tax-period list, every Mushak report in one place); the Mushak 9.1 return builder with all notes computed live from approved documents, a drill-down sub-form behind every note, manual notes, submission in order only after the period ends and once note 58 covers note 50, and the period lock that follows (no new, edited, approved or cancelled documents in a submitted period); treasury deposits with the TR Form 6 challan and economic codes pre-filled from the 9.1 shortfall; VDS for purchases and sales with Mushak 6.6 certificates from a pending list; VAT adjustments (notes 27, 32, 38, 39); Mushak 6.10 (invoices above Tk 2 lakh); NBR settings with an explicit edit mode; live dashboard deadlines. Closes the legacy defects D-04 (9.1 sub-form HTTP 500), D-05 (6.10 "totalPurchase"), D-10 (accounting screens showing bank setup), D-15 (unsorted, duplicated tax months) and D-16 (blocking report loader), and the typos "Treasuary", "Rerturn" and "Purchhase". Prints use print CSS in place of server-side PDF until the Symfony API exists.
 
-Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the current RBS screen.
+Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
 All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). When the Symfony `/api/v1` is ready, point the client's base URL at it and delete `src/lib/mock` and `src/app/api`. No component changes are needed, and ESLint stops components from importing the mock directly.
 
@@ -123,9 +123,9 @@ Every push to `main` also publishes a **static demo** (`.github/workflows/pages.
 - has no middleware: the session check happens in the browser (`DemoGate`), and `/` picks English or Bengali in the browser.
 
 ```bash
-NEXT_PUBLIC_BASE_PATH=/rbs-vat-frontend npm run build:pages      # → out/
-mkdir -p /tmp/site && cp -r out /tmp/site/rbs-vat-frontend && (cd /tmp/site && python3 -m http.server 8080 &)
-PAGES_URL=http://localhost:8080/rbs-vat-frontend python3 scripts/pages_smoke.py
+NEXT_PUBLIC_BASE_PATH=/dizivat npm run build:pages      # → out/
+mkdir -p /tmp/site && cp -r out /tmp/site/dizivat && (cd /tmp/site && python3 -m http.server 8080 &)
+PAGES_URL=http://localhost:8080/dizivat python3 scripts/pages_smoke.py
 ```
 
 Documents created in the demo get sequential ids (`s215`, `s216` …). Pages exist for the seeded documents plus 50 new ones

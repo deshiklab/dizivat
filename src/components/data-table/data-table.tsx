@@ -66,8 +66,8 @@ export function DataTable<T>(p: DataTableProps<T>) {
   const locale = useLocale()
   const isMobile = useIsMobile()
   const hiddenDefault = React.useMemo<VisibilityState>(() => Object.fromEntries((p.defaultHidden ?? []).map((k) => [k, false])), [p.defaultHidden])
-  const [visibility, setVisibility] = usePersisted<VisibilityState>(`rbs-cols-${p.tableId}`, hiddenDefault)
-  const [order, setOrder] = usePersisted<ColumnOrderState>(`rbs-order-${p.tableId}`, [])
+  const [visibility, setVisibility] = usePersisted<VisibilityState>(`dizivat-cols-${p.tableId}`, hiddenDefault)
+  const [order, setOrder] = usePersisted<ColumnOrderState>(`dizivat-order-${p.tableId}`, [])
   const [selection, setSelection] = React.useState<RowSelectionState>({})
   const selectedRows = React.useRef(new Map<string, T>())
 

@@ -34,10 +34,10 @@ export function AppSidebar() {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link href="/" onClick={close} />} tooltip="RBS VAT">
+            <SidebarMenuButton size="lg" render={<Link href="/" onClick={close} />} tooltip="DiziVAT">
               <LogoMark className="size-8! shrink-0" />
               <span className="grid min-w-0 leading-tight">
-                <span className="truncate font-semibold text-white">RBS VAT</span>
+                <span className="truncate font-semibold text-white">DiziVAT</span>
                 <span className="truncate text-xs text-sidebar-foreground">{company.name}</span>
               </span>
             </SidebarMenuButton>

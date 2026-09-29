@@ -6,7 +6,7 @@ from _auth import login_ctx
 # Freeze it at the demo's "today" (25 Sep 2026, 10:30 Dhaka) — timers keep running.
 FROZEN = datetime.datetime(2026, 9, 25, 10, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=6)))
 BASE=__import__("os").environ.get("BASE_URL", "http://localhost:3000")
-OUT=__import__("os").environ.get("SHOT_DIR", "/home/user/RBS_VAT_Frontend_Plan/screenshots")
+OUT=__import__("os").environ.get("SHOT_DIR", "/tmp/dizivat-screens")
 __import__("os").makedirs(OUT, exist_ok=True)
 pages=[
  ("01_dashboard","/en",None),

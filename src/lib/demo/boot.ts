@@ -24,9 +24,9 @@ async function serve(path: string, req: Request) {
 }
 
 function install() {
-  const w = window as Window & { __rbsDemo?: boolean }
-  if (w.__rbsDemo) return
-  w.__rbsDemo = true
+  const w = window as Window & { __dzDemo?: boolean }
+  if (w.__dzDemo) return
+  w.__dzDemo = true
   const realFetch = window.fetch.bind(window)
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url

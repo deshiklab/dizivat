@@ -31,7 +31,7 @@ export function SavedViews({ tableId, builtIn = [] }: { tableId: string; builtIn
     onSuccess: ({ list, v }) => { qc.setQueryData(qk, list); toast(t("viewDeleted", { name: v.name }), { action: { label: t("undo"), onClick: () => saveM.mutate(v) } }) } })
   // One-time migration of Sprint-1 browser-stored views to the server profile
   React.useEffect(() => {
-    const key = `rbs-views-${tableId}`
+    const key = `dizivat-views-${tableId}`
     try {
       const old: View[] = JSON.parse(localStorage.getItem(key) || "[]")
       localStorage.removeItem(key)

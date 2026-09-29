@@ -7,7 +7,7 @@ import asyncio, os, re
 from playwright.async_api import async_playwright, expect
 from _auth import BASE, login_ctx
 
-OUT = os.environ.get("SHOT_DIR", "/home/user/RBS_VAT_Frontend_Plan/screenshots")
+OUT = os.environ.get("SHOT_DIR", "/tmp/dizivat-screens")
 os.makedirs(OUT, exist_ok=True)
 API = BASE + "/api/v1"
 TODAY = "2026-09-25"

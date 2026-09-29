@@ -6,8 +6,8 @@ import { findUserByName } from "./users"
 export const dhakaDay = (iso: string) => new Date(new Date(iso).getTime() + 6 * 36e5).toISOString().slice(0, 10)
 
 interface AuditStore { events: AuditEvent[]; seq: number }
-const g = globalThis as unknown as { __rbsAudit?: AuditStore }
-export const auditStore: AuditStore = (g.__rbsAudit ??= { events: [], seq: 0 })
+const g = globalThis as unknown as { __dzAudit?: AuditStore }
+export const auditStore: AuditStore = (g.__dzAudit ??= { events: [], seq: 0 })
 
 export interface AuditInput {
   actor: User | string

@@ -87,7 +87,7 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
         <div className="relative flex items-center gap-3">
           <LogoMark className="size-10" />
           <div>
-            <p className="text-lg font-semibold">RBS VAT</p>
+            <p className="text-lg font-semibold">DiziVAT</p>
             <p className="text-sm text-white/70">{t("tagline")}</p>
           </div>
         </div>
@@ -105,7 +105,7 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
       {/* Form */}
       <main id="main" className="flex flex-col bg-background px-4 py-6 sm:px-8">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 lg:invisible"><LogoMark /><span className="font-semibold">RBS VAT</span></div>
+          <div className="flex items-center gap-2 lg:invisible"><LogoMark /><span className="font-semibold">DiziVAT</span></div>
           <Button variant="ghost" size="sm" render={<a href={switchHref} hrefLang={otherLocale} lang={otherLocale} />}>
             <Languages /> {otherLocale === "bn" ? "বাংলা" : "English"}
           </Button>

@@ -16,7 +16,7 @@ from PIL import Image, ImageChops
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "tests" / "visual" / "baseline"
-SHOTS = Path(os.environ.get("SHOT_DIR", "/home/user/RBS_VAT_Frontend_Plan/screenshots"))
+SHOTS = Path(os.environ.get("SHOT_DIR", "/tmp/dizivat-screens"))
 CHANNEL_TOL = 40      # 0–255 per channel
 MAX_PIXELS = 20       # absolute cap: one changed 12 px glyph is ~40–80 px, so any content change fails
 NAMES = [f"{n:02d}_" for n in range(1, 15)] + [f"v{n}_" for n in range(1, 7)] + [f"r{n}_" for n in range(1, 9)]  # + R2 (r1–r4) and R4 (r5–r8) screens  # + dark, mobile, bn (Sprint 3)

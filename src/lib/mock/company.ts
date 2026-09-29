@@ -24,6 +24,6 @@ const seed = (): Company => ({
   updatedBy: "System Administrator",
 })
 
-const g = globalThis as unknown as { __rbsCompany?: Company }
-export const company: Company = (g.__rbsCompany ??= seed())
+const g = globalThis as unknown as { __dzCompany?: Company }
+export const company: Company = (g.__dzCompany ??= seed())
 export const companySummary = (): CompanySummary => ({ name: company.name, bin: company.bin, address: company.address, vatSlab: company.vatSlab })

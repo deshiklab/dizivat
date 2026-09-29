@@ -30,8 +30,8 @@ interface UserStore {
   /** uid → epoch seconds; session tokens issued earlier are void (password reset/change) */
   revokedBefore: Record<string, number>
 }
-const g = globalThis as unknown as { __rbsUsers3?: UserStore }
-export const userStore: UserStore = (g.__rbsUsers3 ??= { users: seedUsers(), passwords: {}, prefs: {}, views: {}, failures: {}, notifRead: {}, revokedBefore: {} })
+const g = globalThis as unknown as { __dzUsers?: UserStore }
+export const userStore: UserStore = (g.__dzUsers ??= { users: seedUsers(), passwords: {}, prefs: {}, views: {}, failures: {}, notifRead: {}, revokedBefore: {} })
 export const users = userStore.users
 
 export const findUser = (id: string) => users.find((u) => u.id === id)

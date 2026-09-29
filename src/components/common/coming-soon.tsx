@@ -9,7 +9,7 @@ import { Pill } from "./status-badge"
 import { NAV, RELEASE_DATES } from "@/lib/nav"
 import { fmtDate } from "@/lib/format"
 
-/** Address of the current RBS VAT system (strangler hand-off). Set at build time — never commit the production host. */
+/** Address of the legacy RBS VAT system DiziVAT replaces (strangler hand-off). Set at build time — never commit the production host. */
 const LEGACY_URL = (process.env.NEXT_PUBLIC_LEGACY_URL ?? "").replace(/\/$/, "")
 
 /** Unbuilt modules get an honest roadmap page instead of a dead link or a disabled menu item. */

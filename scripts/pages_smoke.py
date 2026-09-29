@@ -1,15 +1,15 @@
 """Smoke test for the static GitHub Pages demo (no server: the mock API runs in the browser).
 
 Serve the export under its base path, e.g.
-    mkdir -p /tmp/pages && cp -r out /tmp/pages/rbs-vat-frontend && (cd /tmp/pages && python3 -m http.server 8080)
-    PAGES_URL=http://localhost:8080/rbs-vat-frontend python3 scripts/pages_smoke.py
+    mkdir -p /tmp/pages && cp -r out /tmp/pages/dizivat && (cd /tmp/pages && python3 -m http.server 8080)
+    PAGES_URL=http://localhost:8080/dizivat python3 scripts/pages_smoke.py
 """
 import asyncio, os, re, sys
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright, expect
 
-BASE = os.environ.get("PAGES_URL", "http://localhost:8080/rbs-vat-frontend").rstrip("/")
-PREFIX = urlparse(BASE).path  # the Pages base path, e.g. /rbs-vat-frontend
+BASE = os.environ.get("PAGES_URL", "http://localhost:8080/dizivat").rstrip("/")
+PREFIX = urlparse(BASE).path  # the Pages base path, e.g. /dizivat
 results: list[tuple[str, bool, str]] = []
 
 

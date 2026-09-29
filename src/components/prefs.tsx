@@ -6,7 +6,7 @@ export type Accent = "blue" | "emerald" | "violet" | "orange"
 export type Density = "compact" | "cozy" | "comfortable"
 export type TextSize = "md" | "lg" | "xl"
 interface Prefs { accent: Accent; density: Density; text: TextSize }
-const KEY = "rbs-prefs"
+const KEY = "dizivat-prefs"
 const DEFAULTS: Prefs = { accent: "blue", density: "cozy", text: "md" }
 
 /** Inline, render-blocking script: applies saved prefs before first paint (no flash). */

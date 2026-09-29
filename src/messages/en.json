@@ -1,6 +1,6 @@
 {
   "meta": {
-    "app": "RBS VAT",
+    "app": "DiziVAT",
     "description": "VAT management for RUPSHA FLEXIPACK LTD — sales, purchases, inventory and NBR Mushak compliance."
   },
   "nav": {
@@ -754,7 +754,7 @@
     "title": "Planned for release {release}",
     "target": "Target go-live {date}",
     "body": "This page is part of the phased (strangler) migration. Until it ships in the new interface, keep using the existing RBS VAT screen — data stays in the same database, so nothing needs to be re-entered.",
-    "legacy": "Open current RBS VAT"
+    "legacy": "Open the legacy RBS VAT"
   },
   "roles": {
     "admin": "Administrator",
@@ -766,7 +766,7 @@
     "noAccessTitle": "You don't have access to this page",
     "noAccessHint": "Your role doesn't include this action. Ask an administrator if you need it.",
     "goBack": "Go back",
-    "brandPanel": "About RBS VAT",
+    "brandPanel": "About DiziVAT",
     "tagline": "VAT management for Bangladesh manufacturers",
     "hero": "Mushak-ready sales, purchases and stock — in one place.",
     "feature": {

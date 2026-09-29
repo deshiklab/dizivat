@@ -2,7 +2,7 @@
  * Stateless signed session token (HMAC-SHA256), verifiable in both the Edge middleware and Node route handlers.
  * Stand-in for the Symfony session cookie that the reverse proxy will pass through in R1.
  */
-export const SESSION_COOKIE = "rbs_session"
+export const SESSION_COOKIE = "dizivat_session"
 export const SESSION_TTL_SHORT = 60 * 60 * 12 // 12 h
 export const SESSION_TTL_LONG = 60 * 60 * 24 * 14 // 14 days ("keep me signed in")
 
@@ -10,7 +10,7 @@ export const SESSION_TTL_LONG = 60 * 60 * 24 * 14 // 14 days ("keep me signed in
 export interface SessionPayload { uid: string; exp: number; iat?: number }
 
 const enc = new TextEncoder()
-const secret = () => process.env.SESSION_SECRET ?? "rbs-vat-dev-secret-change-in-production"
+const secret = () => process.env.SESSION_SECRET ?? "dizivat-dev-secret-change-in-production"
 
 const b64url = (buf: ArrayBuffer | Uint8Array) => {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf)
