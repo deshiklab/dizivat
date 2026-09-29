@@ -20,7 +20,7 @@ import { Combobox } from "@/components/common/combobox"
 import { Field, useUnsavedGuard } from "@/components/common/field"
 import { useConfirm } from "@/components/common/confirm"
 import { Money } from "@/components/common/money"
-import { useRouter } from "@/i18n/navigation"
+import { Link, useRouter } from "@/i18n/navigation"
 import { api, ApiError } from "@/lib/api/client"
 import { purchaseInput } from "@/lib/schemas"
 import { TODAY } from "@/lib/company"
@@ -34,8 +34,15 @@ type In = z.input<typeof purchaseInput>
 type Out = z.output<typeof purchaseInput>
 const emptyLine = { itemId: "", qty: undefined as unknown as number, price: undefined as unknown as number, sdRate: 0, vatRate: 15, rebateable: true, vds: false }
 
-/** New purchase, or edit of a draft when `initial` is given. */
-export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
+/**
+ * New purchase, or edit of a draft when `initial` is given. One template, two variants (R2):
+ * goods (stock items, receives into a branch) and service (NBR service codes, no stock movement).
+ * Imports have their own duty grid — see ImportForm.
+ */
+export function PurchaseForm({ initial, category: cat }: { initial?: Purchase; category?: "goods" | "service" } = {}) {
+  const category = initial?.category ?? cat ?? "goods"
+  const svc = category === "service"
+  const listHref = svc ? "/purchases/services" : "/purchases"
   const t = useTranslations("purchases")
   const ts = useTranslations("sales")
   const tf = useTranslations("form")
@@ -54,7 +61,11 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
   const { data: itemsPage } = useQuery({ queryKey: ["stock", "all"], queryFn: () => api.stock.list({ size: 500 }) })
   const branches = itemsPage?.branches ?? []
   const mainBranch = branches.find((b) => b.category === "factory")?.id ?? branches[0]?.id ?? ""
-  const buyables = (itemsPage?.data ?? []).filter((i) => i.group !== "Finished Goods" && i.active)
+  const { data: services = [] } = useQuery({ queryKey: ["services"], queryFn: () => api.services(), enabled: svc, staleTime: 3600_000 })
+  const goods = (itemsPage?.data ?? []).filter((i) => i.group !== "Finished Goods" && i.active)
+  const buyables: { id: string; name: string; purchasePrice?: number; vatRate: number; vds?: boolean; description: string }[] = svc
+    ? services.map((s) => ({ id: s.id, name: s.name, vatRate: s.vatRate, vds: s.vds, description: `${s.code} · ${t("perUnit", { unit: s.unit })}${s.vds ? " · VDS" : ""}` }))
+    : goods.map((b) => ({ id: b.id, name: b.name, purchasePrice: b.purchasePrice, vatRate: b.vatRate, description: `${b.sku} · HS ${b.hsCode} · ${b.group}` }))
   const localVendors = vendors.filter((v) => v.mode !== "Foreign")
 
   const form = useForm<In, unknown, Out>({
@@ -62,11 +73,11 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
     mode: "onTouched",
     defaultValues: initial ? {
       vendorId: initial.vendorId, issueDate: initial.issueDate, challanNo: initial.challanNo, challanDate: initial.challanDate, method: initial.method === "Transaction" ? "Bank" : initial.method,
-      discount: initial.discount, paid: initial.paid, issuedBy: initial.issuedBy, designation: initial.designation, narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "",
+      discount: initial.discount, paid: initial.paid, issuedBy: initial.issuedBy, designation: initial.designation, narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "", category,
       lines: initial.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, price: l.price, sdRate: l.sdRate, vatRate: l.vatRate, rebateable: l.rebateable ?? true, vds: l.vds ?? false })),
     } : {
       vendorId: "", issueDate: TODAY, challanNo: "", challanDate: TODAY, method: "Bank", discount: 0, paid: 0,
-      issuedBy: me.user.name, designation: me.user.designation, narration: "", process: "Created", branchId: "", lines: [emptyLine],
+      issuedBy: me.user.name, designation: me.user.designation, narration: "", process: "Created", branchId: "", lines: [emptyLine], category,
     },
   })
   const { register, control, handleSubmit, setValue, getValues, setError, formState: { errors, isDirty, isSubmitting } } = form
@@ -100,7 +111,7 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
   })
   const submit = (process: "Created" | "Approved") => handleSubmit((v) => create.mutate({ ...v, process: canApprove ? process : "Created" }), () => toast.error(ts("fixErrors")))()
   const onCancel = async () => {
-    if (!isDirty || (await confirm({ title: tf("discardTitle"), description: tf("discardBody"), confirm: tf("discard"), cancel: tf("keepEditing"), destructive: true }))) { form.reset(); router.push(initial ? `/purchases/${initial.id}` : "/purchases") }
+    if (!isDirty || (await confirm({ title: tf("discardTitle"), description: tf("discardBody"), confirm: tf("discard"), cancel: tf("keepEditing"), destructive: true }))) { form.reset(); router.push(initial ? `/purchases/${initial.id}` : listHref) }
   }
   const err = (path: string) => {
     let e: unknown = errors
@@ -111,8 +122,8 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
 
   return (
     <form noValidate onSubmit={(e) => { e.preventDefault(); submit("Created") }}>
-      <PageHeader crumbs={initial ? [{ label: initial.invoiceNo, href: `/purchases/${initial.id}` }, { label: tc("edit") }] : [{ label: t("new") }]}
-        title={initial ? t("editTitle", { no: initial.invoiceNo }) : t("newTitle")} description={initial ? ts("editSub") : t("newSub")}
+      <PageHeader crumbs={[...(svc ? [{ label: t("servicesTitle"), href: listHref }] : []), ...(initial ? [{ label: initial.invoiceNo, href: `/purchases/${initial.id}` }, { label: tc("edit") }] : [{ label: t(svc ? "newService" : "new") }])]}
+        title={initial ? t("editTitle", { no: initial.invoiceNo }) : t(svc ? "newServiceTitle" : "newTitle")} description={initial ? ts("editSub") : t(svc ? "newServiceSub" : "newSub")}
         actions={<span className="rounded-md border bg-card px-2.5 py-1 text-sm text-muted-foreground">{t("purchaseNo")}: <span className="font-medium text-foreground">{initial?.invoiceNo ?? ts("autoNo")}</span></span>} />
       <div className="grid gap-4 xl:grid-cols-[1fr_19rem] 2xl:grid-cols-[1fr_22rem]">
         <div className="grid min-w-0 content-start gap-4">
@@ -137,18 +148,20 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
                 </dl>
               )}
               {nonReg && <p className="flex items-start gap-2 rounded-md bg-warning-soft p-3 text-sm text-warning md:col-span-2"><Info className="mt-0.5 size-4 shrink-0" aria-hidden /> {t("nonRegNote")}</p>}
-              <p className="flex items-start gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground md:col-span-2"><Ship className="mt-0.5 size-4 shrink-0" aria-hidden /> {t("importNote")}</p>
+              {svc
+                ? <p className="flex items-start gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground md:col-span-2"><Info className="mt-0.5 size-4 shrink-0" aria-hidden /> {t("serviceNote")}</p>
+                : !initial && <p className="flex flex-wrap items-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground md:col-span-2"><Ship className="size-4 shrink-0" aria-hidden /> {t("importNote")} <Link href="/purchases/new?type=import" className="font-medium text-primary hover:underline">{t("newImport")}</Link></p>}
               <Field id="challanNo" label={t("field.challanNo")} required error={err("challanNo")} hint={t("challanHint")}>{(a) => <Input {...a} {...register("challanNo")} />}</Field>
               <Field id="challanDate" label={t("field.challanDate")} required error={err("challanDate")}>{(a) => <Input type="date" max={TODAY} {...a} {...register("challanDate")} />}</Field>
               <Field id="issueDate" label={t("field.receiveDate")} required error={err("issueDate")}>{(a) => <Input type="date" max={TODAY} {...a} {...register("issueDate")} />}</Field>
-              <Field id="branchId" label={t("field.branch")} error={err("branchId")} hint={t("branchHint")}>
+              {!svc && <Field id="branchId" label={t("field.branch")} error={err("branchId")} hint={t("branchHint")}>
                 {(a) => <Controller control={control} name="branchId" render={({ field }) => (
                   <Select value={field.value || mainBranch} onValueChange={(v) => field.onChange(v)} items={branches.map((b) => ({ value: b.id, label: b.name }))}>
                     <SelectTrigger id={a.id} className="w-full" aria-describedby={a["aria-describedby"]} aria-invalid={a["aria-invalid"]}><SelectValue /></SelectTrigger>
                     <SelectContent>{branches.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
                   </Select>
                 )} />}
-              </Field>
+              </Field>}
               <Field id="method" label={ts("field.method")}>
                 {(a) => (
                   <Controller control={control} name="method" render={({ field }) => (
@@ -171,7 +184,7 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
                   <caption className="sr-only">{ts("sectionItems")}</caption>
                   <thead><tr className="border-b text-left text-xs text-muted-foreground">
                     <th scope="col" className="w-8 px-3 py-2 font-medium">#</th>
-                    <th scope="col" className="px-2 py-2 font-medium">{t("line.item")} <span className="text-destructive" aria-hidden>*</span></th>
+                    <th scope="col" className="px-2 py-2 font-medium">{t(svc ? "line.service" : "line.item")} <span className="text-destructive" aria-hidden>*</span></th>
                     <th scope="col" className="w-24 px-2 py-2 text-right font-medium">{ts("line.qty")}</th>
                     <th scope="col" className="w-28 px-2 py-2 text-right font-medium whitespace-nowrap">{t("line.unitPrice")}</th>
                     <th scope="col" className="w-18 px-2 py-2 text-right font-medium">{ts("line.vatPct")}</th>
@@ -187,9 +200,9 @@ export function PurchaseForm({ initial }: { initial?: Purchase } = {}) {
                         <td className="px-3 py-2.5 text-muted-foreground tabular">{fmtNum(i + 1, locale)}</td>
                         <td className="px-2 py-1.5">
                           <Controller control={control} name={`lines.${i}.itemId`} render={({ field }) => (
-                            <Combobox ariaLabel={`${t("line.item")} ${i + 1}`} value={field.value} invalid={!!err(`lines.${i}.itemId`)} placeholder={t("selectItem")} searchPlaceholder={ts("searchProduct")} empty={tc("noResults")}
-                              onChange={(v) => { field.onChange(v); const it = buyables.find((b) => b.id === v); if (it) { setValue(`lines.${i}.price`, it.purchasePrice, { shouldValidate: true }); if (!nonReg) setValue(`lines.${i}.vatRate`, it.vatRate) } }}
-                              options={buyables.map((b) => ({ value: b.id, label: b.name, description: `${b.sku} · HS ${b.hsCode} · ${b.group}` }))} />
+                            <Combobox ariaLabel={`${t(svc ? "line.service" : "line.item")} ${i + 1}`} value={field.value} invalid={!!err(`lines.${i}.itemId`)} placeholder={t(svc ? "selectService" : "selectItem")} searchPlaceholder={svc ? t("searchService") : ts("searchProduct")} empty={tc("noResults")}
+                              onChange={(v) => { field.onChange(v); const it = buyables.find((b) => b.id === v); if (it) { if (it.purchasePrice !== undefined) setValue(`lines.${i}.price`, it.purchasePrice, { shouldValidate: true }); if (!nonReg) setValue(`lines.${i}.vatRate`, it.vatRate); if (it.vds !== undefined) setValue(`lines.${i}.vds`, it.vds) } }}
+                              options={buyables.map((b) => ({ value: b.id, label: b.name, description: b.description }))} />
                           )} />
                         </td>
                         <td className="px-2 py-1.5"><Input aria-label={`${ts("line.qty")} ${i + 1}`} aria-invalid={!!err(`lines.${i}.qty`) || undefined} type="number" step="any" min={0} className="text-right tabular" {...register(`lines.${i}.qty`, { valueAsNumber: true })} /></td>
