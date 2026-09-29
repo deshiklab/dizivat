@@ -31,9 +31,3 @@ export function docParams(kind: "sales" | "purchases") {
   const extra = placeholders.filter((h) => h.split("/").length === 3 && h.startsWith(`/${kind}/`)).map((h) => h.split("/")[2])
   return [...ids, ...extra].map((id) => ({ id }))
 }
-
-/** [...slug]: every not-yet-built nav destination not covered by a more specific route. */
-export function slugParams() {
-  if (!STATIC_DEMO) return []
-  return placeholders.filter((h) => !/^\/(sales|purchases)\/[^/]+$/.test(h)).map((h) => ({ slug: h.slice(1).split("/") }))
-}

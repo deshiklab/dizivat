@@ -28,6 +28,9 @@ const nextConfig: NextConfig = staticDemo
   : {
       // Allow the sandbox preview host to use dev HMR.
       typescript,
+      // "server.tsx" files are routes in this build only: the [...slug] catch-all (in-shell 404 for unknown URLs).
+      // The static demo has nothing to prerender there — unknown paths get out/404.html instead.
+      pageExtensions: ["server.tsx", "tsx", "ts", "jsx", "js"],
       allowedDevOrigins: ["*.e2b.app", "*.e2b.dev"],
       poweredByHeader: false,
     }

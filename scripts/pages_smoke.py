@@ -70,7 +70,8 @@ async def main():
         # 6. Create a draft → sequential id → its pre-rendered page and edit page exist
         s1 = (await api(page, "GET", "/sales/s1"))["body"]
         body = {k: s1[k] for k in ("customerId", "issueDate", "issueTime", "method", "issuedBy", "designation")}
-        body.update(discount=0, paid=0, vds=False, process="Created", narration="Pages smoke test",
+        # dated in the open period — s1 is from 07-2025, locked since its 9.1 return was submitted (R4)
+        body.update(issueDate="2026-09-24", discount=0, paid=0, vds=False, process="Created", narration="Pages smoke test",
                     lines=[{"itemId": l["itemId"], "qty": 1, "price": l["price"], "sdRate": l["sdRate"], "vatRate": l["vatRate"]} for l in s1["lines"][:1]])
         r = await api(page, "POST", "/sales", body)
         new_id = (r["body"] or {}).get("id", "")
@@ -88,13 +89,13 @@ async def main():
         r = await api(page, "GET", f"/sales/{new_id}")
         check("created draft persists across reloads", r["status"] == 200)
 
-        # 8. Bengali + a placeholder route + master data pages
+        # 8. Bengali + production + master data pages
         await page.goto(BASE + "/bn/master/customers/")
         await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
         check("bn customers page renders", await page.locator("html").get_attribute("lang") == "bn")
         await page.goto(BASE + "/en/production/bom/")
         await expect(page.get_by_role("heading", level=1)).to_be_visible(timeout=15000)
-        check("placeholder route renders", True)
+        check("production BOM page renders", True)
 
         # 8b. Sprint 4 pages run on the in-browser API (static routes, no server)
         await page.goto(BASE + "/en/inventory/transfers/")
