@@ -20,7 +20,7 @@ pages=[
  ("09_purchase_detail","/en/purchases/p1",None),
  ("10_items","/en/inventory/items",None),
  ("11_item_sheet","/en/inventory/items?edit=i1",None),
- ("12_placeholder","/en/vat/return-9-1",None),
+ ("12_return_current","/en/vat/return-9-1",None),
  ("13_bn_dashboard","/bn",None),
  ("14_bn_sales","/bn/sales",None),
  # R2: purchase & inventory
@@ -28,6 +28,11 @@ pages=[
  ("r2_debit_notes","/en/purchases/debit-notes",None),
  ("r3_master_items","/en/inventory/master-items",None),
  ("r4_mushak61","/en/vat/mushak-6-1?item=i6",None),
+ # R4: NBR VAT & accounting
+ ("r5_return91","/en/vat/return-9-1?period=2026-08",None),
+ ("r6_compliance","/en/vat/mushak?period=2026-08",None),
+ ("r7_receipts","/en/accounting/receipts",None),
+ ("r8_tr6_print","/en/vat/tr-6?view=tc1&tab=print",None),
 ]
 # Sprint 3: visual coverage beyond light desktop — dark theme, 390 px phone, Bangla form
 variants=[

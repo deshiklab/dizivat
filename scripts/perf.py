@@ -6,7 +6,7 @@ import asyncio, json, sys
 from playwright.async_api import async_playwright
 from _auth import BASE, login_ctx
 
-PAGES = ["/en", "/en/sales", "/en/sales/new", "/en/purchases", "/en/purchases/new?type=import", "/en/purchases/debit-notes", "/en/vat/mushak-6-1?item=i6", "/en/inventory/items", "/en/master/audit", "/en/login"]
+PAGES = ["/en", "/en/sales", "/en/sales/new", "/en/purchases", "/en/purchases/new?type=import", "/en/purchases/debit-notes", "/en/vat/mushak-6-1?item=i6", "/en/inventory/items", "/en/master/audit", "/en/vat/return-9-1", "/en/accounting/receipts", "/en/login"]
 BUDGET = {"lcp": 2500, "cls": 0.1, "js_kb": 400, "js_total_kb": 500}
 OBS = """
 window.__lcp = 0; window.__cls = 0;

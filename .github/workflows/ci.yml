@@ -93,6 +93,9 @@ jobs:
       - name: E2E — R3 (exports, service sales, lots, credit notes 6.7, BOM 4.3, work orders, batches 6.4, production config)
         working-directory: scripts
         run: python e2e_r3.py
+      - name: E2E — R4 (bank & wallet accounts, receipts/payments with allocation, party statements, TR-6, VDS 6.6, adjustments, 9.1 builder, period lock, compliance, 6.10)
+        working-directory: scripts
+        run: python e2e_r4.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py
