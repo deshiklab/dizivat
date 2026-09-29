@@ -1,12 +1,32 @@
 import { addHistory, db, postStock, stockShortfall } from "@/lib/mock/db"
 import { diff } from "@/lib/mock/audit"
-import { buildPurchaseFields, buildSaleFields, unknownBranch, unknownItems } from "@/lib/mock/build"
+import { buildPurchaseFields, buildSaleFields, unknownBranch, unknownItems, unknownServices } from "@/lib/mock/build"
 import { delay } from "@/lib/mock/query"
-import { cancelInput, purchaseInput, saleInput } from "@/lib/schemas"
-import type { Purchase, Sale } from "@/lib/types"
+import { cancelInput, importInput, purchaseInput, saleInput } from "@/lib/schemas"
+import type { Party, Purchase, Sale } from "@/lib/types"
 import { deny, json, problem, withAuth, zodProblem } from "./_lib"
+import type { z } from "zod"
 
 type Kind = "sale" | "purchase"
+
+/**
+ * Validates a purchase body for any variant (R2). The vendor decides the schema: Foreign → import (Bill of Entry,
+ * USD lines, duty rates); `category: "service"` → service-code lines. Returns the parsed data or a problem Response.
+ */
+export function parsePurchase(body: unknown): Response | { data: z.output<typeof purchaseInput> | z.output<typeof importInput>; vendor: Party } {
+  const vid = (body as { vendorId?: unknown } | null)?.vendorId
+  const vendor = db.vendors.find((x) => x.id === vid && x.active !== false)
+  const isImport = vendor?.mode === "Foreign" && (body as { category?: string }).category !== "service"
+  const parsed = isImport ? importInput.safeParse(body) : purchaseInput.safeParse(body)
+  if (!parsed.success) return zodProblem(parsed.error)
+  const d = parsed.data
+  if (!vendor) return problem(422, "Validation failed", { vendorId: ["unknown"] })
+  if (d.category === "service" && vendor.mode === "Foreign") return problem(422, "Validation failed", { vendorId: ["foreignService"] })
+  const bad = (d.category === "service" ? unknownServices(d.lines) : unknownItems(d.lines, "buyable")) ?? unknownBranch(d.branchId)
+  if (bad) return problem(422, "Validation failed", bad)
+  if (isImport && (d as z.output<typeof importInput>).boe.lcDate > d.challanDate) return problem(422, "Validation failed", { "boe.lcDate": ["lcAfterBoe"] })
+  return { data: d, vendor }
+}
 type Doc = Sale | Purchase
 type Ctx = { params: Promise<{ id: string }> }
 
@@ -72,15 +92,15 @@ export function docRoutes(k: Kind) {
       addHistory(d, user.name, "edited", undefined, docDiff(before, d))
       if (parsed.data.process === "Approved") approve(k, d, user.name)
     } else {
-      const parsed = purchaseInput.safeParse(body)
-      if (!parsed.success) return zodProblem(parsed.error)
-      if (parsed.data.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
-      const v = db.vendors.find((x) => x.id === parsed.data.vendorId && x.active !== false)
-      if (!v) return problem(422, "Validation failed", { vendorId: ["unknown"] })
-      const bad = unknownItems(parsed.data.lines, "buyable") ?? unknownBranch(parsed.data.branchId)
-      if (bad) return problem(422, "Validation failed", bad)
+      const r = parsePurchase(body)
+      if (r instanceof Response) return r
+      if (r.data.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
+      if ((r.data.category === "service") !== ((d as Purchase).category === "service")) return problem(409, "A goods purchase cannot become a service purchase (or vice versa).")
+      const parsed = r, v = r.vendor
       const before = structuredClone(d)
-      Object.assign(d, buildPurchaseFields(parsed.data, v))
+      const fields = buildPurchaseFields(parsed.data, v)
+      if (!("boe" in fields)) delete (d as Purchase).boe
+      Object.assign(d, fields)
       addHistory(d, user.name, "edited", undefined, docDiff(before, d))
       if (parsed.data.process === "Approved") approve(k, d, user.name)
     }
@@ -103,6 +123,8 @@ export function docRoutes(k: Kind) {
     if (body.process === "Cancelled") {
       const no = deny(user, "doc.cancel"); if (no) return no
       if (d.process === "Cancelled") return problem(409, `${d.invoiceNo} is already cancelled.`)
+      const dns = k === "purchase" ? db.debitNotes.filter((n) => n.purchaseId === d.id && n.process !== "Cancelled") : []
+      if (dns.length) return problem(409, `${d.invoiceNo} has debit notes (${dns.map((n) => n.no).join(", ")}) — cancel them first.`)
       const r = cancelInput.safeParse({ reason: body.reason ?? "" })
       if (!r.success) return zodProblem(r.error)
       if (d.process === "Approved") {

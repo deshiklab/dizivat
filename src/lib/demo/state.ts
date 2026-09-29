@@ -1,7 +1,7 @@
 /** The mock stores live on globalThis (see lib/mock/*). In the static demo they are mirrored to localStorage. */
-// v2 (Sprint 4): new collections + renamed demo users — older saved state is discarded
-export const DEMO_STATE_KEY = "rbs-vat-demo-state-v2"
-export const STORE_KEYS = ["__rbsDb4", "__rbsUsers3", "__rbsAudit", "__rbsCompany"] as const
+// v3 (R2): debit notes, opening stock, master items, import duty — older saved state is discarded
+export const DEMO_STATE_KEY = "rbs-vat-demo-state-v3"
+export const STORE_KEYS = ["__rbsDb5", "__rbsUsers3", "__rbsAudit", "__rbsCompany"] as const
 
 type G = Record<string, unknown>
 

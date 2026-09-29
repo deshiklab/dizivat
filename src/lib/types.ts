@@ -67,7 +67,15 @@ export interface Line {
   vds?: boolean
   /** imports: total tax incidence (CD+RD+SD+VAT+AIT+AT) */
   tti?: number
+  /** imports (R2): Bill of Entry duty breakdown — `subtotal` is then the assessable value (AV) */
+  duty?: ImportDuty
 }
+
+/**
+ * Customs duty stack of one Bill-of-Entry line (NBR method, all amounts BDT, rates %):
+ * AV = USD × rate · CD = AV·cd · RD = AV·rd · SD = (AV+CD+RD)·sd · VAT = (AV+CD+RD+SD)·vat · AIT = AV·ait · AT = (AV+CD+RD+SD)·at
+ */
+export interface ImportDuty { usd: number; usdRate: number; av: number; cdRate: number; cd: number; rdRate: number; rd: number; aitRate: number; ait: number; atRate: number; at: number }
 
 export type HistoryAction = "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
 export interface HistoryEntry { at: string; by: string; action: HistoryAction; note?: string }
@@ -123,7 +131,13 @@ export interface Purchase extends DocBase {
   tti: number
   /** input tax credit claimable in Mushak 9.1 */
   rebate: number
+  /** R2: goods (stock) or service purchase (no stock movement); absent = goods */
+  category?: PurchaseCategory
+  /** R2: import purchases (mode Foreign) — Bill of Entry header */
+  boe?: BillOfEntry
 }
+export type PurchaseCategory = "goods" | "service"
+export interface BillOfEntry { no: string; date: string; lcNo: string; lcDate: string; customsHouse: string; origin: string; cnfFirm?: string; receiveAddress?: string }
 
 export interface Page<T, Totals = Record<string, number>> {
   data: T[]
@@ -171,7 +185,7 @@ export interface SearchHit {
   href: string
 }
 
-export type LedgerType = "opening" | "purchase" | "sale" | "prodReceive" | "prodIssue" | "damage" | "transferIn" | "transferOut"
+export type LedgerType = "opening" | "purchase" | "sale" | "prodReceive" | "prodIssue" | "damage" | "transferIn" | "transferOut" | "purchaseReturn"
 export interface LedgerEntry {
   date: string
   type: LedgerType
@@ -199,7 +213,7 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
@@ -292,3 +306,102 @@ export type StockDoc = Transfer | Damage
 
 /** Item stock split by branch (branch id → qty) with valuation at cost. */
 export type StockRow = ItemWithStock & { byBranch: Record<string, number>; value: number; saleValue: number }
+
+/* ── R2 — Purchase & Inventory ─────────────────────────────────────────── */
+
+/** NBR service code used on service purchases (illustrative subset; VDS = buyer withholds VAT at source). */
+export interface ServiceType { id: string; code: string; name: string; vatRate: number; vds: boolean; unit: string }
+
+/** Debit note (Mushak 6.8) — goods returned to the vendor against an approved purchase. */
+export interface DebitLine {
+  itemId: string; name: string; hsCode: string; uom: string
+  /** quantity on the purchase line */
+  purchasedQty: number
+  qty: number; price: number; sdRate: number; vatRate: number
+  subtotal: number; sd: number; vat: number; tti: number; total: number
+  /** input tax given back (was claimable on the purchase) */
+  rebate: number
+}
+export type DebitReason = "damaged" | "quality" | "excess" | "wrongItem" | "priceDispute"
+export interface DebitNote {
+  id: string
+  /** DN-MMYY#### */
+  no: string
+  purchaseId: string; purchaseNo: string; purchaseDate: string; purchaseMode: PurchaseMode; challanNo: string
+  vendorId: string; vendorName: string; vendorBin: string; vendorAddress: string
+  branchId: string; branchName: string
+  issueDate: string; issueTime: string
+  reason: DebitReason; note?: string
+  issuedBy: string; designation: string
+  process: Process
+  lines: DebitLine[]
+  subtotal: number; sd: number; vat: number; tti: number; total: number; rebate: number
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/** Opening stock entry (legacy "Opening Stock"): quantity brought forward with its purchase value and input-tax class. */
+export type InputTaxClass = "standard" | "reduced" | "zero" | "exempt"
+export interface OpeningEntry {
+  id: string
+  /** OS-MMYY#### */
+  no: string
+  itemId: string; name: string; hsCode: string; sku: string; uom: string
+  branchId: string; branchName: string
+  date: string
+  inputTax: InputTaxClass
+  qty: number; price: number; value: number
+  /** VAT paid on this stock when bought (for the 6.1 opening value), BDT */
+  vatPaid: number
+  note?: string
+  process: Process
+  issuedBy: string; createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/** Master item (HS-code product with its tax profile). Rates default from the tariff; differences are flagged overrides. */
+export type MasterCategory = "general" | "commercialImporter" | "medicine" | "petroleum" | "superShop"
+export type PriceMethod = "average" | "standard"
+export interface TaxProfile { vat: number; sd: number; cd: number; rd: number; ait: number; at: number }
+export interface MasterItem {
+  id: string
+  name: string
+  hsCode: string
+  group: ItemGroup
+  category: MasterCategory
+  unit: string
+  priceMethod: PriceMethod
+  description?: string
+  rates: TaxProfile
+  /** required when any rate differs from the tariff */
+  overrideReason?: string
+  active: boolean
+  createdAt: string
+  updatedAt?: string
+  history?: HistoryEntry[]
+}
+export type MasterItemRow = MasterItem & { items: number; tariff: TaxProfile | null; overrides: (keyof TaxProfile)[]; tariffDescription?: string }
+
+/** Mushak 6.1 (purchase book) / 6.2 (sales book) — one row per movement, NBR column order. */
+export interface BookRow {
+  sl: number
+  date: string
+  openQty: number; openValue: number
+  ref?: string; refId?: string; refDate?: string
+  party?: string; partyAddress?: string; partyBin?: string
+  description: string
+  /** purchase (6.1) / production (6.2) received, and sold (6.2) */
+  inQty: number; inValue: number; sd: number; vat: number
+  outQty: number; outValue: number
+  closeQty: number; closeValue: number
+  kind: LedgerType
+  summary?: boolean
+}
+export interface MushakBook {
+  form: "6.1" | "6.2"
+  item: ItemWithStock
+  from: string; to: string
+  company: { name: string; address: string; bin: string }
+  rows: BookRow[]
+  totals: { inQty: number; inValue: number; sd: number; vat: number; outQty: number; outValue: number }
+  opening: { qty: number; value: number }
+  closing: { qty: number; value: number }
+}

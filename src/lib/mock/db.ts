@@ -1,9 +1,10 @@
-import type { AuditChange, Branch, Damage, HistoryEntry, Item, ItemWithStock, Party, Purchase, Sale, StockDoc, Transfer, Unit } from "../types"
+import type { AuditChange, Branch, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, Purchase, Sale, StockDoc, Transfer, Unit } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
 import { company } from "./company"
 import { seedStockDocs, seedUnits } from "./seed-stock"
+import { EXTRA_VENDORS, enrichImports, seedDebitNotes, seedMasterItems, seedOpening, seedServicePurchases } from "./seed-r2"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -14,7 +15,9 @@ interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number }
+  /** R2 */
+  debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -35,6 +38,11 @@ function init(): DB {
     const remain = it.opening + it.purchased + it.prodReceive - it.prodIssue - it.sold - it.damage
     if (remain < 0) it.prodIssue = Math.max(0, it.prodIssue + remain)
   }
+  // R2: service providers, Bill-of-Entry duty stacks on imports, service purchases (no stock)
+  d.vendors.push(...structuredClone(EXTRA_VENDORS))
+  enrichImports(d.purchases, d.vendors)
+  const services = seedServicePurchases(d.purchases.length + 1, { id: "b1", name: "" })
+  d.purchases.push(...services)
   // Audit trail
   const trail = (doc: Sale | Purchase, i: number) => {
     const h: HistoryEntry[] = [{ at: doc.createdAt, by: doc.issuedBy, action: "created" }]
@@ -46,6 +54,10 @@ function init(): DB {
     doc.history = h
   }
   d.sales.forEach(trail); d.purchases.forEach(trail)
+  for (const p of services) if (p.process === "Cancelled") {
+    p.cancelReason = "Duplicate bill — the same trips were billed on another invoice."
+    p.history = p.history!.map((h) => (h.action === "cancelled" ? { ...h, note: p.cancelReason } : h))
+  }
   for (const p of [...d.customers, ...d.vendors]) p.active = true
   // Every seeded document belongs to the main (factory) branch
   const main = mainBranchId(), mainName = branchName(main)
@@ -56,12 +68,27 @@ function init(): DB {
   for (const it of d.items) bal.set(key(it.id, main), Math.max(0, it.opening + it.purchased + it.prodReceive - it.prodIssue - it.sold - it.damage))
   const { transfers, damages } = seedStockDocs(d.items, branchName, (id, b) => bal.get(key(id, b)) ?? 0, (id, b, q) => bal.set(key(id, b), (bal.get(key(id, b)) ?? 0) + q))
   for (const dm of damages) if (dm.process === "Approved") for (const l of dm.lines) item(l.itemId).damage += l.qty
-  seedAudit(d.sales, d.purchases, [...transfers, ...damages])
-  return { ...d, trash: [], units: seedUnits(), transfers, damages, seq: { transfer: transfers.length, damage: damages.length, unit: 7 } }
+  // R2: debit notes (approved returns leave the factory stock), opening entries, master items
+  const debitNotes = seedDebitNotes(d.purchases, (id) => bal.get(key(id, main)) ?? 0)
+  for (const dn of debitNotes) if (dn.process === "Approved") for (const l of dn.lines) { item(l.itemId).purchased -= l.qty; bal.set(key(l.itemId, main), (bal.get(key(l.itemId, main)) ?? 0) - l.qty) }
+  const store = stockBranches().find((b) => b.id !== main) ?? { id: main, name: mainName }
+  const openings = seedOpening(d.items, { id: main, name: mainName }, { id: store.id, name: store.name })
+  const masterItems = seedMasterItems(d.items)
+  const r2Docs = [
+    ...debitNotes.map((x) => ({ entity: "debitNote" as const, id: x.id, ref: x.no, history: x.history })),
+    ...openings.map((x) => ({ entity: "opening" as const, id: x.id, ref: x.no, history: x.history })),
+    ...masterItems.map((x) => ({ entity: "masterItem" as const, id: x.id, ref: `${x.hsCode} · ${x.name}`, history: x.history })),
+  ]
+  seedAudit(d.sales, d.purchases, [...transfers, ...damages], r2Docs)
+  return {
+    ...d, trash: [], units: seedUnits(), transfers, damages, debitNotes, openings, masterItems,
+    seq: { transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length },
+  }
 }
 
 /** Seeds the global audit log from document histories, recent sign-ins and a few admin events. */
-function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[]) {
+type R2Doc = { entity: "debitNote" | "opening" | "masterItem"; id: string; ref: string; history?: HistoryEntry[] }
+function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], r2Docs: R2Doc[]) {
   if (auditStore.events.length) return
   const raw: Parameters<typeof recordAudit>[0][] = []
   for (const [entity, docs] of [["sale", sales], ["purchase", purchases]] as const)
@@ -69,6 +96,8 @@ function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[]) 
       raw.push({ at: h.at, actor: h.by, entity, entityId: doc.id, ref: doc.invoiceNo, action: h.action, note: h.note })
   for (const doc of stockDocs) for (const h of doc.history ?? [])
     raw.push({ at: h.at, actor: h.by, entity: doc.kind, entityId: doc.id, ref: doc.no, action: h.action, note: h.note })
+  for (const doc of r2Docs) for (const h of doc.history ?? [])
+    raw.push({ at: h.at, actor: h.by, entity: doc.entity, entityId: doc.id, ref: doc.ref, action: h.action, note: h.note })
   // Working-day sign-ins for the last 3 weeks (Fri is the weekend in Bangladesh)
   const active = users.filter((u) => u.active)
   for (let back = 21; back >= 1; back--) {
@@ -90,8 +119,8 @@ function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[]) 
 
 /** In-memory store kept on globalThis so it survives dev hot-reloads (resets on server restart). */
 // NB: init() runs at module load — helpers it calls must be hoisted `function` declarations, not `const` arrows (TDZ).
-const g = globalThis as unknown as { __rbsDb4?: DB }
-export const db: DB = (g.__rbsDb4 ??= init())
+const g = globalThis as unknown as { __rbsDb5?: DB }
+export const db: DB = (g.__rbsDb5 ??= init())
 
 export const withStock = (i: Item): ItemWithStock => ({
   ...i,
@@ -107,7 +136,7 @@ export function nextDocId(prefix: "s" | "p", docs: { id: string }[]) {
   return `${prefix}${max + 1}`
 }
 
-export function nextNo(prefix: "S" | "P", issueDate: string) {
+export function nextNo(prefix: "S" | "P" | "PS", issueDate: string) {
   const [y, m] = issueDate.split("-")
   const key = `${prefix}-${m}${y.slice(2)}`
   const list = prefix === "S" ? db.sales : db.purchases
@@ -129,6 +158,7 @@ export function usedBranchIds() {
   for (const d of [...db.sales, ...db.purchases]) ids.add(d.branchId)
   for (const t of db.transfers) { ids.add(t.fromBranchId); ids.add(t.toBranchId) }
   for (const d of db.damages) ids.add(d.branchId)
+  for (const d of [...db.debitNotes, ...db.openings]) ids.add(d.branchId)
   return ids
 }
 /** id → name for list facet labels (all branches, so renamed/removed ones still read well). */
@@ -153,6 +183,8 @@ export function stockByBranch(): Map<string, Record<string, number>> {
   for (const p of db.purchases) if (p.process === "Approved") for (const l of p.lines) add(l.itemId, p.branchId, l.qty)
   for (const t of db.transfers) if (t.process === "Approved") for (const l of t.lines) { add(l.itemId, t.fromBranchId, -l.qty); add(l.itemId, t.toBranchId, l.qty) }
   for (const d of db.damages) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
+  for (const d of db.debitNotes) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
+  for (const o of db.openings) if (o.process === "Approved") add(o.itemId, o.branchId, o.qty)
   const out = new Map<string, Record<string, number>>()
   for (const it of db.items) {
     const r = moves.get(it.id) ?? {}
@@ -186,7 +218,8 @@ export function stockShortfall(lines: { itemId: string; qty: number }[], branchI
 /** Post (+1) or reverse (−1) a document's stock movement. */
 export function postStock(kind: "sale" | "purchase", lines: { itemId: string; qty: number }[], sign: 1 | -1) {
   for (const l of lines) {
-    const it = db.items.find((i) => i.id === l.itemId)!
+    const it = db.items.find((i) => i.id === l.itemId)
+    if (!it) continue // service lines (sv*) carry no stock
     if (kind === "sale") it.sold += sign * l.qty
     else it.purchased += sign * l.qty
   }

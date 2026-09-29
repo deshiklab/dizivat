@@ -47,8 +47,11 @@ export const POST = withAuth("master.edit", async (req, _ctx, user) => {
   if (db.items.some((i) => i.sku.toLowerCase() === d.sku.toLowerCase())) return problem(422, "Validation failed", { sku: ["duplicate"] })
   const bu = badUnit(d.unit)
   if (bu) return problem(422, "Validation failed", bu)
+  const { masterItemId, ...data } = d
+  const master = masterItemId ? db.masterItems.find((m) => m.id === masterItemId) : undefined
+  if (masterItemId && !master) return problem(422, "Validation failed", { masterItemId: ["unknown"] })
   const it: Item = {
-    id: `i${db.items.length + 1}-${Date.now().toString(36)}`, ...d, masterItem: d.name.split(" ")[0], brand: "Local",
+    id: `i${db.items.length + 1}-${Date.now().toString(36)}`, ...data, masterItem: master?.name ?? d.name.split(" ")[0], brand: "Local",
     costPrice: d.purchasePrice ? Math.round(d.purchasePrice * 112) / 100 : Math.round(d.salePrice * 78) / 100,
     opening: 0, purchased: 0, prodReceive: 0, prodIssue: 0, sold: 0, damage: 0,
   }

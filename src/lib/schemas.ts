@@ -46,8 +46,82 @@ export const purchaseInput = z.object({
   /** branch receiving the goods; "" = main (factory) branch */
   branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
+  /** R2: "service" = service purchase (lines reference the service-code list, no stock) */
+  category: z.enum(["goods", "service"]).optional().default("goods"),
 })
 export type PurchaseInput = z.input<typeof purchaseInput>
+
+/* ── R2 ────────────────────────────────────────────────────────────────── */
+
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "required")
+const pct = (max = 100) => z.number({ error: "required" }).min(0, "min0").max(max)
+
+/** Import purchase: the challan fields carry the Bill of Entry no./date; lines are priced in USD. */
+export const importLineInput = lineInput.extend({
+  usd: z.number({ error: "required" }).positive("positive"),
+  usdRate: z.number({ error: "required" }).positive("positive"),
+  /** customs-assessed value in BDT when it differs from USD × rate (optional) */
+  av: z.number().min(0, "min0").optional(),
+  price: z.number().min(0).optional().default(0),
+  cdRate: pct(400), rdRate: pct(), aitRate: pct(), atRate: pct(),
+  sdRate: pct(500),
+})
+export const boeInput = z.object({
+  lcNo: z.string().trim().min(1, "required").max(40),
+  lcDate: date,
+  customsHouse: z.string().min(1, "required").max(10),
+  origin: z.string().trim().min(2, "required").max(40),
+  cnfFirm: z.string().trim().max(120).optional().default(""),
+  receiveAddress: z.string().trim().max(250).optional().default(""),
+})
+export const importInput = purchaseInput.extend({
+  lines: z.array(importLineInput).min(1, "atLeastOneLine"),
+  boe: boeInput,
+})
+export type ImportInput = z.input<typeof importInput>
+
+export const debitNoteInput = z.object({
+  purchaseId: z.string().min(1, "required"),
+  issueDate: date,
+  issueTime: z.string().min(1, "required"),
+  reason: z.enum(["damaged", "quality", "excess", "wrongItem", "priceDispute"], { error: "required" }),
+  note: z.string().max(500).optional().default(""),
+  issuedBy: z.string().min(2, "required"),
+  designation: z.string().min(2, "required"),
+  process: z.enum(["Created", "Approved"]),
+  /** return quantity per purchase line (0 = not returned) */
+  lines: z.array(z.object({ itemId: z.string().min(1), qty: z.number({ error: "required" }).min(0, "min0") })).min(1, "atLeastOneLine"),
+})
+export type DebitNoteInput = z.input<typeof debitNoteInput>
+
+export const openingInput = z.object({
+  itemId: z.string().min(1, "required"),
+  branchId: z.string().min(1, "required"),
+  date,
+  inputTax: z.enum(["standard", "reduced", "zero", "exempt"]),
+  qty: z.number({ error: "required" }).positive("positive"),
+  price: z.number({ error: "required" }).min(0, "min0"),
+  vatPaid: z.number().min(0, "min0").optional().default(0),
+  note: z.string().max(300).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+})
+export type OpeningInput = z.input<typeof openingInput>
+
+export const taxProfileInput = z.object({ vat: pct(), sd: pct(500), cd: pct(400), rd: pct(), ait: pct(), at: pct() })
+export const masterItemInput = z.object({
+  hsCode: z.string().regex(/^\d{8}$/, "hs8"),
+  name: z.string().trim().min(2, "required").max(120),
+  group: z.enum(["Raw Material", "Consumable", "Packing Materials", "Finished Goods"]),
+  category: z.enum(["general", "commercialImporter", "medicine", "petroleum", "superShop"]),
+  unit: z.string().trim().min(1, "required").max(12),
+  priceMethod: z.enum(["average", "standard"]),
+  description: z.string().trim().max(300).optional().default(""),
+  rates: taxProfileInput,
+  /** mandatory when a rate differs from the tariff (checked by the API, which knows the tariff) */
+  overrideReason: z.string().trim().max(300).optional().default(""),
+  active: z.boolean(),
+})
+export type MasterItemInput = z.input<typeof masterItemInput>
 
 export const itemInput = z.object({
   name: z.string().min(2, "required").max(120),
@@ -62,6 +136,8 @@ export const itemInput = z.object({
   sdRate: z.number().min(0).max(500),
   reorderLevel: z.number().min(0, "min0"),
   active: z.boolean(),
+  /** R2: master item (HS-level product) this SKU belongs to */
+  masterItemId: z.string().max(20).optional(),
 })
 export type ItemInput = z.input<typeof itemInput>
 

@@ -32,3 +32,41 @@ export function importTTI(assessable: number, cdRate = 10, rdRate = 3, sdRate = 
   const at = ((assessable + cd + rd + sd) * atRate) / 100
   return { cd: round2(cd), rd: round2(rd), sd: round2(sd), vat: round2(vat), ait: round2(ait), at: round2(at), tti: round2(cd + rd + sd + vat + ait + at) }
 }
+
+export interface ImportRates { cdRate: number; rdRate: number; sdRate: number; vatRate: number; aitRate: number; atRate: number }
+
+/**
+ * One Bill-of-Entry line (R2). AV = USD total × exchange rate unless an assessable value is given (customs may
+ * re-assess). Every amount is rounded to 2 dp; TTI = CD+RD+SD+VAT+AIT+AT; total = AV + TTI.
+ * Rebate (input-tax credit in 9.1) = VAT + AT when rebateable — CD, RD, SD and AIT are not creditable.
+ */
+export function calcImportLine(input: { qty: number; usd: number; usdRate: number; av?: number } & ImportRates, rebateable = true) {
+  const av = round2(input.av != null && input.av > 0 ? input.av : (input.usd || 0) * (input.usdRate || 0))
+  const cd = round2((av * (input.cdRate || 0)) / 100)
+  const rd = round2((av * (input.rdRate || 0)) / 100)
+  const sd = round2(((av + cd + rd) * (input.sdRate || 0)) / 100)
+  const base = av + cd + rd + sd
+  const vat = round2((base * (input.vatRate || 0)) / 100)
+  const ait = round2((av * (input.aitRate || 0)) / 100)
+  const at = round2((base * (input.atRate || 0)) / 100)
+  const tti = round2(cd + rd + sd + vat + ait + at)
+  const qty = input.qty || 0
+  return {
+    av, cd, rd, sd, vat, ait, at, tti,
+    /** landed cost before VAT/AIT/AT ("Actual price" column of the legacy grid) */
+    actual: round2(av + cd + rd),
+    unitAv: qty ? round2(av / qty) : 0,
+    total: round2(av + tti),
+    rebate: rebateable ? round2(vat + at) : 0,
+  }
+}
+
+/** Debit-note line: the returned share of the purchase line (all amounts pro rata, 2 dp). */
+export function calcDebitLine(orig: Pick<Line, "qty" | "price" | "subtotal" | "sd" | "vat" | "total" | "tti" | "rebateable" | "duty">, qty: number) {
+  const r = orig.qty ? qty / orig.qty : 0
+  const vat = round2(orig.vat * r)
+  return {
+    subtotal: round2(orig.subtotal * r), sd: round2(orig.sd * r), vat, tti: round2((orig.tti ?? 0) * r), total: round2(orig.total * r),
+    rebate: orig.rebateable ? round2((orig.vat + (orig.duty?.at ?? 0)) * r) : 0,
+  }
+}

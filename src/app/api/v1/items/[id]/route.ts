@@ -21,9 +21,12 @@ export const PUT = withAuth<Ctx>("master.edit", async (req, { params }, user) =>
   if (db.items.some((i) => i.id !== id && i.sku.toLowerCase() === parsed.data.sku.toLowerCase())) return problem(422, "Validation failed", { sku: ["duplicate"] })
   const bu = badUnit(parsed.data.unit, it.unit)
   if (bu) return problem(422, "Validation failed", bu)
+  const { masterItemId, ...data } = parsed.data
+  const master = masterItemId ? db.masterItems.find((m) => m.id === masterItemId) : undefined
+  if (masterItemId && !master) return problem(422, "Validation failed", { masterItemId: ["unknown"] })
   const before = { ...it }
-  Object.assign(it, parsed.data)
+  Object.assign(it, data, master ? { masterItem: master.name } : {})
   recordAudit({ actor: user, entity: "item", entityId: it.id, ref: `${it.sku} · ${it.name}`, action: "edited",
-    changes: diff(before, it, ["name", "sku", "hsCode", "group", "unit", "purchasePrice", "salePrice", "vatRate", "sdRate", "reorderLevel", "active"]) })
+    changes: diff(before, it, ["name", "sku", "hsCode", "group", "unit", "purchasePrice", "salePrice", "vatRate", "sdRate", "reorderLevel", "active", "masterItem"]) })
   return json(withStock(it))
 })
