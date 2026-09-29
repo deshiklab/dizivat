@@ -119,6 +119,16 @@ async def main():
         r = await api(page, "GET", "/master-items?size=5")
         check("master items API answers in the browser", r["status"] == 200 and len((r["body"] or {}).get("data", [])) == 5)
 
+        # 8d. R4 pages (accounting & NBR VAT) on the in-browser API
+        await page.goto(BASE + "/en/accounting/receipts/")
+        await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
+        check("receipts page renders", await page.locator("table tbody tr").count() >= 5)
+        await page.goto(BASE + "/en/vat/return-9-1/?period=2026-08")
+        await expect(page.get_by_text("Supply — output tax").first).to_be_visible(timeout=15000)
+        check("Mushak 9.1 builder renders from in-browser documents", True)
+        r = await api(page, "GET", "/vat/returns/2026-09/notes/4")
+        check("9.1 sub-form API (nested dynamic route) answers in the browser", r["status"] == 200 and len((r["body"] or {}).get("rows", [])) > 0, r["status"])
+
         # 9. CSV export link is served by the in-browser API
         await page.goto(BASE + "/en/vat/tariff/")
         await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
