@@ -21,7 +21,7 @@ export function Tr6Print({ d }: { d: TreasuryDeposit }) {
         <p className="text-base font-bold" lang="bn">ট্রেজারি চালান</p>
         <p className="text-[0.6875rem] text-neutral-500">Treasury Challan — T.R. Form No. 6 (S.R. 37)</p>
         <p className="mt-2"><span lang="bn">চালান নং</span> / Challan No: <strong className="tabular">{d.challanNo}</strong> &nbsp; <span lang="bn">তারিখ</span> / Date: <strong className="tabular">{fmtDate(d.challanDate, "en")}</strong></p>
-        <p><span lang="bn">বাংলাদেশ ব্যাংক / সোনালী ব্যাংকের</span> {d.bank}, {d.bankBranch} <span lang="bn">শাখা, জেলা</span>: {d.district}</p>
+        <p><span lang="bn">ব্যাংক</span> / Bank: {d.bank} · <span lang="bn">শাখা</span> / Branch: {d.bankBranch} · <span lang="bn">জেলা</span> / District: {d.district}</p>
       </header>
       <table className="w-full border-collapse">
         <thead>

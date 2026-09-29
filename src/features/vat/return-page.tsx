@@ -129,7 +129,7 @@ export function ReturnPage() {
             {/* key figures */}
             <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
               {([["out", c.outputVat, 9], ["in", c.inputVat, 23], ["net", c.netVat, 34], ["payable", c.payableVat, 50], ["deposited", c.depositedVat, 58], ["closing", c.closingVat, 65]] as const).map(([k, v, n]) => (
-                <Card key={k} size="sm"><CardContent className="grid gap-0.5"><span className="text-xs text-muted-foreground">{t(`kpi.${k}`)} <span className="tabular">({t("noteShort", { n })})</span></span><Money value={v} className="text-lg font-semibold" /></CardContent></Card>
+                <Card key={k} size="sm"><CardContent className="grid gap-0.5"><span className="text-xs text-muted-foreground">{t(`kpi.${k}`)} <span className="tabular">({t("noteShort", { n: fmtNum(n, locale) })})</span></span><Money value={v} className="text-lg font-semibold" /></CardContent></Card>
               ))}
             </div>
 

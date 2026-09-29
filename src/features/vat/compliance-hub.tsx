@@ -5,7 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
 import { AlertTriangle, ArrowRight, BookOpen, CalendarClock, FileCheck2, FileSpreadsheet, Landmark, Lock, ReceiptText, Scale, Settings2, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -69,12 +69,12 @@ export function ComplianceHub() {
           <div className="grid gap-4">
             <div className="grid gap-4 lg:grid-cols-3">
               <Card className="lg:col-span-2">
-                <CardHeader className="flex-row items-start justify-between gap-2">
+                <CardHeader>
                   <div className="grid gap-1">
                     <CardTitle className="flex items-center gap-2"><FileSpreadsheet className="size-4" aria-hidden /> {t("returnTitle", { period: periodLabel(d.period) })}</CardTitle>
                     <CardDescription>{d.locked ? t("submittedOn", { date: fmtDate(d.submissionDate, locale), ack: d.ackNo ?? "" }) : d.daysLeft >= 0 ? t("dueIn", { date: fmtDate(d.due, locale), n: d.daysLeft }) : t("overdueBy", { date: fmtDate(d.due, locale), n: -d.daysLeft })}</CardDescription>
                   </div>
-                  {status && <Pill tone={TONE[status]} icon={d.locked ? Lock : undefined}>{tr(`status.${status}`)}</Pill>}
+                  {status && <CardAction><Pill tone={TONE[status]} icon={d.locked ? Lock : undefined}>{tr(`status.${status}`)}</Pill></CardAction>}
                 </CardHeader>
                 <CardContent className="grid gap-4">
                   <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -94,7 +94,7 @@ export function ComplianceHub() {
                 <Card size="sm">
                   <CardHeader><CardTitle className="flex items-center gap-2"><Landmark className="size-4" aria-hidden /> {t("deposits")}</CardTitle></CardHeader>
                   <CardContent className="grid gap-1 text-sm">
-                    <p>{t("depositsBody", { n: fmtNum(d.deposits.count, locale) })} <Money value={d.deposits.amount} className="font-semibold" /></p>
+                    <p>{t("depositsBody", { n: fmtNum(d.deposits.count, locale), count: d.deposits.count })} <Money value={d.deposits.amount} className="font-semibold" /></p>
                     {d.deposits.pending > 0 && <p className="text-warning">{t("depositsPending", { n: fmtNum(d.deposits.pending, locale) })}</p>}
                     <Link href={`/vat/tr-6?period=${d.period}`} className="text-primary hover:underline">{t("openTr6")}</Link>
                   </CardContent>
@@ -102,8 +102,8 @@ export function ComplianceHub() {
                 <Card size="sm">
                   <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4" aria-hidden /> {t("vds")}</CardTitle></CardHeader>
                   <CardContent className="grid gap-1 text-sm">
-                    <p>{t("vdsIssue", { n: fmtNum(d.vds.toIssue, locale) })} <Money value={d.vds.toIssueAmount} /></p>
-                    <p>{t("vdsAwaited", { n: fmtNum(d.vds.awaited, locale) })} <Money value={d.vds.awaitedAmount} /></p>
+                    <p>{t("vdsIssue", { n: fmtNum(d.vds.toIssue, locale), count: d.vds.toIssue })} <Money value={d.vds.toIssueAmount} /></p>
+                    <p>{t("vdsAwaited", { n: fmtNum(d.vds.awaited, locale), count: d.vds.awaited })} <Money value={d.vds.awaitedAmount} /></p>
                     <Link href="/vat/vds" className="text-primary hover:underline">{t("openVds")}</Link>
                   </CardContent>
                 </Card>
@@ -114,7 +114,7 @@ export function ComplianceHub() {
               <CardHeader><CardTitle className="flex items-center gap-2"><CalendarClock className="size-4" aria-hidden /> {t("calendar")}</CardTitle><CardDescription>{t("calendarHint")}</CardDescription></CardHeader>
               <CardContent>
                 <ol className="flex gap-2 overflow-x-auto pb-1" tabIndex={0} role="region" aria-label={t("calendar")}>
-                  {[...periods].reverse().map((p) => (
+                  {periods.map((p) => (
                     <li key={p.period}>
                       <button type="button" onClick={() => setPeriod(p.period)} aria-current={p.period === d.period ? "true" : undefined}
                         className={`grid min-h-11 min-w-24 gap-1 rounded-md border px-3 py-2 text-left text-xs hover:bg-muted ${p.period === d.period ? "border-primary ring-1 ring-primary" : ""}`}>

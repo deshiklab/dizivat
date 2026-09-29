@@ -11,10 +11,13 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts")
  */
 const staticDemo = process.env.NEXT_PUBLIC_STATIC_DEMO === "1"
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || undefined
+// SKIP_BUILD_TYPECHECK=1: skip next build's own type-check worker (low-memory boxes run `npm run typecheck` separately; CI keeps it)
+const typescript = { ignoreBuildErrors: process.env.SKIP_BUILD_TYPECHECK === "1" }
 
 const nextConfig: NextConfig = staticDemo
   ? {
       output: "export",
+      typescript,
       basePath,
       trailingSlash: true,
       images: { unoptimized: true },
@@ -24,6 +27,7 @@ const nextConfig: NextConfig = staticDemo
     }
   : {
       // Allow the sandbox preview host to use dev HMR.
+      typescript,
       allowedDevOrigins: ["*.e2b.app", "*.e2b.dev"],
       poweredByHeader: false,
     }

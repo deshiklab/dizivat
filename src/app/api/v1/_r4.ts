@@ -849,7 +849,7 @@ export function mushak610(from: string, to: string) {
     const p = sale ? db.customers.find((c) => c.id === d.customerId) : db.vendors.find((v) => v.id === (d as Purchase).vendorId)
     return { sl, id: d.id, date: d.issueDate, no: d.invoiceNo, challanNo: d.challanNo, party: p?.name ?? "", address: p?.address ?? "", bin: p?.bin ?? "", value: d.subtotal, vat: d.vat, total: d.netTotal }
   }
-  const pick = <T extends Sale | Purchase>(rows: T[]) => rows.filter((d) => d.process === "Approved" && inR(d.issueDate) && d.netTotal > M610_LIMIT).sort((a, b) => a.issueDate.localeCompare(b.issueDate) || a.invoiceNo.localeCompare(b.invoiceNo)).map(row)
+  const pick = <T extends Sale | Purchase>(rows: T[]) => rows.filter((d) => d.process === "Approved" && inR(d.issueDate) && d.netTotal > M610_LIMIT).sort((a, b) => a.issueDate.localeCompare(b.issueDate) || a.invoiceNo.localeCompare(b.invoiceNo)).map((d, i) => row(d, i + 1))
   const purchases = pick(db.purchases), sales = pick(db.sales)
   const sum = (rows: ReturnType<typeof row>[]) => ({ value: round2(rows.reduce((s, r) => s + r.value, 0)), vat: round2(rows.reduce((s, r) => s + r.vat, 0)), total: round2(rows.reduce((s, r) => s + r.total, 0)) })
   return { from, to, limit: M610_LIMIT, company: { name: company.name, address: company.address, bin: company.bin }, purchases, sales, totals: { purchases: sum(purchases), sales: sum(sales) } }

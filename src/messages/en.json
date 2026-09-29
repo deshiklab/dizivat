@@ -2433,7 +2433,9 @@
       "amount": "Amount (৳)",
       "charge": "Bank / wallet charge (৳)",
       "note": "Note",
-      "issuedBy": "Recorded by"
+      "issuedBy": "Recorded by",
+      "trxId": "Transaction ID",
+      "reference": "Reference / bank ref."
     },
     "editTitle": "Edit {no}",
     "partyLocked": "The party can't change on a saved draft.",
@@ -2634,7 +2636,8 @@
       "type": "Type",
       "ref": "Reference",
       "balance": "Balance"
-    }
+    },
+    "opening": "Opening balance"
   },
   "treasury": {
     "title": "Treasury deposits (TR-6)",
@@ -3071,15 +3074,15 @@
     "continueReturn": "Continue return",
     "deposit": "Deposit (TR-6)",
     "deposits": "Treasury deposits",
-    "depositsBody": "{n} approved challans ·",
+    "depositsBody": "{count, plural, one {# approved challan} other {# approved challans}} ·",
     "depositsPending": "{n} drafts not yet counted",
     "openTr6": "Open TR-6 deposits",
     "vds": "VDS",
-    "vdsIssue": "{n} certificates to issue ·",
-    "vdsAwaited": "{n} awaited from customers ·",
+    "vdsIssue": "{count, plural, one {# certificate to issue} other {# certificates to issue}} ·",
+    "vdsAwaited": "{count, plural, one {# awaited from a customer} other {# awaited from customers}} ·",
     "openVds": "Open VDS",
     "calendar": "Tax periods",
-    "calendarHint": "Pick a period — oldest to newest, one entry each.",
+    "calendarHint": "Pick a period — newest first, one entry each.",
     "reports": "Mushak reports",
     "reportsHint": "Every NBR output and where it lives.",
     "r": {
