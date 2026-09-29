@@ -1,5 +1,5 @@
-import type { AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
+import type { Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import { appPathname, appUrl } from "../base-path"
 
@@ -52,6 +52,19 @@ const parties = (kind: Party$) => ({
   restore: (id: string) => req<Party>(`/${kind}/${id}/restore`, { method: "POST" }),
   csvUrl: (p: ListParams) => `${BASE}/${kind}${qs({ ...p, view: "table", page: undefined, size: undefined, format: "csv" })}`,
 })
+
+/** Standard document resource: list / get / create / update / approve-cancel / delete / CSV. */
+function docResource<T, I, G = T>(path: string) {
+  return {
+    list: (p: ListParams) => req<ListResult<T>>(`${path}${qs(p)}`),
+    get: (id: string) => req<G>(`${path}/${id}`),
+    create: (b: I) => req<T>(path, { method: "POST", body: JSON.stringify(b) }),
+    update: (id: string, b: I) => req<T>(`${path}/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+    setProcess: (id: string, b: CancelBody) => req<T>(`${path}/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+    remove: (id: string) => req<{ ok: true }>(`${path}/${id}`, { method: "DELETE" }),
+    csvUrl: (p: ListParams) => `${BASE}${path}${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+  }
+}
 
 type StockDoc$ = "transfers" | "damage"
 function stockDocs<T, I>(path: StockDoc$) {
@@ -183,6 +196,21 @@ export const api = {
     update: (id: string, b: MasterItemInput) => req<MasterItemRow>(`/master-items/${id}`, { method: "PUT", body: JSON.stringify(b) }),
     csvUrl: (p: ListParams) => `${BASE}/master-items${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
   },
+  /* ── R3 ── */
+  saleServices: () => req<SaleService[]>("/sale-services"),
+  creditable: (saleId: string, exclude?: string) => req<{ sale: { id: string; invoiceNo: string; process: string; issueDate: string; customerName: string; category: string }; lines: Creditable[] }>(`/sales/${saleId}/creditable${qs({ exclude })}`),
+  creditNotes: docResource<CreditNote, CreditNoteInput>("/credit-notes"),
+  production: {
+    boms: docResource<BomRow, BomFormInput, BomRow & { versions: BomRow[] }>("/production/boms"),
+    workOrders: docResource<WorkOrder, WorkOrderInput, WorkOrder & { batches: WorkOrderBatch[] }>("/production/work-orders"),
+    batches: {
+      ...docResource<Batch, BatchInput>("/production/batches"),
+      receive: (id: string, b: BatchReceiveInput) => req<Batch>(`/production/batches/${id}/receive`, { method: "POST", body: JSON.stringify(b) }),
+    },
+    config: () => req<ProductionConfig>("/production/config"),
+    saveConfig: (b: ProductionConfigInput) => req<ProductionConfig>("/production/config", { method: "PUT", body: JSON.stringify(b) }),
+    lots: (item: string, exclude?: string) => req<Lot[]>(`/production/lots${qs({ item, exclude })}`),
+  },
   mushak: {
     book: (form: "6.1" | "6.2", p: { item: string; from: string; to: string }) => req<MushakBook>(`/mushak/${form}${qs(p)}`),
     csvUrl: (form: "6.1" | "6.2", p: { item: string; from: string; to: string }) => `${BASE}/mushak/${form}${qs({ ...p, format: "csv" })}`,
@@ -190,5 +218,8 @@ export const api = {
 }
 
 export interface Returnable { itemId: string; name: string; hsCode: string; uom: string; price: number; sdRate: number; vatRate: number; purchasedQty: number; returnedQty: number; remaining: number; import: boolean }
+
+export interface Creditable { itemId: string; name: string; hsCode: string; uom: string; price: number; sdRate: number; vatRate: number; soldQty: number; returnedQty: number; remaining: number }
+export interface WorkOrderBatch { id: string; no: string; mode: Batch["mode"]; issueDate: string; process: Batch["process"]; totalIssue: number; totalReceive: number }
 
 export type { Item }

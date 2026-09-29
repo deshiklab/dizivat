@@ -6,7 +6,7 @@ import { useFieldArray, useForm, useWatch, Controller } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import type { z } from "zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Globe2, Info, Loader2, Plus, Save, Send, Trash2, UserPlus } from "lucide-react"
+import { AlertTriangle, Globe2, Info, Loader2, Plus, Save, Send, Ship, Trash2, UserPlus, Wallet } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,16 +26,24 @@ import { saleInput } from "@/lib/schemas"
 import { TODAY } from "@/lib/company"
 import { useCan, useMe } from "@/components/auth/me-provider"
 import { PartySheet } from "@/features/parties/party-sheet"
-import type { Sale } from "@/lib/types"
+import type { ExportInfo, Party, Sale, SaleCategory } from "@/lib/types"
 import { fmtNum } from "@/lib/format"
+import { CUSTOMS_HOUSES } from "@/lib/r2"
+import { EXPORT_COUNTRIES } from "@/lib/r3"
 import { calcLine, sumLines } from "@/lib/vat"
 
 type In = z.input<typeof saleInput>
 type Out = z.output<typeof saleInput>
-const emptyLine = { itemId: "", qty: undefined as unknown as number, price: undefined as unknown as number, sdRate: 0, vatRate: 15 }
+const emptyLine = { itemId: "", qty: undefined as unknown as number, price: undefined as unknown as number, sdRate: 0, vatRate: 15, batchId: "" }
+const blankExport = (deemed: boolean, c?: Party): ExportInfo => ({ deemed, lcNo: "", lcDate: "", customsHouse: "", country: deemed ? "" : c?.country ?? "", billNo: "", billDate: "", shippingAddress: deemed ? "" : c?.address ?? "", cnfFirm: "" })
 
-/** New invoice, or edit of a draft when `initial` is given (only drafts are editable — approved invoices are cancelled instead). */
-export function SaleForm({ initial }: { initial?: Sale } = {}) {
+/**
+ * New invoice, or edit of a draft when `initial` is given (only drafts are editable — approved invoices are cancelled instead).
+ * R3 variants: `category="service"` (service codes, SS- numbers, no stock), exports (foreign customer → LC, customs house,
+ * Bill of Export; zero-rated) and deemed exports (local customer against a back-to-back LC). Shows the customer's credit
+ * position and the finished-goods lots a line can ship from.
+ */
+export function SaleForm({ initial, category = "goods", preset }: { initial?: Sale; category?: SaleCategory; preset?: "export" } = {}) {
   const t = useTranslations("sales")
   const tf = useTranslations("form")
   const tc = useTranslations("common")
@@ -55,6 +63,9 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
   const branches = itemsPage?.branches ?? []
   const mainBranch = branches.find((b) => b.category === "factory")?.id ?? branches[0]?.id ?? ""
   const products = (itemsPage?.data ?? []).filter((i) => i.group === "Finished Goods" && i.active)
+  const service = (initial?.category ?? category) === "service"
+  const { data: services = [] } = useQuery({ queryKey: ["saleServices"], queryFn: api.saleServices, enabled: service, staleTime: 10 * 60_000 })
+  const listHref = service ? "/sales/services" : preset === "export" || initial?.export ? "/sales/exports" : "/sales"
 
   const form = useForm<In, unknown, Out>({
     resolver: zodResolver(saleInput),
@@ -62,12 +73,13 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
     defaultValues: initial ? {
       customerId: initial.customerId, issueDate: initial.issueDate, issueTime: initial.issueTime, deliveryAddress: initial.deliveryAddress, vehicle: initial.vehicle ?? "",
       method: initial.method === "Transaction" ? "Bank" : initial.method, discount: initial.discount, paid: initial.paid, vds: initial.vds, issuedBy: initial.issuedBy, designation: initial.designation,
-      narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "",
-      lines: initial.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, price: l.price, sdRate: l.sdRate, vatRate: l.vatRate })),
+      narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "", category: initial.category ?? "goods",
+      export: initial.export ? { ...initial.export, cnfFirm: initial.export.cnfFirm ?? "" } : undefined,
+      lines: initial.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, price: l.price, sdRate: l.sdRate, vatRate: l.vatRate, batchId: l.batchId ?? "" })),
     } : {
       customerId: "", issueDate: TODAY, issueTime: "10:30", deliveryAddress: "", vehicle: "", method: "Bank",
       discount: 0, paid: 0, vds: false, issuedBy: me.user.name, designation: me.user.designation, narration: "", process: "Created", branchId: "",
-      lines: [emptyLine],
+      category, export: undefined, lines: [emptyLine],
     },
   })
   const { register, control, handleSubmit, setValue, formState: { errors, isDirty, isSubmitting }, setError, getValues } = form
@@ -79,9 +91,29 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
   const branchId = w.branchId || mainBranch
   const avail = (p: { byBranch: Record<string, number> }) => p.byBranch[branchId] ?? 0
   const foreign = customer?.mode === "Foreign"
-  const calc = (w.lines ?? []).map((l) => calcLine({ qty: Number(l?.qty) || 0, price: Number(l?.price) || 0, sdRate: Number(l?.sdRate) || 0, vatRate: foreign ? 0 : Number(l?.vatRate) || 0 }))
+  const exp = w.export
+  // exports and deemed exports are zero-rated
+  const zero = foreign || !!exp
+  const calc = (w.lines ?? []).map((l) => calcLine({ qty: Number(l?.qty) || 0, price: Number(l?.price) || 0, sdRate: service ? 0 : Number(l?.sdRate) || 0, vatRate: zero ? 0 : Number(l?.vatRate) || 0 }))
   const totals = sumLines(calc, Number(w.discount) || 0)
   const due = Math.max(0, totals.netTotal - (Number(w.paid) || 0))
+  // Credit position of the customer (receivable, overdue, limit) — a soft check, the invoice can still be saved
+  const credit = useQuery({ queryKey: ["customers", "credit", w.customerId], queryFn: () => api.customers.get(w.customerId!), enabled: !!w.customerId })
+  const limit = credit.data?.creditLimit ?? 0
+  const openDue = Math.max(0, (credit.data?.due ?? 0) - (initial?.process === "Approved" ? initial.due : 0))
+  const overLimit = limit > 0 ? Math.max(0, openDue + due - limit) : 0
+  const setExport = (v: ExportInfo | undefined) => setValue("export", v as never, { shouldDirty: true })
+  // Zero-rating follows the export flag: VAT 0 while exporting, the product's rate otherwise
+  const lastZero = React.useRef(zero)
+  React.useEffect(() => {
+    if (lastZero.current === zero) return
+    lastZero.current = zero
+    getValues("lines").forEach((l, i) => {
+      const rate = zero ? 0 : service ? services.find((x) => x.id === l.itemId)?.vatRate ?? 15 : products.find((p) => p.id === l.itemId)?.vatRate ?? 15
+      setValue(`lines.${i}.vatRate`, rate)
+    })
+    if (zero) setValue("vds", false)
+  }, [zero]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Prefill delivery address when the customer *changes* (not when an existing draft loads)
   const lastCustomer = React.useRef(initial?.customerId ?? "")
@@ -90,6 +122,13 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
     lastCustomer.current = customer.id
     setValue("deliveryAddress", customer.address, { shouldDirty: true })
     if (customer.mode === "Foreign") getValues("lines").forEach((_, i) => setValue(`lines.${i}.vatRate`, 0))
+    if (!service) {
+      // foreign customer → export documents; a deemed export stays only for local customers
+      if (customer.mode === "Foreign") setExport(blankExport(false, customer))
+      else if (getValues("export") && !getValues("export")?.deemed) setExport(undefined)
+    }
+    // VDS pre-ticked for withholding entities (banks, listed companies …)
+    setValue("vds", !!customer.vdsWithholder && customer.mode !== "Foreign" && !getValues("export"))
   }, [customer?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const create = useMutation({
@@ -113,7 +152,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
   }
   const onCancel = async () => {
     if (!isDirty || (await confirm({ title: tf("discardTitle"), description: tf("discardBody"), confirm: tf("discard"), cancel: tf("keepEditing"), destructive: true }))) {
-      form.reset(); router.push(initial ? `/sales/${initial.id}` : "/sales")
+      form.reset(); router.push(initial ? `/sales/${initial.id}` : listHref)
     }
   }
   const err = (path: string) => {
@@ -123,7 +162,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
     return (e as { message?: string } | undefined)?.message
   }
   const lineErrors = (Array.isArray(errors.lines) ? errors.lines : []).flatMap((le, i) =>
-    le ? (["itemId", "qty", "price"] as const).map((k) => le[k]?.message).filter((m): m is string => !!m)
+    le ? (["itemId", "qty", "price", "batchId"] as const).map((k) => le[k]?.message).filter((m): m is string => !!m)
       .map((m) => `${tv("lineN", { n: i + 1 })}: ${tv.has(m) ? tv(m) : m}`) : []
   )
   const methodItems = (["Bank", "Cash", "Cheque", "Mobile"] as const).map((v) => ({ value: v, label: tpm(v) }))
@@ -132,9 +171,9 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
     <form onSubmit={(e) => { e.preventDefault(); submit("Created") }} noValidate
       onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); submit(canApprove ? "Approved" : "Created") } }}>
       <PageHeader
-        crumbs={initial ? [{ label: initial.invoiceNo, href: `/sales/${initial.id}` }, { label: tc("edit") }] : [{ label: t("new") }]}
-        title={initial ? t("editTitle", { no: initial.invoiceNo }) : t("newTitle")}
-        description={initial ? t("editSub") : t("newSub")}
+        crumbs={initial ? [{ label: initial.invoiceNo, href: `/sales/${initial.id}` }, { label: tc("edit") }] : [{ label: service ? t("services.new") : preset === "export" ? t("exports.new") : t("new") }]}
+        title={initial ? t("editTitle", { no: initial.invoiceNo }) : service ? t("services.newTitle") : preset === "export" ? t("exports.newTitle") : t("newTitle")}
+        description={initial ? t("editSub") : service ? t("services.newSub") : preset === "export" ? t("exports.newSub") : t("newSub")}
         actions={<span className="rounded-md border bg-card px-2.5 py-1 text-sm text-muted-foreground">{t("invoiceNo")}: <span className="font-medium text-foreground">{initial?.invoiceNo ?? t("autoNo")}</span></span>}
       />
 
@@ -148,7 +187,8 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                   <Controller control={control} name="customerId" render={({ field }) => (
                     <Combobox id={a.id} describedBy={a["aria-describedby"]} invalid={a["aria-invalid"]} value={field.value} onChange={(v) => { field.onChange(v); field.onBlur() }}
                       placeholder={t("selectCustomer")} searchPlaceholder={t("searchCustomer")} empty={tc("noResults")}
-                      options={customers.map((c) => ({ value: c.id, label: c.name, description: `${c.mode === "Foreign" ? "Export · " : ""}BIN ${c.bin}` }))}
+                      options={(preset === "export" ? [...customers].sort((a, b) => Number(b.mode === "Foreign") - Number(a.mode === "Foreign")) : customers).filter((c) => !service || c.mode !== "Foreign")
+                        .map((c) => ({ value: c.id, label: c.name, description: `${c.mode === "Foreign" ? "Export · " : ""}BIN ${c.bin}` }))}
                       footer={can("master.edit") ? <Button type="button" variant="ghost" size="sm" className="w-full justify-start" onClick={() => setAddingCustomer(true)}><UserPlus /> {t("addCustomer")}</Button> : undefined} />
                   )} />
                 )}
@@ -160,8 +200,30 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                   <div><dt className="text-xs text-muted-foreground">{t("field.address")}</dt><dd>{customer.address}</dd></div>
                 </dl>
               )}
+              {customer && credit.data && (
+                <div className="grid gap-2 rounded-md border p-3 text-sm md:col-span-2" data-testid="credit-card">
+                  <p className="flex items-center gap-2 font-medium"><Wallet className="size-4 text-muted-foreground" aria-hidden /> {t("credit.title")}</p>
+                  <dl className="grid gap-2 sm:grid-cols-4">
+                    <div><dt className="text-xs text-muted-foreground">{t("credit.receivable")}</dt><dd><Money value={credit.data.due} /></dd></div>
+                    <div><dt className="text-xs text-muted-foreground">{t("credit.overdue")}</dt><dd className={(credit.data.overdue ?? 0) > 0 ? "font-medium text-warning" : ""}><Money value={credit.data.overdue ?? 0} /></dd></div>
+                    <div><dt className="text-xs text-muted-foreground">{t("credit.limit")}</dt><dd>{limit > 0 ? <Money value={limit} /> : <span className="text-muted-foreground">{t("credit.noLimit")}</span>}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">{t("credit.available")}</dt><dd>{limit > 0 ? <Money value={Math.max(0, limit - openDue)} /> : "—"}</dd></div>
+                  </dl>
+                  {overLimit > 0 && <p role="status" className="flex items-start gap-2 rounded-md bg-warning-soft p-2 text-xs"><AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden /> {t("credit.over", { amount: fmtNum(overLimit, locale, 2) })}</p>}
+                  {customer.vdsWithholder && !zero && <p className="text-xs text-muted-foreground">{t("credit.vdsWithholder")}</p>}
+                </div>
+              )}
               {foreign && (
                 <p className="flex items-start gap-2 rounded-md bg-info-soft p-3 text-sm text-info md:col-span-2"><Globe2 className="mt-0.5 size-4 shrink-0" aria-hidden /> {t("exportNote")}</p>
+              )}
+              {customer && !foreign && !service && (
+                <div className="flex items-start justify-between gap-3 rounded-md border p-3 md:col-span-2">
+                  <div className="grid gap-0.5">
+                    <Label htmlFor="deemed">{t("export.deemedToggle")}</Label>
+                    <p className="text-xs text-muted-foreground">{t("export.deemedHint")}</p>
+                  </div>
+                  <Switch id="deemed" checked={!!exp?.deemed} onCheckedChange={(on) => setExport(on ? blankExport(true) : undefined)} />
+                </div>
               )}
               <Field id="issueDate" label={t("field.issueDate")} required error={err("issueDate")}>
                 {(a) => <Input type="date" max={TODAY} {...a} {...register("issueDate")} />}
@@ -186,10 +248,46 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
             </CardContent>
           </Card>
 
+          {exp && (
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2"><Ship className="size-4" aria-hidden /> {exp.deemed ? t("export.deemedTitle") : t("export.title")}</CardTitle><CardDescription>{exp.deemed ? t("export.deemedSub") : t("export.sub")}</CardDescription></CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <Field id="export.lcNo" label={t("export.lcNo")} required error={err("export.lcNo")}>{(a) => <Input {...a} {...register("export.lcNo")} />}</Field>
+                <Field id="export.lcDate" label={t("export.lcDate")} required error={err("export.lcDate")}>{(a) => <Input type="date" max={w.issueDate || TODAY} {...a} {...register("export.lcDate")} />}</Field>
+                {!exp.deemed && (<>
+                  <Field id="export.customsHouse" label={t("export.customsHouse")} required error={err("export.customsHouse")}>
+                    {(a) => <Controller control={control} name="export.customsHouse" render={({ field }) => (
+                      <Select value={field.value ?? ""} onValueChange={(v) => { field.onChange(v); field.onBlur() }} items={CUSTOMS_HOUSES.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` }))}>
+                        <SelectTrigger id={a.id} className="w-full" aria-describedby={a["aria-describedby"]} aria-invalid={a["aria-invalid"]}><SelectValue placeholder={t("export.pick")} /></SelectTrigger>
+                        <SelectContent>{CUSTOMS_HOUSES.map((c) => <SelectItem key={c.code} value={c.code}>{c.code} · {c.name}</SelectItem>)}</SelectContent>
+                      </Select>
+                    )} />}
+                  </Field>
+                  <Field id="export.country" label={t("export.country")} required error={err("export.country")}>
+                    {(a) => <Controller control={control} name="export.country" render={({ field }) => {
+                      const opts = [...new Set([...(customer?.country ? [customer.country] : []), ...EXPORT_COUNTRIES])]
+                      return (
+                        <Select value={field.value ?? ""} onValueChange={(v) => { field.onChange(v); field.onBlur() }} items={opts.map((c) => ({ value: c, label: c }))}>
+                          <SelectTrigger id={a.id} className="w-full" aria-describedby={a["aria-describedby"]} aria-invalid={a["aria-invalid"]}><SelectValue placeholder={t("export.pick")} /></SelectTrigger>
+                          <SelectContent>{opts.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                        </Select>
+                      )
+                    }} />}
+                  </Field>
+                  <Field id="export.billNo" label={t("export.billNo")} required error={err("export.billNo")}>{(a) => <Input {...a} {...register("export.billNo")} />}</Field>
+                  <Field id="export.billDate" label={t("export.billDate")} required error={err("export.billDate")}>{(a) => <Input type="date" min={w.issueDate} {...a} {...register("export.billDate")} />}</Field>
+                  <Field id="export.shippingAddress" label={t("export.shippingAddress")} required error={err("export.shippingAddress")} className="md:col-span-2">{(a) => <Textarea rows={2} {...a} {...register("export.shippingAddress")} />}</Field>
+                  <Field id="export.cnfFirm" label={t("export.cnfFirm")} error={err("export.cnfFirm")} className="md:col-span-2">{(a) => <Input {...a} {...register("export.cnfFirm")} />}</Field>
+                </>)}
+                {typeof err("export") === "string" && <p role="alert" className="text-sm font-medium text-destructive md:col-span-2">{tv.has(err("export")!) ? tv(err("export")!) : err("export")}</p>}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>{t("sectionItems")}</CardTitle>
-              <CardDescription>{t("sectionItemsHint")}</CardDescription>
+              <CardDescription>{service ? t("services.itemsHint") : t("sectionItemsHint")}</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 px-0">
               {typeof errors.lines?.message === "string" && <p className="px-6 text-sm font-medium text-destructive" role="alert">{tv(errors.lines.message)}</p>}
@@ -204,7 +302,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                   <thead>
                     <tr className="border-b text-left text-xs text-muted-foreground">
                       <th scope="col" className="w-8 px-3 py-2 font-medium">#</th>
-                      <th scope="col" className="px-2 py-2 font-medium">{t("line.product")} <span className="text-destructive" aria-hidden>*</span></th>
+                      <th scope="col" className="px-2 py-2 font-medium">{service ? t("line.service") : t("line.product")} <span className="text-destructive" aria-hidden>*</span></th>
                       <th scope="col" className="w-20 px-2 py-2 text-right font-medium whitespace-nowrap">{t("line.qty")} <span className="text-destructive" aria-hidden>*</span></th>
                       <th scope="col" className="w-24 px-2 py-2 text-right font-medium whitespace-nowrap">{t("line.price")} <span className="text-destructive" aria-hidden>*</span></th>
                       <th scope="col" className="w-16 min-w-[4.5rem] px-2 py-2 text-right font-medium whitespace-nowrap">{t("line.sdPct")}</th>
@@ -217,27 +315,42 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                   <tbody>
                     {fields.map((f, i) => {
                       const line = w.lines?.[i]
-                      const item = products.find((p) => p.id === line?.itemId)
+                      const item = service ? undefined : products.find((p) => p.id === line?.itemId)
                       const over = item && Number(line?.qty) > avail(item)
                       return (
                         <tr key={f.id} className="border-b align-top last:border-0">
                           <td className="px-3 py-2.5 text-muted-foreground tabular">{fmtNum(i + 1, locale)}</td>
                           <td className="px-2 py-1.5">
                             <Controller control={control} name={`lines.${i}.itemId`} render={({ field }) => (
+                              service ? (
+                                <Combobox ariaLabel={`${t("line.service")} ${i + 1}`} value={field.value} invalid={!!err(`lines.${i}.itemId`)} placeholder={t("services.select")} searchPlaceholder={t("services.search")} empty={tc("noResults")}
+                                  onChange={(v) => {
+                                    field.onChange(v)
+                                    const sv = services.find((x) => x.id === v)
+                                    if (sv) { setValue(`lines.${i}.vatRate`, zero ? 0 : sv.vatRate); setValue(`lines.${i}.sdRate`, 0) }
+                                  }}
+                                  options={services.map((x) => ({ value: x.id, label: x.name, description: `${x.code} · ${t("line.vatPct")} ${fmtNum(x.vatRate, locale)} · ${x.unit}`, keywords: [x.code] }))} />
+                              ) : (
                               <Combobox ariaLabel={`${t("line.product")} ${i + 1}`} value={field.value} invalid={!!err(`lines.${i}.itemId`)} placeholder={t("selectProduct")} searchPlaceholder={t("searchProduct")} empty={tc("noResults")}
                                 onChange={(v) => {
                                   field.onChange(v)
+                                  setValue(`lines.${i}.batchId`, "")
                                   const it = products.find((p) => p.id === v)
-                                  if (it) { setValue(`lines.${i}.price`, it.salePrice, { shouldValidate: true }); setValue(`lines.${i}.vatRate`, foreign ? 0 : it.vatRate); setValue(`lines.${i}.sdRate`, it.sdRate) }
+                                  if (it) { setValue(`lines.${i}.price`, it.salePrice, { shouldValidate: true }); setValue(`lines.${i}.vatRate`, zero ? 0 : it.vatRate); setValue(`lines.${i}.sdRate`, it.sdRate) }
                                 }}
                                 options={products.map((p) => ({ value: p.id, label: p.name, description: `${p.sku} · HS ${p.hsCode} · ${t("inStock")}: ${fmtNum(avail(p), locale)} ${p.unit}` }))} />
+                              )
                             )} />
+                            {service && line?.itemId && <p className="mt-1 text-xs text-muted-foreground tabular">{services.find((x) => x.id === line.itemId)?.code} · {t("services.noStock")}</p>}
                             {item && <p className={`mt-1 flex items-center gap-1 text-xs ${over ? "text-warning" : "text-muted-foreground"}`}>{over && <AlertTriangle className="size-3" aria-hidden />}{t("inStock")}: {fmtNum(avail(item), locale)} {item.unit}{over ? ` — ${t("overStock")}` : ""}</p>}
+                            {item && <Controller control={control} name={`lines.${i}.batchId`} render={({ field }) => (
+                              <LotSelect itemId={item.id} value={field.value ?? ""} onChange={field.onChange} qty={Number(line?.qty) || 0} excludeId={initial?.id} label={t("lot.for", { n: i + 1 })} invalid={!!err(`lines.${i}.batchId`)} />
+                            )} />}
                           </td>
                           <td className="px-2 py-1.5"><Input aria-label={`${t("line.qty")} ${i + 1}`} aria-invalid={!!err(`lines.${i}.qty`) || undefined} inputMode="decimal" type="number" step="any" min={0} className="text-right tabular" {...register(`lines.${i}.qty`, { valueAsNumber: true })} /></td>
                           <td className="px-2 py-1.5"><Input aria-label={`${t("line.price")} ${i + 1}`} aria-invalid={!!err(`lines.${i}.price`) || undefined} inputMode="decimal" type="number" step="0.01" min={0} className="text-right tabular" {...register(`lines.${i}.price`, { valueAsNumber: true })} /></td>
-                          <td className="px-2 py-1.5"><Input aria-label={`${t("line.sdPct")} ${i + 1}`} type="number" step="0.01" min={0} className="text-right tabular" {...register(`lines.${i}.sdRate`, { valueAsNumber: true })} /></td>
-                          <td className="px-2 py-1.5"><Input aria-label={`${t("line.vatPct")} ${i + 1}`} type="number" step="0.01" min={0} disabled={foreign} className="text-right tabular" {...register(`lines.${i}.vatRate`, { valueAsNumber: true })} /></td>
+                          <td className="px-2 py-1.5"><Input aria-label={`${t("line.sdPct")} ${i + 1}`} type="number" step="0.01" min={0} disabled={service} className="text-right tabular" {...register(`lines.${i}.sdRate`, { valueAsNumber: true })} /></td>
+                          <td className="px-2 py-1.5"><Input aria-label={`${t("line.vatPct")} ${i + 1}`} type="number" step="0.01" min={0} disabled={zero} className="text-right tabular" {...register(`lines.${i}.vatRate`, { valueAsNumber: true })} /></td>
                           <td className="px-2 py-2.5 text-right break-all"><Money value={calc[i]?.vat ?? 0} /></td>
                           <td className="px-2 py-2.5 text-right font-medium break-all"><Money value={calc[i]?.total ?? 0} /></td>
                           <td className="px-2 py-1.5">
@@ -250,7 +363,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                 </table>
               </div>
               <div className="px-6">
-                <Button type="button" variant="outline" size="sm" onClick={() => append({ ...emptyLine, vatRate: foreign ? 0 : 15 })}><Plus /> {t("addLine")}</Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => append({ ...emptyLine, vatRate: zero ? 0 : 15 })}><Plus /> {t("addLine")}</Button>
               </div>
             </CardContent>
           </Card>
@@ -272,7 +385,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
               <dl className="grid grid-cols-[1fr_auto] gap-y-1.5 text-sm" aria-live="polite">
                 <dt className="text-muted-foreground">{t("col.subtotal")}</dt><dd className="text-right"><Money value={totals.subtotal} /></dd>
                 <dt className="text-muted-foreground">{t("col.sd")}</dt><dd className="text-right"><Money value={totals.sd} /></dd>
-                <dt className="text-muted-foreground">{t("col.vat")} {foreign && <span className="text-xs">({t("zeroRatedExport")})</span>}</dt><dd className="text-right"><Money value={totals.vat} /></dd>
+                <dt className="text-muted-foreground">{t("col.vat")} {zero && <span className="text-xs">({exp?.deemed ? t("export.zeroDeemed") : t("zeroRatedExport")})</span>}</dt><dd className="text-right"><Money value={totals.vat} /></dd>
                 <dt className="text-muted-foreground">{t("gross")}</dt><dd className="text-right"><Money value={totals.gross} /></dd>
               </dl>
               <div className="grid grid-cols-2 gap-3">
@@ -283,6 +396,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                 <dt className="font-semibold">{t("col.netTotal")}</dt><dd className="text-right text-xl font-semibold"><span className="text-sm text-muted-foreground">৳ </span><Money value={totals.netTotal} /></dd>
                 <dt className="text-sm text-muted-foreground">{t("col.due")}</dt><dd className="text-right text-sm"><Money value={due} /></dd>
               </dl>
+              {overLimit > 0 && <p role="status" className="flex items-start gap-2 rounded-md bg-warning-soft p-2 text-xs"><AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" aria-hidden /> {t("credit.over", { amount: fmtNum(overLimit, locale, 2) })}</p>}
               <Field id="method" label={t("field.method")}>
                 {(a) => (
                   <Controller control={control} name="method" render={({ field }) => (
@@ -298,7 +412,7 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
                   <Label htmlFor="vds">{t("field.vds")}</Label>
                   <p className="text-xs text-muted-foreground">{t("vdsHint")}</p>
                 </div>
-                <Controller control={control} name="vds" render={({ field }) => <Switch id="vds" checked={field.value} onCheckedChange={field.onChange} disabled={foreign} />} />
+                <Controller control={control} name="vds" render={({ field }) => <Switch id="vds" checked={field.value} onCheckedChange={field.onChange} disabled={zero} />} />
               </div>
               <p className="flex items-start gap-2 text-xs text-muted-foreground"><Info className="mt-0.5 size-3.5 shrink-0" aria-hidden /> {canApprove ? t("approveHint") : t("draftOnlyHint")}</p>
               <div className="grid gap-2">
@@ -317,5 +431,25 @@ export function SaleForm({ initial }: { initial?: Sale } = {}) {
       <PartySheet kind="customer" open={addingCustomer} onOpenChange={setAddingCustomer}
         onSaved={(c) => { qc.invalidateQueries({ queryKey: ["customers"] }); setValue("customerId", c.id, { shouldDirty: true, shouldValidate: true }) }} />
     </form>
+  )
+}
+
+/** Optional finished-goods lot (production batch) for a line; FIFO when left on "any lot". The API re-checks on approval. */
+function LotSelect({ itemId, value, onChange, qty, excludeId, label, invalid }: { itemId: string; value: string; onChange: (v: string) => void; qty: number; excludeId?: string; label: string; invalid?: boolean }) {
+  const t = useTranslations("sales")
+  const locale = useLocale()
+  const { data: lots = [] } = useQuery({ queryKey: ["lots", itemId, excludeId], queryFn: () => api.production.lots(itemId, excludeId), staleTime: 30_000 })
+  if (!lots.length && !value) return null
+  const ANY = "_any"
+  const items = [{ value: ANY, label: t("lot.any") }, ...lots.map((l) => ({ value: l.batchId, label: t("lot.option", { no: l.batchNo, qty: fmtNum(l.available, locale, 2) }) }))]
+  const lot = lots.find((l) => l.batchId === value)
+  return (
+    <div className="mt-1.5 grid gap-1">
+      <Select value={value || ANY} onValueChange={(v) => onChange(!v || v === ANY ? "" : String(v))} items={items}>
+        <SelectTrigger aria-label={label} aria-invalid={invalid || undefined} className="w-full text-xs"><SelectValue /></SelectTrigger>
+        <SelectContent>{items.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+      </Select>
+      {lot && qty > lot.available + 1e-9 && <p className="flex items-center gap-1 text-xs text-warning"><AlertTriangle className="size-3" aria-hidden /> {t("lot.over", { qty: fmtNum(lot.available, locale, 2) })}</p>}
+    </div>
   )
 }

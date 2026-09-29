@@ -13,7 +13,7 @@ import { useListState } from "@/components/data-table/use-list-state"
 import { DateRangeFilter, FacetFilter, FilterChips, SearchInput } from "@/components/data-table/filters"
 import { SavedViews } from "@/components/data-table/saved-views"
 import { PageHeader } from "@/components/common/page-header"
-import { ModeBadge, ProcessBadge } from "@/components/common/status-badge"
+import { ModeBadge, Pill, ProcessBadge } from "@/components/common/status-badge"
 import { Money } from "@/components/common/money"
 import { useCan } from "@/components/auth/me-provider"
 import { useDocActions } from "@/features/docs/use-doc-actions"
@@ -23,9 +23,12 @@ import { fmtCompact, fmtDate, fmtNum } from "@/lib/format"
 import type { Sale } from "@/lib/types"
 import { appUrl } from "@/lib/base-path"
 
-const FACETS = ["customer", "process", "mode", "method", "payment", "branch"] as const
+const FACETS = ["customer", "process", "mode", "method", "payment", "branch", "trade"] as const
+export type SalesVariant = "goods" | "service" | "export"
+const NEW_HREF: Record<SalesVariant, string> = { goods: "/sales/new", service: "/sales/services/new", export: "/sales/new?type=export" }
 
-export function SalesList() {
+/** Sales invoices (goods, default), service sales (R3, SS- numbers) and exports / deemed exports (R3) share one list. */
+export function SalesList({ variant = "goods" }: { variant?: SalesVariant } = {}) {
   const t = useTranslations("sales")
   const tc = useTranslations("common")
   const tp = useTranslations("process")
@@ -37,7 +40,14 @@ export function SalesList() {
   const qc = useQueryClient()
   const can = useCan()
   const actions = useDocActions("sale")
-  const { state, set, params, clearAll, activeCount } = useListState(FACETS)
+  const { state, set, params: listParams, clearAll, activeCount } = useListState(FACETS)
+  const params = React.useMemo(() => ({
+    ...listParams,
+    ...(variant === "service" ? { category: "service" } : {}),
+    ...(variant === "export" && !state.trade.length ? { trade: "export,deemed" } : {}),
+  }), [listParams, variant, state.trade.length])
+  const newHref = NEW_HREF[variant]
+  const title = variant === "service" ? t("services.title") : variant === "export" ? t("exports.title") : t("title")
   const q = useQuery({ queryKey: ["sales", params], queryFn: () => api.sales.list(params), placeholderData: keepPreviousData })
 
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["sales"] }); qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["notifications"] }) }
@@ -64,6 +74,14 @@ export function SalesList() {
       cell: ({ row }) => <span className="block max-w-72 truncate" title={row.original.customerName}>{row.original.customerName}</span>,
     },
     { id: "mode", accessorKey: "mode", meta: { label: t("col.mode") }, header: t("col.mode"), cell: ({ row }) => <ModeBadge value={row.original.mode} /> },
+    ...(variant === "export" ? [
+      { id: "trade", meta: { label: t("col.trade"), sortable: false }, header: t("col.trade"), cell: ({ row }: { row: { original: Sale } }) => <Pill tone={row.original.export?.deemed ? "info" : "success"}>{t(`trade.${row.original.export?.deemed ? "deemed" : "export"}`)}</Pill> },
+      { id: "lcNo", meta: { label: t("col.lcNo"), sortable: false }, header: t("col.lcNo"), cell: ({ row }: { row: { original: Sale } }) => <span className="tabular whitespace-nowrap">{row.original.export?.lcNo ?? "—"}</span> },
+      { id: "country", meta: { label: t("col.country"), sortable: false }, header: t("col.country"), cell: ({ row }: { row: { original: Sale } }) => row.original.export?.deemed ? <span className="text-muted-foreground">{t("trade.local")}</span> : row.original.export?.country ?? "—" },
+    ] as ColumnDef<Sale, unknown>[] : []),
+    ...(variant === "service" ? [
+      { id: "service", meta: { label: t("col.service"), sortable: false }, header: t("col.service"), cell: ({ row }: { row: { original: Sale } }) => <span className="block max-w-60 truncate" title={row.original.lines.map((l) => `${l.hsCode} ${l.name}`).join(", ")}><span className="tabular text-muted-foreground">{row.original.lines[0]?.hsCode}</span> {row.original.lines[0]?.name}</span> },
+    ] as ColumnDef<Sale, unknown>[] : []),
     { id: "method", accessorKey: "method", meta: { label: t("col.method") }, header: t("col.method"), cell: ({ row }) => tpm(row.original.method) },
     { id: "subtotal", accessorKey: "subtotal", meta: { label: t("col.subtotal"), align: "right", total: "subtotal" }, header: t("col.subtotal"), cell: ({ row }) => <Money value={row.original.subtotal} /> },
     { id: "sd", accessorKey: "sd", meta: { label: t("col.sd"), align: "right", total: "sd" }, header: t("col.sd"), cell: ({ row }) => <Money value={row.original.sd} /> },
@@ -94,7 +112,7 @@ export function SalesList() {
       },
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [locale, t, tc, tpm, tt, can])
+  ], [locale, t, tc, tpm, tt, can, variant])
 
   const labels = q.data?.facetLabels?.customer ?? {}
   const facetOpts = {
@@ -104,6 +122,7 @@ export function SalesList() {
     mode: ["Local", "Foreign"].map((v) => ({ value: v, label: tm(v) })),
     method: ["Bank", "Cash", "Cheque", "Mobile"].map((v) => ({ value: v, label: tpm(v) })),
     payment: ["paid", "partial", "unpaid"].map((v) => ({ value: v, label: t(`payment.${v}`) })),
+    trade: (variant === "export" ? ["export", "deemed"] : ["local", "export", "deemed"]).map((v) => ({ value: v, label: t(`trade.${v}`) })),
   }
   const chips = [
     ...(state.q ? [{ key: "q", label: `“${state.q}”`, onRemove: () => set({ q: "" }) }] : []),
@@ -116,13 +135,13 @@ export function SalesList() {
     <>
       {actions.dialog}
       <PageHeader
-        title={t("title")}
+        title={title}
         description={totals ? t("summary", { count: fmtNum(q.data!.total, locale), net: fmtCompact(totals.netTotal, locale), vat: fmtCompact(totals.vat, locale), due: fmtCompact(totals.due, locale) }) : t("subtitle")}
-        actions={can("doc.create") ? <Button render={<Link href="/sales/new" />}><Plus /> {t("new")}</Button> : undefined}
+        actions={can("doc.create") ? <Button render={<Link href={newHref} />}><Plus /> {variant === "service" ? t("services.new") : variant === "export" ? t("exports.new") : t("new")}</Button> : undefined}
       />
       <DataTable<Sale>
-        tableId="sales"
-        caption={t("title")}
+        tableId={variant === "goods" ? "sales" : variant === "service" ? "saleServices" : "saleExports"}
+        caption={title}
         columns={columns}
         data={q.data?.data}
         total={q.data?.total ?? 0}
@@ -140,7 +159,7 @@ export function SalesList() {
         getRowId={(r) => r.id}
         onRowClick={(r) => router.push(`/sales/${r.id}`)}
         selectable
-        defaultHidden={["sd", "discount", "method", "paid", "branchName"]}
+        defaultHidden={variant === "export" ? ["sd", "discount", "method", "paid", "branchName", "vat", "mode"] : variant === "service" ? ["sd", "discount", "method", "paid", "branchName", "mode"] : ["sd", "discount", "method", "paid", "branchName"]}
         filtered={activeCount > 0}
         filters={
           <>
@@ -149,19 +168,20 @@ export function SalesList() {
             <FacetFilter title={t("facet.customer")} options={facetOpts.customer} selected={state.customer} onChange={(v) => set({ customer: v })} counts={q.data?.facets.customer} />
             <FacetFilter title={t("facet.process")} options={facetOpts.process} selected={state.process} onChange={(v) => set({ process: v })} counts={q.data?.facets.process} />
             {(q.data?.facets.branch && Object.keys(q.data.facets.branch).length > 1) || state.branch.length ? <FacetFilter title={t("facet.branch")} options={facetOpts.branch} selected={state.branch} onChange={(v) => set({ branch: v })} counts={q.data?.facets.branch} /> : null}
-            <FacetFilter title={t("facet.mode")} options={facetOpts.mode} selected={state.mode} onChange={(v) => set({ mode: v })} counts={q.data?.facets.mode} />
+            {variant !== "service" && <FacetFilter title={t("facet.trade")} options={facetOpts.trade} selected={state.trade} onChange={(v) => set({ trade: v })} counts={q.data?.facets.trade} />}
+            {variant === "goods" && <FacetFilter title={t("facet.mode")} options={facetOpts.mode} selected={state.mode} onChange={(v) => set({ mode: v })} counts={q.data?.facets.mode} />}
             <FacetFilter title={t("facet.payment")} options={facetOpts.payment} selected={state.payment} onChange={(v) => set({ payment: v })} counts={q.data?.facets.payment} />
           </>
         }
         chips={<FilterChips chips={chips} onClearAll={clearAll} />}
         toolbarEnd={
           <>
-            <SavedViews tableId="sales" builtIn={[
+            {variant === "goods" && <SavedViews tableId="sales" builtIn={[
               { name: t("views.pending"), query: "process=Created" },
               { name: t("views.thisPeriod"), query: "from=2026-09-01&to=2026-09-30" },
               { name: t("views.unpaid"), query: "payment=unpaid,partial&sort=due.desc" },
               { name: t("views.exports"), query: "mode=Foreign" },
-            ]} />
+            ]} />}
             <Button variant="outline" size="sm" render={<a href={api.sales.csvUrl(params)} download />}><Download /> <span className="hidden lg:inline">{tt("exportCsv")}</span></Button>
           </>
         }
@@ -185,7 +205,7 @@ export function SalesList() {
             {s.due > 0 && <p className="text-right text-xs text-warning">{t("col.due")}: <Money value={s.due} /></p>}
           </div>
         )}
-        emptyAction={activeCount > 0 ? <Button variant="outline" size="sm" onClick={clearAll}>{tt("clearAll")}</Button> : can("doc.create") ? <Button size="sm" render={<Link href="/sales/new" />}><Plus /> {t("new")}</Button> : undefined}
+        emptyAction={activeCount > 0 ? <Button variant="outline" size="sm" onClick={clearAll}>{tt("clearAll")}</Button> : can("doc.create") ? <Button size="sm" render={<Link href={newHref} />}><Plus /> {t("new")}</Button> : undefined}
       />
     </>
   )
