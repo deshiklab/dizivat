@@ -168,7 +168,7 @@ function ExportCard({ s }: { s: Sale }) {
 /** Credit notes (Mushak 6.7) issued against this invoice, with a shortcut to issue one. */
 function CreditNotesCard({ s }: { s: Sale }) {
   const t = useTranslations("sales")
-  const tc = useTranslations("credit")
+  const tcr = useTranslations("credit")
   const locale = useLocale()
   const can = useCan()
   const { data } = useQuery({ queryKey: ["creditNotes", { sale: s.id }], queryFn: () => api.creditNotes.list({ sale: s.id, size: 50 }) })
@@ -190,7 +190,7 @@ function CreditNotesCard({ s }: { s: Sale }) {
             ))}
           </ul>
         ) : <p className="text-sm text-muted-foreground">{t("noCreditNotes")}</p>}
-        {s.process === "Approved" && can("doc.create") && <Button variant="outline" size="sm" render={<Link href={`/sales/credit-notes?new=1&sale=${s.id}`} />}><FileMinus2 /> {tc("new")}</Button>}
+        {s.process === "Approved" && can("doc.create") && <Button variant="outline" size="sm" render={<Link href={`/sales/credit-notes?new=1&sale=${s.id}`} />}><FileMinus2 /> {tcr("new")}</Button>}
       </CardContent>
     </Card>
   )

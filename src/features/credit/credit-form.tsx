@@ -22,7 +22,7 @@ import { fmtDate, fmtNum } from "@/lib/format"
 import { CREDIT_REASONS } from "@/lib/r3"
 import { creditNoteInput } from "@/lib/schemas"
 import type { CreditNote, CreditReason } from "@/lib/types"
-import { calcLine, round2 } from "@/lib/vat"
+import { calcLine } from "@/lib/vat"
 import { useR3Refresh } from "@/features/r3/use-r3-actions"
 
 interface FormValues {
