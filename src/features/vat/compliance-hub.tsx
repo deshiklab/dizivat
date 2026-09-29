@@ -113,7 +113,8 @@ export function ComplianceHub() {
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2"><CalendarClock className="size-4" aria-hidden /> {t("calendar")}</CardTitle><CardDescription>{t("calendarHint")}</CardDescription></CardHeader>
               <CardContent>
-                <ol className="flex gap-2 overflow-x-auto pb-1" tabIndex={0} role="region" aria-label={t("calendar")}>
+                <div className="overflow-x-auto pb-1" tabIndex={0} role="region" aria-label={t("calendar")}>
+                <ol className="flex gap-2">
                   {periods.map((p) => (
                     <li key={p.period}>
                       <button type="button" onClick={() => setPeriod(p.period)} aria-current={p.period === d.period ? "true" : undefined}
@@ -124,6 +125,7 @@ export function ComplianceHub() {
                     </li>
                   ))}
                 </ol>
+                </div>
               </CardContent>
             </Card>
 
