@@ -84,7 +84,7 @@ export interface Line {
  */
 export interface ImportDuty { usd: number; usdRate: number; av: number; cdRate: number; cd: number; rdRate: number; rd: number; aitRate: number; ait: number; atRate: number; at: number }
 
-export type HistoryAction = "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
+export type HistoryAction = "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored" | "submitted"
 export interface HistoryEntry { at: string; by: string; action: HistoryAction; note?: string }
 
 interface DocBase {
@@ -227,11 +227,11 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
-  | "signedIn" | "signedOut" | "signInFailed"
+  | "signedIn" | "signedOut" | "signInFailed" | "submitted"
 export interface AuditChange { field: string; from: string; to: string }
 export interface AuditEvent {
   id: string
@@ -553,3 +553,231 @@ export interface Batch {
 }
 /** Finished-goods lot = one batch line received into stock; sales can draw from a lot. */
 export interface Lot { batchId: string; batchNo: string; date: string; itemId: string; received: number; sold: number; available: number }
+
+/* ── R4 — Accounting & NBR VAT ─────────────────────────────────────────── */
+
+/** Company money account: bank account, mobile-wallet (MFS) account or cash in hand. */
+export type AccountKind = "bank" | "mobile" | "cash"
+export type BankAccountType = "current" | "savings" | "transaction" | "other"
+export type WalletType = "personal" | "general" | "merchant"
+export interface MoneyAccount {
+  id: string
+  kind: AccountKind
+  /** bank name, wallet service (bKash, Nagad …) or cash-box name */
+  provider: string
+  /** bank: account number · mobile: wallet number · cash: optional code */
+  accountNo: string
+  owner: string
+  branch?: string
+  address?: string
+  bankType?: BankAccountType
+  walletType?: WalletType
+  /** mobile: person authorised to operate the wallet */
+  authorised?: string
+  /** % the bank / MFS charges on incoming money */
+  serviceCharge: number
+  openingBalance: number
+  /** date the opening balance is taken from */
+  openingDate: string
+  active: boolean
+  createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+export type MoneyAccountRow = MoneyAccount & { inflow: number; outflow: number; balance: number; lastDate?: string; docs: number }
+
+/** Customer receipt (MR-) or supplier payment (PV-), allocated to open invoices. */
+export type MoneyKind = "receipt" | "payment"
+export type MoneyMethod = "cash" | "bankTransfer" | "cheque" | "mobile"
+export interface Allocation { docId: string; docNo: string; docDate: string; docTotal: number; amount: number }
+export interface MoneyDoc {
+  id: string
+  /** MR-MMYY#### (receipt) / PV-MMYY#### (payment) */
+  no: string
+  kind: MoneyKind
+  date: string
+  partyId: string; partyName: string; partyBin: string
+  method: MoneyMethod
+  accountId: string; accountName: string
+  chequeNo?: string; chequeDate?: string; chequeBank?: string
+  /** mobile-wallet transaction id / bank reference */
+  reference?: string
+  amount: number
+  /** bank / MFS charge deducted (receipts) */
+  charge: number
+  allocations: Allocation[]
+  allocated: number
+  /** advance / on-account amount not yet set against an invoice */
+  unallocated: number
+  note?: string
+  process: Process
+  issuedBy: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+/** An invoice that can still take a receipt / payment. */
+export interface OpenInvoice { id: string; no: string; challanNo: string; date: string; total: number; paid: number; due: number; days: number }
+
+export interface AccountingConfig {
+  /** receipts/payments dated on or before this date are rejected (legacy "Account close") */
+  closedUpTo?: string
+  /** allow receipts/payments larger than the invoices they settle (advance / on-account) */
+  allowAdvance: boolean
+  /** new receipts/payments pre-allocate oldest invoices first */
+  autoAllocate: boolean
+  updatedAt?: string; updatedBy?: string
+}
+
+/** Party statement (customer or supplier ledger) with ageing of the open balance. */
+export type StatementRowType = "opening" | "invoice" | "settledOnInvoice" | "receipt" | "payment" | "vds" | "advance"
+export interface StatementRow { date: string; type: StatementRowType; ref?: string; refId?: string; note?: string; debit: number; credit: number; balance: number }
+export interface PartyStatement {
+  kind: "customer" | "vendor"
+  party: Party
+  from: string; to: string
+  opening: number
+  rows: StatementRow[]
+  totals: { debit: number; credit: number }
+  closing: number
+  /** open invoice balance by age (days since invoice) */
+  ageing: { d0_30: number; d31_60: number; d61_90: number; d90: number }
+  openInvoices: OpenInvoice[]
+  /** unallocated receipts/payments (advances) */
+  advances: number
+  /** closing = Σ invoice due − advances; true when the ledger agrees with the invoice registers */
+  reconciled: boolean
+  invoiceDue: number
+}
+
+/** Treasury deposit (TR-6 challan) under an NBR economic code. */
+export type TreasuryHead = "vat" | "vds" | "sd" | "interest" | "penalty" | "excise" | "devSurcharge" | "ictSurcharge" | "healthSurcharge" | "envSurcharge"
+export type TreasuryMode = "cash" | "cheque" | "payOrder" | "draft" | "online"
+export interface TreasuryDeposit {
+  id: string
+  /** TC-MMYY#### (internal number) */
+  no: string
+  head: TreasuryHead
+  /** economic code, e.g. 1/1133/0015/0311 */
+  code: string
+  /** VAT return period the deposit counts toward (YYYY-MM) */
+  taxPeriod: string
+  challanNo: string
+  challanDate: string
+  mode: TreasuryMode
+  bank: string; bankBranch: string; district: string; bankAddress?: string
+  /** company bank account the money left (optional) */
+  accountId?: string
+  amount: number
+  depositor: string; designation?: string; address: string
+  description: string
+  process: Process
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/** VAT deducted at source: "purchase" = we withheld from a supplier (we issue Mushak 6.6); "sales" = a customer withheld from us (we receive 6.6). */
+export type VdsMode = "purchase" | "sales"
+export interface VdsEntry {
+  id: string
+  /** VDS-MMYY#### */
+  no: string
+  mode: VdsMode
+  docId: string; docNo: string; challanNo: string; docDate: string
+  partyId: string; partyName: string; partyBin: string; partyAddress: string
+  /** value of the supply subject to VDS and the VAT charged on it */
+  docValue: number; docVat: number
+  amount: number
+  certificateNo?: string
+  certificateDate: string
+  taxPeriod: string
+  /** purchase VDS: treasury challan it was deposited with (optional) */
+  treasuryId?: string; treasuryChallan?: string
+  remark?: string
+  /** part of `amount` that settled the invoice due when approved (reversed on cancel) */
+  settled?: number
+  process: Process
+  issuedBy: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+export interface VdsEligible { id: string; no: string; challanNo: string; date: string; partyId: string; partyName: string; value: number; vat: number; withheld: number; remaining: number }
+
+/** Manual VAT adjustment feeding Mushak 9.1 notes 27 (increase), 32 (decrease) or the SD notes 38/39. */
+export type AdjustmentKind = "otherIncrease" | "otherDecrease" | "sdIncrease" | "sdDecrease"
+export interface VatAdjustment {
+  id: string
+  /** VA-MMYY#### */
+  no: string
+  kind: AdjustmentKind
+  /** 9.1 note the amount lands in */
+  note: 27 | 32 | 38 | 39
+  issueDate: string
+  taxPeriod: string
+  amount: number
+  description: string
+  reference?: string
+  process: Process
+  issuedBy: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/** Mushak 9.1 VAT return. */
+export type ReturnType = "original" | "amended" | "full" | "late"
+export type ReturnStatus = "draft" | "submitted"
+export interface ReturnManual {
+  /** notes 41–49 */
+  interestVat: number; interestSd: number; penaltyLate: number; penaltyOther: number
+  excise: number; devSurcharge: number; ictSurcharge: number; healthSurcharge: number; envSurcharge: number
+  /** part 11 */
+  refund: boolean; refundVat: number; refundSd: number
+}
+export type ReturnPart = 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
+export interface ReturnNote {
+  note: number
+  part: ReturnPart
+  value?: number; sd?: number; vat?: number
+  /** single-amount notes (parts 5–11) */
+  amount?: number
+  /** economic code (part 9) */
+  code?: string
+  /** has a sub-form (source documents) */
+  drill?: boolean
+  count?: number
+}
+export interface ReturnComputation {
+  period: string
+  notes: ReturnNote[]
+  /** quick references */
+  outputVat: number; inputVat: number; increasing: number; decreasing: number
+  netVat: number; netVatAfter: number; netSd: number; netSdAfter: number
+  payableVat: number; payableSd: number
+  depositedVat: number; depositedSd: number
+  closingVat: number; closingSd: number
+  openingVat: number; openingSd: number
+  /** dashboard-comparable net payable (output − input tax credit, before VDS / adjustments) */
+  dashboardNet: number
+  /** extra treasury deposit needed before the return can be submitted (0 when covered) */
+  shortVat: number; shortSd: number
+  /** documents dated in the period that are still drafts (not in the return) */
+  drafts: number
+}
+export interface VatReturn {
+  id: string
+  period: string
+  type: ReturnType
+  amendReason?: string
+  activities: boolean
+  submissionDate?: string
+  status: ReturnStatus
+  manual: ReturnManual
+  /** frozen at submission */
+  snapshot?: ReturnComputation
+  submittedBy?: string; submittedAt?: string
+  /** acknowledgement number from the NBR portal */
+  ackNo?: string
+  createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+export type VatReturnRow = VatReturn & { due: string; netPayable: number; deposited: number; closing: number; late: boolean }
+export interface ReturnView extends VatReturnRow { computation: ReturnComputation; live: boolean }
+/** One line of a 9.1 sub-form (the source documents behind a note). */
+export interface SubFormRow { date: string; ref: string; refId?: string; href?: string; party?: string; bin?: string; value: number; sd?: number; vat: number; note?: string }
+
+/** Tax period status for the compliance centre and the period lock. */
+export interface TaxPeriod { period: string; due: string; status: "open" | "draft" | "submitted" | "overdue"; returnId?: string; submittedAt?: string; locked: boolean }
+
+export interface VatSettings { zoneCode: string; updatedAt?: string; updatedBy?: string }

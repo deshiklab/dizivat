@@ -1,6 +1,7 @@
 /** The mock stores live on globalThis (see lib/mock/*). In the static demo they are mirrored to localStorage. */
 // v3 (R2): debit notes, opening stock, master items, import duty — older saved state is discarded
-export const DEMO_STATE_KEY = "rbs-vat-demo-state-v4"
+// v5 (R4): accounting, VDS, treasury, VAT returns
+export const DEMO_STATE_KEY = "rbs-vat-demo-state-v5"
 export const STORE_KEYS = ["__rbsDb6", "__rbsUsers3", "__rbsAudit", "__rbsCompany"] as const
 
 type G = Record<string, unknown>

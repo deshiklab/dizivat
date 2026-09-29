@@ -395,3 +395,131 @@ export const productionConfigInput = z.object({
   consumption: z.enum(["standard", "actual"]),
 })
 export type ProductionConfigInput = z.input<typeof productionConfigInput>
+
+/* ── R4 — Accounting & NBR VAT ─────────────────────────────────────────── */
+const money = (min = 0) => z.number({ error: "required" }).min(min, min > 0 ? "positive" : "min0").max(9_999_999_999)
+const optDate = z.string().max(10).optional().default("").refine((v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v), "required")
+const period = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "required")
+
+/** Company bank / mobile-wallet / cash account. Kind-specific requirements are checked in superRefine. */
+export const accountInput = z.object({
+  kind: z.enum(["bank", "mobile", "cash"]),
+  provider: z.string().trim().min(1, "required").max(80),
+  accountNo: z.string().trim().max(40).optional().default(""),
+  owner: z.string().trim().min(2, "required").max(120),
+  branch: z.string().trim().max(80).optional().default(""),
+  address: z.string().trim().max(250).optional().default(""),
+  bankType: z.enum(["current", "savings", "transaction", "other"]).optional(),
+  walletType: z.enum(["personal", "general", "merchant"]).optional(),
+  authorised: z.string().trim().max(120).optional().default(""),
+  serviceCharge: z.number({ error: "required" }).min(0, "min0").max(10, "max10"),
+  openingBalance: z.number({ error: "required" }).min(0, "min0").max(9_999_999_999),
+  openingDate: date,
+  active: z.boolean(),
+}).superRefine((a, ctx) => {
+  const need = (k: "accountNo" | "authorised" | "bankType" | "walletType") => { if (!a[k]) ctx.addIssue({ code: "custom", path: [k], message: "required" }) }
+  if (a.kind === "bank") { need("accountNo"); need("bankType"); if (a.accountNo && !/^[0-9A-Za-z-]{6,24}$/.test(a.accountNo)) ctx.addIssue({ code: "custom", path: ["accountNo"], message: "accountNo" }) }
+  if (a.kind === "mobile") { need("accountNo"); need("authorised"); need("walletType"); if (a.accountNo && !MOBILE_RE.test(a.accountNo)) ctx.addIssue({ code: "custom", path: ["accountNo"], message: "mobile" }) }
+})
+export type AccountInput = z.input<typeof accountInput>
+
+/** Customer receipt / supplier payment with invoice allocations. Method-specific fields are checked in superRefine. */
+export const moneyInput = z.object({
+  partyId: z.string().min(1, "required"),
+  date,
+  method: z.enum(["cash", "bankTransfer", "cheque", "mobile"]),
+  accountId: z.string().min(1, "required"),
+  chequeNo: z.string().trim().max(30).optional().default(""),
+  chequeDate: optDate,
+  chequeBank: z.string().trim().max(80).optional().default(""),
+  reference: z.string().trim().max(60).optional().default(""),
+  amount: money(0.01),
+  charge: z.number().min(0, "min0").max(9_999_999).optional().default(0),
+  allocations: z.array(z.object({ docId: z.string().min(1), amount: z.number({ error: "required" }).min(0, "min0") })).max(200),
+  note: z.string().trim().max(500).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+}).superRefine((m, ctx) => {
+  if (m.method === "cheque") {
+    if (!m.chequeNo) ctx.addIssue({ code: "custom", path: ["chequeNo"], message: "required" })
+    if (!m.chequeDate) ctx.addIssue({ code: "custom", path: ["chequeDate"], message: "required" })
+  }
+  if ((m.method === "mobile" || m.method === "bankTransfer") && !m.reference) ctx.addIssue({ code: "custom", path: ["reference"], message: "required" })
+  if (m.charge > m.amount) ctx.addIssue({ code: "custom", path: ["charge"], message: "chargeOverAmount" })
+})
+export type MoneyInput = z.input<typeof moneyInput>
+
+export const accountingConfigInput = z.object({
+  closedUpTo: optDate,
+  allowAdvance: z.boolean(),
+  autoAllocate: z.boolean(),
+})
+export type AccountingConfigInput = z.input<typeof accountingConfigInput>
+
+/** Treasury deposit (TR-6). */
+export const treasuryInput = z.object({
+  head: z.enum(["vat", "vds", "sd", "interest", "penalty", "excise", "devSurcharge", "ictSurcharge", "healthSurcharge", "envSurcharge"], { error: "required" }),
+  taxPeriod: period,
+  challanNo: z.string().trim().min(1, "required").max(30),
+  challanDate: date,
+  mode: z.enum(["online", "cheque", "payOrder", "draft", "cash"]),
+  bank: z.string().trim().min(1, "required").max(80),
+  bankBranch: z.string().trim().min(1, "required").max(80),
+  district: z.string().trim().min(1, "required").max(40),
+  bankAddress: z.string().trim().max(250).optional().default(""),
+  accountId: z.string().max(40).optional().default(""),
+  amount: money(1),
+  depositor: z.string().trim().min(2, "required").max(120),
+  designation: z.string().trim().max(80).optional().default(""),
+  address: z.string().trim().min(2, "required").max(250),
+  description: z.string().trim().min(3, "required").max(500),
+  process: z.enum(["Created", "Approved"]),
+})
+export type TreasuryInput = z.input<typeof treasuryInput>
+
+/** VAT deducted at source against one invoice. */
+export const vdsInput = z.object({
+  mode: z.enum(["purchase", "sales"]),
+  docId: z.string().min(1, "required"),
+  amount: money(0.01),
+  certificateNo: z.string().trim().max(40).optional().default(""),
+  certificateDate: date,
+  treasuryId: z.string().max(40).optional().default(""),
+  remark: z.string().trim().max(300).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+}).superRefine((v, ctx) => {
+  // a certificate received from a customer must quote its number
+  if (v.mode === "sales" && !v.certificateNo) ctx.addIssue({ code: "custom", path: ["certificateNo"], message: "required" })
+})
+export type VdsInput = z.input<typeof vdsInput>
+
+export const adjustmentInput = z.object({
+  kind: z.enum(["otherIncrease", "otherDecrease", "sdIncrease", "sdDecrease"], { error: "required" }),
+  issueDate: date,
+  taxPeriod: period,
+  amount: money(0.01),
+  description: z.string().trim().min(10, "descriptionMin").max(500),
+  reference: z.string().trim().max(80).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+})
+export type AdjustmentInput = z.input<typeof adjustmentInput>
+
+const noteAmount = z.number({ error: "required" }).min(0, "min0").max(9_999_999_999)
+/** Mushak 9.1 draft: Part 2 header, the manual notes 41–49 and the Part 11 refund request. */
+export const returnInput = z.object({
+  type: z.enum(["original", "amended", "full", "late"]),
+  amendReason: z.string().trim().max(300).optional().default(""),
+  activities: z.boolean(),
+  submissionDate: optDate,
+  manual: z.object({
+    interestVat: noteAmount, interestSd: noteAmount, penaltyLate: noteAmount, penaltyOther: noteAmount,
+    excise: noteAmount, devSurcharge: noteAmount, ictSurcharge: noteAmount, healthSurcharge: noteAmount, envSurcharge: noteAmount,
+    refund: z.boolean(), refundVat: noteAmount, refundSd: noteAmount,
+  }),
+}).superRefine((r, ctx) => {
+  if (r.type === "amended" && r.amendReason.length < 10) ctx.addIssue({ code: "custom", path: ["amendReason"], message: "reasonMin" })
+  if (!r.manual.refund && (r.manual.refundVat || r.manual.refundSd)) ctx.addIssue({ code: "custom", path: ["manual.refundVat"], message: "refundNotRequested" })
+})
+export type ReturnInput = z.input<typeof returnInput>
+
+export const vatSettingsInput = z.object({ zoneCode: z.string().regex(/^\d{4}$/, "zoneCode") })
+export type VatSettingsInput = z.input<typeof vatSettingsInput>
