@@ -56,7 +56,7 @@ export function Mushak64({ batch }: { batch: Batch }) {
       </section>
 
       <h3 className="mb-1 font-semibold"><span lang="bn">ক. প্রেরিত উপকরণ</span> / A. Inputs sent</h3>
-      <div className="overflow-x-auto print:overflow-visible">
+      <div className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring print:overflow-visible" tabIndex={0} role="region" aria-label="Mushak 6.4 — inputs">
         <table className="w-full min-w-[560px] border-collapse text-[0.6875rem] print:min-w-0">
           <Head cols={[["ক্রমিক সংখ্যা", "Sl."], ["উপকরণের বর্ণনা", "Description of inputs"], ["একক", "Unit"], ["পরিমাণ", "Quantity"], ["একক মূল্য (টাকায়)", "Unit price (Tk)"], ["মোট মূল্য (টাকায়)", "Value (Tk)"]]} />
           <tbody className="tabular">
@@ -73,7 +73,7 @@ export function Mushak64({ batch }: { batch: Batch }) {
       </div>
 
       <h3 className="mt-4 mb-1 font-semibold"><span lang="bn">খ. উৎপাদিতব্য ও ফেরতযোগ্য পণ্য</span> / B. Goods to be produced &amp; returned</h3>
-      <div className="overflow-x-auto print:overflow-visible">
+      <div className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring print:overflow-visible" tabIndex={0} role="region" aria-label="Mushak 6.4 — finished goods">
         <table className="w-full min-w-[560px] border-collapse text-[0.6875rem] print:min-w-0">
           <Head cols={[["ক্রমিক সংখ্যা", "Sl."], ["পণ্যের বর্ণনা", "Description of goods"], ["একক", "Unit"], ["উৎপাদিতব্য পরিমাণ", "Qty to produce"], ["ফেরত প্রাপ্ত পরিমাণ", "Qty received"], ["নষ্ট/ঘাটতি", "Damaged / short"]]} />
           <tbody className="tabular">

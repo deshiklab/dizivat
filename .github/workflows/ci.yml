@@ -40,7 +40,7 @@ jobs:
     name: E2E · visual · a11y
     needs: static
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       BASE_URL: http://localhost:3000
       SHOT_DIR: ${{ github.workspace }}/test-results/screens
@@ -90,6 +90,9 @@ jobs:
       - name: E2E — R2 (imports with duty stack, service purchases, debit notes, opening stock, master items, Mushak 6.1/6.2)
         working-directory: scripts
         run: python e2e_r2.py
+      - name: E2E — R3 (exports, service sales, lots, credit notes 6.7, BOM 4.3, work orders, batches 6.4, production config)
+        working-directory: scripts
+        run: python e2e_r3.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

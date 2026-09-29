@@ -50,7 +50,7 @@ export function Mushak43({ bom }: { bom: BomRow }) {
         </dl>
       </section>
 
-      <div className="overflow-x-auto print:overflow-visible">
+      <div className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring print:overflow-visible" tabIndex={0} role="region" aria-label="Mushak 4.3">
         <table className="w-full min-w-[900px] border-collapse text-[0.6875rem] print:min-w-0">
           <thead>
             <tr>

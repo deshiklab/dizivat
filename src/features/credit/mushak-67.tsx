@@ -58,7 +58,7 @@ export function Mushak67({ note }: { note: CreditNote }) {
         </dl>
       </section>
 
-      <div className="overflow-x-auto print:overflow-visible">
+      <div className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring print:overflow-visible" tabIndex={0} role="region" aria-label="Mushak 6.7">
         <table className="w-full min-w-[680px] border-collapse text-[0.6875rem] print:min-w-0">
           <thead>
             <tr>{cols.map(([bn, en], i) => <th key={i} scope="col" className="border border-neutral-400 bg-neutral-100 p-1 align-top font-semibold"><span lang="bn" className="block">{bn}</span><span className="block font-normal text-neutral-500">{en}</span></th>)}</tr>
