@@ -12,15 +12,15 @@ export interface ComboOption { value: string; label: string; description?: strin
 /** Accessible searchable select (replaces select2). */
 export const Combobox = React.forwardRef<HTMLButtonElement, {
   id?: string; options: ComboOption[]; value: string; onChange: (v: string) => void; placeholder: string; searchPlaceholder: string; empty: string
-  invalid?: boolean; className?: string; describedBy?: string; footer?: React.ReactNode; ariaLabel?: string
-}>(function Combobox({ ariaLabel, id, options, value, onChange, placeholder, searchPlaceholder, empty, invalid, className, describedBy, footer }, ref) {
+  invalid?: boolean; className?: string; describedBy?: string; footer?: React.ReactNode; ariaLabel?: string; disabled?: boolean
+}>(function Combobox({ ariaLabel, id, options, value, onChange, placeholder, searchPlaceholder, empty, invalid, className, describedBy, footer, disabled }, ref) {
   const [open, setOpen] = React.useState(false)
   const current = options.find((o) => o.value === value)
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
-          <Button ref={ref} id={id} type="button" variant="outline" role="combobox" aria-expanded={open} aria-invalid={invalid || undefined} aria-describedby={describedBy} aria-label={ariaLabel}
+          <Button ref={ref} id={id} type="button" variant="outline" role="combobox" disabled={disabled} aria-expanded={open} aria-invalid={invalid || undefined} aria-describedby={describedBy} aria-label={ariaLabel}
             className={cn("h-9 w-full justify-between bg-background px-3 font-normal hover:bg-muted/50 dark:bg-input/30", !current && "text-muted-foreground", className)} />
         }
       >
