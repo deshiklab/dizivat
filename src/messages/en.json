@@ -633,7 +633,7 @@
       "unitPrice": "Unit price",
       "service": "Service"
     },
-    "rebateHint": "Rebateable VAT is claimed as input tax credit in Mushak 9.1 (note 12–14) within the permitted tax periods.",
+    "rebateHint": "Rebateable VAT is claimed as input tax credit in Part 4 of Mushak 9.1 (notes 14–18) within the permitted tax periods.",
     "field": {
       "vendor": "Vendor",
       "bin": "BIN / NID",
@@ -1626,7 +1626,7 @@
     "tabHistory": "History",
     "draftNote": "Draft — stock and input tax are adjusted when it is approved.",
     "print": "Print 6.8",
-    "rebateNote": "Input tax credit to reverse in Mushak 9.1 (note 16): ৳",
+    "rebateNote": "Input tax credit to reverse in Mushak 9.1 (note 26, debit notes): ৳",
     "approved": "{no} approved — stock returned",
     "saved": "{no} saved as draft",
     "deleted": "Draft {no} deleted",
@@ -1903,7 +1903,7 @@
     "tabHistory": "History",
     "draftNote": "Draft — stock and output VAT are adjusted when it is approved.",
     "print": "Print 6.7",
-    "outputNote": "Output tax (VAT + SD) to reduce in Mushak 9.1 (note 19): ৳",
+    "outputNote": "Output tax to reduce in Mushak 9.1 (VAT in note 31, SD in note 39): ৳",
     "approved": "{no} approved — stock restored",
     "saved": "{no} saved as draft",
     "deleted": "Draft {no} deleted",

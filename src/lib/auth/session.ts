@@ -4,7 +4,7 @@
  */
 export const SESSION_COOKIE = "dizivat_session"
 export const SESSION_TTL_SHORT = 60 * 60 * 12 // 12 h
-export const SESSION_TTL_LONG = 60 * 60 * 24 * 14 // 14 days ("keep me signed in")
+export const SESSION_TTL_LONG = 60 * 60 * 24 * 7 // 7 days ("keep me signed in")
 
 /** iat = issued-at (s); sessions issued before a password reset/deactivation are rejected. */
 export interface SessionPayload { uid: string; exp: number; iat?: number }
