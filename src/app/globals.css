@@ -207,3 +207,7 @@
   --color-swatch-orange: #c2410c;
   --color-swatch-sky: #6ea8ff;
 }
+
+/* indeterminate progress bar (non-blocking report generation, D-16) */
+@keyframes progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .animate-\[progress_1\.2s_ease-in-out_infinite\] { animation: none; } }
