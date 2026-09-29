@@ -18,7 +18,7 @@ export function StatusFooter() {
       <span>{company.name} · {t("bin")} <span className="tabular font-medium text-foreground">{company.bin}</span></span>
       <span className="flex items-center gap-1"><CalendarClock className="size-3.5" /> {t("vatPeriod")}: <span className="font-medium text-foreground">{fmtDate(TODAY, locale, "MMMM yyyy")}</span></span>
       <span>{t("returnDue", { date: fmtDate(due, locale), days: fmtNum(days, locale) })}</span>
-      <span className="ml-auto">{t("buildInfo", { version: "0.4", sprint: 4 })} · {t("mockData")}</span>
+      <span className="ml-auto">{t("buildInfo", { version: "0.5", release: "R2" })} · {t("mockData")}</span>
     </footer>
   )
 }

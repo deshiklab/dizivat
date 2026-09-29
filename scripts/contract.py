@@ -85,6 +85,28 @@ ENDPOINTS = [
     E("GET", "/company", None, "Company profile"),
     E("PUT", "/company", "settings.manage", "Update company profile (BIN/TIN/NID validated)"),
     E("GET", "/tariff?view=table", None, "NBR tariff — Page<TariffLine>; ?hs=12345678 → one line or 404", page=True, csv=True),
+    # R2 — purchase & inventory
+    E("GET", "/purchases?category=service", None, "Service purchases (R2) — same Page<Purchase>; category=goods (default) | service | all", page=True, csv=True),
+    E("GET", "/services", None, "NBR service codes for service purchases [{id, code, name, vatRate, vds, unit}]"),
+    E("GET", "/purchases/{purchase}/returnable", None, "Lines still returnable on an approved purchase [{itemId, purchasedQty, returnedQty, remaining, …}]; ?exclude=<debitNoteId>"),
+    E("GET", "/debit-notes", None, "Debit notes (Mushak 6.8) — Page<DebitNote>; facets process/reason/vendor/branch; ?purchase=<id>", page=True, csv=True),
+    E("POST", "/debit-notes", "doc.create", "Create {purchaseId, issueDate, issueTime, reason, note?, issuedBy, designation, lines[{itemId, qty}], process} (422 notApproved/exceedsRemaining; approve returns stock)"),
+    E("GET", "/debit-notes/{debit}", None, "One debit note with history"),
+    E("PUT", "/debit-notes/{debit}", "doc.edit", "Replace a draft (409 if not a draft)"),
+    E("PATCH", "/debit-notes/{debit}", None, "Approve (doc.approve; stock out, credit reversed) / cancel {reason≥10} (doc.cancel; stock back)"),
+    E("DELETE", "/debit-notes/{debit}", "doc.delete", "Delete a draft (409 if not a draft)"),
+    E("GET", "/opening-stock", None, "Opening stock entries — Page<OpeningEntry>; facets process/branch/inputTax", page=True, csv=True),
+    E("POST", "/opening-stock", "doc.create", "Create {itemId, branchId, date, inputTax, qty, price, vatPaid?, note?, process} (approve adds to item opening + branch stock)"),
+    E("GET", "/opening-stock/{opening}", None, "One opening entry with history"),
+    E("PUT", "/opening-stock/{opening}", "doc.edit", "Replace a draft"),
+    E("PATCH", "/opening-stock/{opening}", None, "Approve / cancel (reverts the opening)"),
+    E("DELETE", "/opening-stock/{opening}", "doc.delete", "Delete a draft"),
+    E("GET", "/master-items", None, "Master items with tariff comparison — Page<MasterItemRow> (rates, tariff, overrides[], items); facets group/status/override", page=True, csv=True),
+    E("POST", "/master-items", "master.edit", "Create {hsCode, name, group, category, unit, priceMethod, description?, rates{vat,sd,cd,rd,ait,at}, overrideReason (required when rates ≠ tariff), active}"),
+    E("GET", "/master-items/m1", None, "One master item with linked SKUs"),
+    E("PUT", "/master-items/m1", "master.edit", "Update (renames flow to linked SKUs; 422 overrideReason)"),
+    E("GET", "/mushak/6.1?item=i6&from=2026-07-01&to=2026-09-25", None, "Mushak 6.1 purchase book for an input item {company, item, rows, totals, opening, closing}; from/to default to the fiscal year to date; format=csv", csv=True),
+    E("GET", "/mushak/6.2?item=i17&from=2026-07-01&to=2026-09-25", None, "Mushak 6.2 sales book for a finished-goods item; other forms 404 until R4", csv=True),
     E("GET", "/audit", "audit.view", "Audit trail — Page<AuditEvent>; filters q/from/to/entity/action/actor/entityId", page=True, csv=True),
 ]
 
@@ -109,7 +131,11 @@ def fixtures():
     purchase = s.get(BASE + "/purchases?process=Approved&size=1").json()["data"][0]["id"]
     transfer = s.get(BASE + "/transfers?process=Approved&size=1").json()["data"][0]["id"]
     damage = s.get(BASE + "/damage?process=Approved&size=1").json()["data"][0]["id"]
-    return {"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage}
+    debit = s.get(BASE + "/debit-notes?process=Approved&size=1").json()["data"][0]["id"]
+    opening = s.get(BASE + "/opening-stock?process=Approved&size=1").json()["data"][0]["id"]
+    draft = s.get(BASE + "/purchases?category=all&process=Created&size=1").json()["data"][0]["id"]
+    line = s.get(BASE + f"/purchases/{purchase}").json()["lines"][0]["itemId"]
+    return {"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
 
 def run():
     fx = fixtures()
@@ -137,6 +163,9 @@ def run():
 
     # Specific error contracts: (user, method, path, body, status, error-key or None)
     rnd = f"nobody{random.randint(1000, 9999)}"
+    pbody = {"issueDate": "2026-09-20", "challanNo": "CT-1", "challanDate": "2026-09-20", "method": "Bank", "discount": 0, "paid": 0, "issuedBy": "Contract", "designation": "Tester", "process": "Created"}
+    imp_line = {"itemId": "i6", "qty": 10, "usd": 100, "usdRate": 122, "cdRate": 10, "rdRate": 0, "sdRate": 0, "vatRate": 15, "aitRate": 5, "atRate": 5}
+    dnbody = {"purchaseId": fx["purchase"], "issueDate": "2026-09-24", "issueTime": "10:00", "reason": "damaged", "issuedBy": "Contract", "designation": "Tester", "process": "Created", "lines": [{"itemId": fx["purchaseLine"], "qty": 1}]}
     cases = [
         (None, "POST", "/auth/login", {}, 422, "username"),
         (None, "POST", "/auth/login", {"username": rnd, "password": "x"}, 401, "_"),
@@ -180,6 +209,30 @@ def run():
         ("arif", "POST", "/units", {"code": "Kg", "name": "Kilogram again", "decimals": 2, "active": True}, 422, "code"),
         ("arif", "PUT", "/units/un1", {"code": "KGX", "name": "Kilogram", "decimals": 3, "active": True}, 422, "code"),
         ("arif", "DELETE", "/units/un1", None, 409, None),
+        # R2 — imports, services, debit notes, opening stock, master items, Mushak books
+        ("arif", "POST", "/purchases", {**pbody, "vendorId": "v1", "category": "service", "lines": [{"itemId": "sv1", "qty": 1, "price": 100, "sdRate": 0, "vatRate": 10}]}, 422, "vendorId"),
+        ("arif", "POST", "/purchases", {**pbody, "vendorId": "v7", "category": "service", "lines": [{"itemId": "i1", "qty": 1, "price": 100, "sdRate": 0, "vatRate": 15}]}, 422, None),
+        ("arif", "POST", "/purchases", {**pbody, "vendorId": "v2", "lines": [imp_line]}, 422, "boe"),
+        ("arif", "POST", "/purchases", {**pbody, "vendorId": "v2", "lines": [imp_line], "boe": {"lcNo": "LC-1", "lcDate": "2026-09-21", "customsHouse": "301", "origin": "China"}}, 422, "boe.lcDate"),
+        ("arif", "GET", "/purchases/nope/returnable", None, 404, None),
+        ("arif", "GET", "/debit-notes/nope", None, 404, None),
+        ("arif", "POST", "/debit-notes", {}, 422, "purchaseId"),
+        ("arif", "POST", "/debit-notes", {**dnbody, "purchaseId": fx["draftPurchase"]}, 422, "purchaseId"),
+        ("arif", "POST", "/debit-notes", {**dnbody, "lines": [{"itemId": fx["purchaseLine"], "qty": 99999999}]}, 422, "lines.0.qty"),
+        ("arif", "PUT", f"/debit-notes/{fx['debit']}", {}, 409, None),
+        ("arif", "DELETE", f"/debit-notes/{fx['debit']}", None, 409, None),
+        ("arif", "PATCH", f"/debit-notes/{fx['debit']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
+        ("arif", "GET", "/opening-stock/nope", None, 404, None),
+        ("arif", "POST", "/opening-stock", {}, 422, "itemId"),
+        ("arif", "DELETE", f"/opening-stock/{fx['opening']}", None, 409, None),
+        ("arif", "GET", "/master-items/nope", None, 404, None),
+        ("arif", "POST", "/master-items", {}, 422, "hsCode"),
+        ("arif", "POST", "/master-items", {"hsCode": "76071110", "name": "Contract override", "group": "Raw Material", "category": "general", "unit": "Kg", "priceMethod": "average", "rates": {"vat": 10, "sd": 0, "cd": 5, "rd": 0, "ait": 5, "at": 5}, "active": True}, 422, "overrideReason"),
+        ("arif", "GET", "/mushak/6.1?item=i17&from=2026-07-01&to=2026-09-25", None, 422, "item"),
+        ("arif", "GET", "/mushak/6.2?item=i6&from=2026-07-01&to=2026-09-25", None, 422, "item"),
+        ("arif", "GET", "/mushak/6.1?item=i6&from=2026-09-10&to=2026-09-01", None, 422, "to"),
+        ("arif", "GET", "/mushak/6.1?item=i6&from=bad&to=2026-09-25", None, 422, "from"),
+        ("arif", "GET", "/mushak/9.1?item=i6&from=2026-07-01&to=2026-09-25", None, 404, None),
     ]
     for user, m, path, body, status, key in cases:
         r = S(user).request(m, BASE + path, json=body)

@@ -106,6 +106,19 @@ async def main():
         r = await api(page, "GET", "/stock?size=5")
         check("stock-by-branch API answers in the browser", r["status"] == 200 and "branches" in (r["body"] or {}))
 
+        # 8c. R2 pages (purchase & inventory) on the in-browser API
+        await page.goto(BASE + "/en/purchases/debit-notes/")
+        await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
+        check("debit notes page renders", await page.locator("table tbody tr").count() >= 4)
+        await page.goto(BASE + "/en/purchases/services/")
+        await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
+        check("service purchases page renders", await page.locator("table tbody tr").count() >= 5)
+        await page.goto(BASE + "/en/vat/mushak-6-1/?item=i6")
+        await expect(page.locator("tbody tr").first).to_be_visible(timeout=15000)
+        check("Mushak 6.1 book renders from the in-browser ledger", await page.locator("tbody tr").count() >= 3)
+        r = await api(page, "GET", "/master-items?size=5")
+        check("master items API answers in the browser", r["status"] == 200 and len((r["body"] or {}).get("data", [])) == 5)
+
         # 9. CSV export link is served by the in-browser API
         await page.goto(BASE + "/en/vat/tariff/")
         await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)

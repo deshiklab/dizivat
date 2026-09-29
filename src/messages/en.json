@@ -81,7 +81,7 @@
     "newCustomer": "New customer",
     "newVendor": "New vendor",
     "breadcrumb": "Breadcrumb",
-    "buildInfo": "v{version} · Sprint {sprint}",
+    "buildInfo": "v{version} · {release}",
     "changePassword": "Change password"
   },
   "prefs": {

@@ -81,7 +81,7 @@
     "newCustomer": "নতুন গ্রাহক",
     "newVendor": "নতুন সরবরাহকারী",
     "breadcrumb": "পৃষ্ঠার অবস্থান",
-    "buildInfo": "v{version} · স্প্রিন্ট {sprint}",
+    "buildInfo": "v{version} · {release}",
     "changePassword": "পাসওয়ার্ড পরিবর্তন"
   },
   "prefs": {

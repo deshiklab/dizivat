@@ -87,6 +87,9 @@ jobs:
       - name: E2E — Sprint 4 (units, branches, transfers, damage, finished goods, record history, deferred charts)
         working-directory: scripts
         run: python e2e_s4.py
+      - name: E2E — R2 (imports with duty stack, service purchases, debit notes, opening stock, master items, Mushak 6.1/6.2)
+        working-directory: scripts
+        run: python e2e_r2.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py
