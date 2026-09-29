@@ -9,7 +9,31 @@ export const lineInput = z.object({
   vatRate: z.number().min(0).max(100),
   rebateable: z.boolean().optional(),
   vds: z.boolean().optional(),
+  /** R3 (sales): production batch (lot) the goods ship from — optional */
+  batchId: z.string().max(40).optional(),
 })
+
+/**
+ * R3: export header. A direct export needs the customs station, destination and Bill of Export; a deemed export
+ * (local supply against a back-to-back LC) needs only the LC.
+ */
+export const exportInput = z.object({
+  deemed: z.boolean(),
+  lcNo: z.string().trim().min(1, "required").max(40),
+  lcDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "required"),
+  customsHouse: z.string().max(10).optional().default(""),
+  country: z.string().trim().max(40).optional().default(""),
+  billNo: z.string().trim().max(40).optional().default(""),
+  billDate: z.string().max(10).optional().default(""),
+  shippingAddress: z.string().trim().max(250).optional().default(""),
+  cnfFirm: z.string().trim().max(120).optional().default(""),
+}).superRefine((e, ctx) => {
+  if (e.deemed) return
+  const need = (k: "customsHouse" | "country" | "billNo" | "shippingAddress") => { if (!e[k]) ctx.addIssue({ code: "custom", path: [k], message: "required" }) }
+  need("customsHouse"); need("country"); need("billNo"); need("shippingAddress")
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(e.billDate)) ctx.addIssue({ code: "custom", path: ["billDate"], message: "required" })
+})
+export type ExportInput = z.input<typeof exportInput>
 
 export const saleInput = z.object({
   customerId: z.string().min(1, "required"),
@@ -28,6 +52,10 @@ export const saleInput = z.object({
   /** branch the goods leave from; "" = main (factory) branch */
   branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
+  /** R3: "service" = service sale (lines reference the sale-service list, no stock) */
+  category: z.enum(["goods", "service"]).optional().default("goods"),
+  /** R3: export / deemed-export documents — required for a foreign customer */
+  export: exportInput.optional(),
 })
 export type SaleInput = z.input<typeof saleInput>
 
@@ -283,3 +311,87 @@ export const damageInput = z.object({
   if (v.reason === "lost" && (v.note ?? "").trim().length < 10) ctx.addIssue({ code: "custom", path: ["note"], message: "lostNote" })
 })
 export type DamageInput = z.input<typeof damageInput>
+
+/* ── R3 ────────────────────────────────────────────────────────────────── */
+
+export const creditNoteInput = z.object({
+  saleId: z.string().min(1, "required"),
+  issueDate: date,
+  issueTime: z.string().min(1, "required"),
+  reason: z.enum(["damaged", "quality", "excess", "wrongItem", "priceAdjustment"], { error: "required" }),
+  note: z.string().max(500).optional().default(""),
+  issuedBy: z.string().min(2, "required"),
+  designation: z.string().min(2, "required"),
+  process: z.enum(["Created", "Approved"]),
+  /** return quantity per sales line (0 = not returned) */
+  lines: z.array(z.object({ itemId: z.string().min(1), qty: z.number({ error: "required" }).min(0, "min0") })).min(1, "atLeastOneLine"),
+})
+export type CreditNoteInput = z.input<typeof creditNoteInput>
+
+export const bomInput = z.object({
+  itemId: z.string().min(1, "required"),
+  effectiveDate: date,
+  licenseDate: z.string().max(10).optional().default(""),
+  inputs: z.array(z.object({
+    itemId: z.string().min(1, "required"),
+    qty: z.number({ error: "required" }).positive("positive"),
+    wastagePct: z.number({ error: "required" }).min(0, "min0").max(50, "max50"),
+    price: z.number({ error: "required" }).min(0, "min0"),
+  })).min(1, "atLeastOneInput"),
+  costs: z.array(z.object({
+    head: z.enum(["labour", "power", "overhead", "packing", "admin", "finance", "profit", "other"]),
+    amount: z.number({ error: "required" }).min(0, "min0"),
+  })),
+  /** required for version 2+ (checked by the API, which knows the versions) */
+  amendmentReason: z.string().trim().max(300).optional().default(""),
+  note: z.string().trim().max(300).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+})
+export type BomFormInput = z.input<typeof bomInput>
+
+export const workOrderInput = z.object({
+  requisitionNo: z.string().trim().max(40).optional().default(""),
+  issueDate: date,
+  dueDate: z.string().max(10).optional().default(""),
+  remark: z.string().trim().max(300).optional().default(""),
+  lines: z.array(z.object({ itemId: z.string().min(1, "required"), qty: z.number({ error: "required" }).positive("positive") })).min(1, "atLeastOneLine"),
+  process: z.enum(["Created", "Approved"]),
+})
+export type WorkOrderInput = z.input<typeof workOrderInput>
+
+export const batchInput = z.object({
+  mode: z.enum(["inHouse", "contractual", "opening"]),
+  issueDate: date,
+  receiveDate: z.string().max(10).optional().default(""),
+  vendorId: z.string().max(40).optional().default(""),
+  address: z.string().trim().max(250).optional().default(""),
+  remark: z.string().trim().max(300).optional().default(""),
+  issuedBy: z.string().min(2, "required"),
+  designation: z.string().min(2, "required"),
+  lines: z.array(z.object({
+    itemId: z.string().min(1, "required"),
+    workOrderId: z.string().max(40).optional().default(""),
+    issueQty: z.number({ error: "required" }).positive("positive"),
+    receiveQty: z.number().min(0, "min0").optional().default(0),
+    damageQty: z.number().min(0, "min0").optional().default(0),
+    /** opening batches: value per unit brought forward */
+    unitCost: z.number().min(0, "min0").optional(),
+  })).min(1, "atLeastOneLine"),
+  /** consumption method "actual": quantities actually used (defaults to the BOM) */
+  consumption: z.array(z.object({ itemId: z.string().min(1), qty: z.number().min(0, "min0") })).optional(),
+  process: z.enum(["Created", "Approved"]),
+})
+export type BatchInput = z.input<typeof batchInput>
+
+/** Contractual batch: finished goods received back from the contract manufacturer. */
+export const batchReceiveInput = z.object({
+  receiveDate: date,
+  lines: z.array(z.object({ receiveQty: z.number({ error: "required" }).min(0, "min0"), damageQty: z.number().min(0, "min0").optional().default(0) })).min(1),
+})
+export type BatchReceiveInput = z.input<typeof batchReceiveInput>
+
+export const productionConfigInput = z.object({
+  procedure: z.enum(["directStock", "workOrder"]),
+  consumption: z.enum(["standard", "actual"]),
+})
+export type ProductionConfigInput = z.input<typeof productionConfigInput>

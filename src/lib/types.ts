@@ -18,10 +18,14 @@ export interface Party {
   email?: string
   contactPerson?: string
   active?: boolean
+  /** R3 (customers): credit limit in BDT (0/absent = cash customer, no limit shown) */
+  creditLimit?: number
+  /** R3 (customers): buyer is a VAT-deduction-at-source entity (bank, NGO, listed company …) — VDS pre-ticked on sales */
+  vdsWithholder?: boolean
 }
 
 /** Party row in master-data lists, with document aggregates. */
-export type PartyRow = Party & { docs: number; turnover: number; due: number; lastDate?: string }
+export type PartyRow = Party & { docs: number; turnover: number; due: number; lastDate?: string; /** R3: due on invoices older than 30 days */ overdue?: number; dueInvoices?: number }
 
 export interface Item {
   id: string
@@ -69,6 +73,9 @@ export interface Line {
   tti?: number
   /** imports (R2): Bill of Entry duty breakdown — `subtotal` is then the assessable value (AV) */
   duty?: ImportDuty
+  /** sales (R3): production batch (lot) the finished goods ship from */
+  batchId?: string
+  batchNo?: string
 }
 
 /**
@@ -117,7 +124,14 @@ export interface Sale extends DocBase {
   vehicle?: string
   mode: SalesMode
   vds: boolean
+  /** R3: goods (stock) or service sale (no stock movement); absent = goods */
+  category?: SaleCategory
+  /** R3: export / deemed-export shipping documents (zero-rated) */
+  export?: ExportInfo
 }
+export type SaleCategory = "goods" | "service"
+/** Export header (legacy "New Export"): LC, customs station, destination and the Bill of Export. Deemed export = local supply against a back-to-back LC. */
+export interface ExportInfo { deemed: boolean; lcNo: string; lcDate: string; customsHouse: string; country: string; billNo: string; billDate: string; shippingAddress: string; cnfFirm?: string }
 
 export interface Purchase extends DocBase {
   invoiceNo: string
@@ -195,7 +209,7 @@ export interface LedgerEntry {
   in: number
   out: number
   balance: number
-  /** monthly summary rows until the Production module (R3) supplies documents */
+  /** monthly summary rows for production posted before R3 batches (legacy history) */
   summary?: boolean
 }
 export interface ItemLedger {
@@ -213,7 +227,7 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
@@ -405,3 +419,137 @@ export interface MushakBook {
   opening: { qty: number; value: number }
   closing: { qty: number; value: number }
 }
+
+/* ── R3 — Sales & Production ───────────────────────────────────────────── */
+
+/** Credit note (Mushak 6.7) — goods returned by the customer against an approved sale; output VAT is reduced. */
+export interface CreditLine {
+  itemId: string; name: string; hsCode: string; uom: string
+  /** quantity on the sales invoice */
+  soldQty: number
+  qty: number; price: number; sdRate: number; vatRate: number
+  subtotal: number; sd: number; vat: number; total: number
+}
+export type CreditReason = "damaged" | "quality" | "excess" | "wrongItem" | "priceAdjustment"
+export interface CreditNote {
+  id: string
+  /** CN-MMYY#### */
+  no: string
+  saleId: string; saleNo: string; saleDate: string; saleMode: SalesMode; challanNo: string
+  customerId: string; customerName: string; customerBin: string; customerAddress: string
+  branchId: string; branchName: string
+  issueDate: string; issueTime: string
+  reason: CreditReason; note?: string
+  issuedBy: string; designation: string
+  process: Process
+  lines: CreditLine[]
+  subtotal: number; sd: number; vat: number; total: number
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/** Service sold (NBR service code) — used on service sales (D-12). */
+export type SaleService = ServiceType
+
+/** Production configuration (legacy "Production Config"). */
+export type ProductionProcedure = "directStock" | "workOrder"
+export type ConsumptionMethod = "standard" | "actual"
+export interface ProductionConfig { procedure: ProductionProcedure; consumption: ConsumptionMethod; updatedAt?: string; updatedBy?: string }
+
+/** Bill of materials / input–output coefficient (Mushak 4.3), per ONE unit of the finished good. */
+export interface BomInput {
+  itemId: string; name: string; sku: string; uom: string
+  /** net quantity per unit of output */
+  qty: number
+  wastagePct: number
+  /** qty × wastage% */
+  wastageQty: number
+  /** qty + wastage */
+  grossQty: number
+  price: number
+  /** grossQty × price */
+  value: number
+  wastageValue: number
+}
+export type CostHead = "labour" | "power" | "overhead" | "packing" | "admin" | "finance" | "profit" | "other"
+export interface BomCost { head: CostHead; amount: number }
+export interface Bom {
+  id: string
+  /** BOM-{sku}-v{n} */
+  no: string
+  itemId: string; itemName: string; sku: string; hsCode: string; uom: string
+  version: number
+  /** date the price declaration is submitted to / accepted by the VAT office */
+  licenseDate?: string
+  /** date the coefficients take effect (legacy "Initiate Date") */
+  effectiveDate: string
+  inputs: BomInput[]
+  costs: BomCost[]
+  materialValue: number; wastageValue: number; valueAdded: number
+  /** declared price per unit = material + value added (incl. profit) */
+  price: number
+  /** cost per unit used to value production receipts (price − profit) */
+  unitCost: number
+  /** why this version replaced the previous one */
+  amendmentReason?: string
+  process: Process
+  /** set when a newer version was approved */
+  supersededAt?: string
+  note?: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+export type BomStatus = "active" | "draft" | "superseded" | "cancelled"
+export type BomRow = Bom & { status: BomStatus; salePrice: number }
+
+/** Production work order (PW-MMYY####): what the floor must produce, tracked by the batches that reference it. */
+export interface WorkOrderLine { itemId: string; name: string; sku: string; uom: string; qty: number; received: number; damaged: number; remaining: number }
+export type WorkOrderStatus = "draft" | "open" | "partial" | "completed" | "cancelled"
+export interface WorkOrder {
+  id: string
+  no: string
+  requisitionNo?: string
+  issueDate: string
+  dueDate?: string
+  remark?: string
+  lines: WorkOrderLine[]
+  process: Process
+  status: WorkOrderStatus
+  issuedBy: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/** Production batch (PB-MMYY####): in-house, contractual (Mushak 6.4 challan to the contract manufacturer) or opening. */
+export type BatchMode = "inHouse" | "contractual" | "opening"
+export interface BatchLine {
+  itemId: string; name: string; sku: string; uom: string
+  workOrderId?: string; workOrderNo?: string
+  /** quantity of finished goods put into production (inputs are consumed for this quantity) */
+  issueQty: number
+  receiveQty: number
+  damageQty: number
+  bomId?: string; bomVersion?: number
+  unitCost: number
+  value: number
+}
+export interface Consumption { itemId: string; name: string; sku: string; uom: string; qty: number; price: number; value: number }
+export interface Batch {
+  id: string
+  no: string
+  mode: BatchMode
+  issueDate: string
+  receiveDate?: string
+  vendorId?: string; vendorName?: string; vendorBin?: string; vendorAddress?: string
+  /** contractual: where the inputs are delivered */
+  address?: string
+  remark?: string
+  issuedBy: string; designation: string; issueTime?: string
+  lines: BatchLine[]
+  consumption: Consumption[]
+  totalIssue: number; totalReceive: number; totalDamage: number; materialValue: number; value: number
+  process: Process
+  /** contractual: finished goods received back from the contractor */
+  receivedAt?: string
+  branchId: string; branchName: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+/** Finished-goods lot = one batch line received into stock; sales can draw from a lot. */
+export interface Lot { batchId: string; batchNo: string; date: string; itemId: string; received: number; sold: number; available: number }

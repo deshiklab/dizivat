@@ -70,3 +70,29 @@ export function calcDebitLine(orig: Pick<Line, "qty" | "price" | "subtotal" | "s
     rebate: orig.rebateable ? round2((orig.vat + (orig.duty?.at ?? 0)) * r) : 0,
   }
 }
+
+/** Credit-note line (Mushak 6.7): the returned share of the sales line — same pro-rata rule as a debit note. */
+export function calcCreditLine(orig: Pick<Line, "qty" | "subtotal" | "sd" | "vat" | "total">, qty: number) {
+  const r = orig.qty ? qty / orig.qty : 0
+  return { subtotal: round2(orig.subtotal * r), sd: round2(orig.sd * r), vat: round2(orig.vat * r), total: round2(orig.total * r) }
+}
+
+/**
+ * Mushak 4.3 coefficients for ONE unit of output. Each input: gross = qty × (1 + wastage%), value = gross × price.
+ * Price = material value + value-addition heads (profit included); unit cost (used to value production) excludes profit.
+ * Quantities keep 4 dp (coefficients are small — e.g. 0.0003 kg ink per pouch), money 2 dp.
+ */
+export const round4 = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000
+export function calcBom(inputs: { qty: number; wastagePct: number; price: number }[], costs: { head: string; amount: number }[]) {
+  const lines = inputs.map((i) => {
+    const wastageQty = round4(((i.qty || 0) * (i.wastagePct || 0)) / 100)
+    const grossQty = round4((i.qty || 0) + wastageQty)
+    return { wastageQty, grossQty, value: round2(grossQty * (i.price || 0)), wastageValue: round2(wastageQty * (i.price || 0)) }
+  })
+  const materialValue = round2(lines.reduce((a, l) => a + l.value, 0))
+  const wastageValue = round2(lines.reduce((a, l) => a + l.wastageValue, 0))
+  const valueAdded = round2(costs.reduce((a, c) => a + (c.amount || 0), 0))
+  const profit = round2(costs.filter((c) => c.head === "profit").reduce((a, c) => a + (c.amount || 0), 0))
+  const price = round2(materialValue + valueAdded)
+  return { lines, materialValue, wastageValue, valueAdded, price, unitCost: round2(price - profit) }
+}

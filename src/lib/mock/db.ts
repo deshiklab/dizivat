@@ -1,10 +1,11 @@
-import type { AuditChange, Branch, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, Purchase, Sale, StockDoc, Transfer, Unit } from "../types"
+import type { AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
 import { company } from "./company"
 import { seedStockDocs, seedUnits } from "./seed-stock"
 import { EXTRA_VENDORS, enrichImports, seedDebitNotes, seedMasterItems, seedOpening, seedServicePurchases } from "./seed-r2"
+import { EXTRA_CUSTOMERS, enrichCustomers, enrichExports, seedBoms, seedCreditNotes, seedProduction, seedR3Sales } from "./seed-r3"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -15,9 +16,11 @@ interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
+  /** R3 */
+  creditNotes: CreditNote[]; boms: Bom[]; workOrders: WorkOrder[]; batches: Batch[]; productionConfig: ProductionConfig
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -41,6 +44,10 @@ function init(): DB {
   // R2: service providers, Bill-of-Entry duty stacks on imports, service purchases (no stock)
   d.vendors.push(...structuredClone(EXTRA_VENDORS))
   enrichImports(d.purchases, d.vendors)
+  // R3: EPZ customer, credit terms / VDS status, export shipping documents
+  d.customers.push(...structuredClone(EXTRA_CUSTOMERS))
+  enrichCustomers(d.customers)
+  enrichExports(d.sales, d.customers)
   const services = seedServicePurchases(d.purchases.length + 1, { id: "b1", name: "" })
   d.purchases.push(...services)
   // Audit trail
@@ -74,20 +81,34 @@ function init(): DB {
   const store = stockBranches().find((b) => b.id !== main) ?? { id: main, name: mainName }
   const openings = seedOpening(d.items, { id: main, name: mainName }, { id: store.id, name: store.name })
   const masterItems = seedMasterItems(d.items)
+  // R3: service sales + deemed exports, credit notes, 4.3 declarations, work orders and batches (factory stock)
+  const balMain = { get: (id: string) => bal.get(key(id, main)) ?? 0, add: (id: string, q: number) => bal.set(key(id, main), (bal.get(key(id, main)) ?? 0) + q) }
+  d.sales.push(...seedR3Sales(d.sales.length + 1, d.sales, d.customers, d.items, { id: main, name: mainName }, balMain))
+  const creditNotes = seedCreditNotes(d.sales, d.items, balMain)
+  const boms = seedBoms(d.items)
+  const { workOrders, batches } = seedProduction(d.items, boms, d.vendors, { id: main, name: mainName }, balMain)
   const r2Docs = [
     ...debitNotes.map((x) => ({ entity: "debitNote" as const, id: x.id, ref: x.no, history: x.history })),
     ...openings.map((x) => ({ entity: "opening" as const, id: x.id, ref: x.no, history: x.history })),
     ...masterItems.map((x) => ({ entity: "masterItem" as const, id: x.id, ref: `${x.hsCode} · ${x.name}`, history: x.history })),
+    ...creditNotes.map((x) => ({ entity: "creditNote" as const, id: x.id, ref: x.no, history: x.history })),
+    ...boms.map((x) => ({ entity: "bom" as const, id: x.id, ref: x.no, history: x.history })),
+    ...workOrders.map((x) => ({ entity: "workOrder" as const, id: x.id, ref: x.no, history: x.history })),
+    ...batches.map((x) => ({ entity: "batch" as const, id: x.id, ref: x.no, history: x.history })),
   ]
   seedAudit(d.sales, d.purchases, [...transfers, ...damages], r2Docs)
   return {
     ...d, trash: [], units: seedUnits(), transfers, damages, debitNotes, openings, masterItems,
-    seq: { transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length },
+    creditNotes, boms, workOrders, batches, productionConfig: { procedure: "directStock", consumption: "standard" },
+    seq: {
+      transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
+      creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
+    },
   }
 }
 
 /** Seeds the global audit log from document histories, recent sign-ins and a few admin events. */
-type R2Doc = { entity: "debitNote" | "opening" | "masterItem"; id: string; ref: string; history?: HistoryEntry[] }
+type R2Doc = { entity: "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch"; id: string; ref: string; history?: HistoryEntry[] }
 function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], r2Docs: R2Doc[]) {
   if (auditStore.events.length) return
   const raw: Parameters<typeof recordAudit>[0][] = []
@@ -119,8 +140,8 @@ function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], 
 
 /** In-memory store kept on globalThis so it survives dev hot-reloads (resets on server restart). */
 // NB: init() runs at module load — helpers it calls must be hoisted `function` declarations, not `const` arrows (TDZ).
-const g = globalThis as unknown as { __rbsDb5?: DB }
-export const db: DB = (g.__rbsDb5 ??= init())
+const g = globalThis as unknown as { __rbsDb6?: DB }
+export const db: DB = (g.__rbsDb6 ??= init())
 
 export const withStock = (i: Item): ItemWithStock => ({
   ...i,
@@ -136,11 +157,12 @@ export function nextDocId(prefix: "s" | "p", docs: { id: string }[]) {
   return `${prefix}${max + 1}`
 }
 
-export function nextNo(prefix: "S" | "P" | "PS", issueDate: string) {
+export function nextNo(prefix: "S" | "SS" | "P" | "PS", issueDate: string) {
   const [y, m] = issueDate.split("-")
   const key = `${prefix}-${m}${y.slice(2)}`
-  const list = prefix === "S" ? db.sales : db.purchases
-  const trashed = db.trash.filter((t) => t.kind === (prefix === "S" ? "sale" : "purchase")).map((t) => t.doc as Sale | Purchase)
+  const isSale = prefix === "S" || prefix === "SS"
+  const list = isSale ? db.sales : db.purchases
+  const trashed = db.trash.filter((t) => t.kind === (isSale ? "sale" : "purchase")).map((t) => t.doc as Sale | Purchase)
   const n = [...list, ...trashed].filter((d) => d.invoiceNo.startsWith(key)).length + 1
   return `${key}${String(n).padStart(4, "0")}`
 }
@@ -158,7 +180,7 @@ export function usedBranchIds() {
   for (const d of [...db.sales, ...db.purchases]) ids.add(d.branchId)
   for (const t of db.transfers) { ids.add(t.fromBranchId); ids.add(t.toBranchId) }
   for (const d of db.damages) ids.add(d.branchId)
-  for (const d of [...db.debitNotes, ...db.openings]) ids.add(d.branchId)
+  for (const d of [...db.debitNotes, ...db.openings, ...db.creditNotes, ...db.batches]) ids.add(d.branchId)
   return ids
 }
 /** id → name for list facet labels (all branches, so renamed/removed ones still read well). */
@@ -185,6 +207,11 @@ export function stockByBranch(): Map<string, Record<string, number>> {
   for (const d of db.damages) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
   for (const d of db.debitNotes) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
   for (const o of db.openings) if (o.process === "Approved") add(o.itemId, o.branchId, o.qty)
+  for (const c of db.creditNotes) if (c.process === "Approved") for (const l of c.lines) add(l.itemId, c.branchId, l.qty)
+  for (const b of db.batches) if (b.process === "Approved") {
+    for (const x of b.consumption) add(x.itemId, b.branchId, -x.qty)
+    for (const l of b.lines) add(l.itemId, b.branchId, l.receiveQty)
+  }
   const out = new Map<string, Record<string, number>>()
   for (const it of db.items) {
     const r = moves.get(it.id) ?? {}
@@ -219,7 +246,7 @@ export function stockShortfall(lines: { itemId: string; qty: number }[], branchI
 export function postStock(kind: "sale" | "purchase", lines: { itemId: string; qty: number }[], sign: 1 | -1) {
   for (const l of lines) {
     const it = db.items.find((i) => i.id === l.itemId)
-    if (!it) continue // service lines (sv*) carry no stock
+    if (!it) continue // service lines (sv* / ss*) carry no stock
     if (kind === "sale") it.sold += sign * l.qty
     else it.purchased += sign * l.qty
   }
