@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CheckCheck, Download, Eye, Link2, MoreHorizontal, Pencil, Plus, Trash2, XCircle } from "lucide-react"
+import { CheckCheck, Download, Eye, Link2, MoreHorizontal, Pencil, Plus, Ship, Trash2, Undo2, XCircle } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -25,7 +25,9 @@ import { appUrl } from "@/lib/base-path"
 
 const FACETS = ["vendor", "process", "mode", "payment", "branch"] as const
 
-export function PurchaseList() {
+/** Goods purchases (default) or, with category="service", the service-purchase list (R2, legacy "Purchase → Service"). */
+export function PurchaseList({ category = "goods" }: { category?: "goods" | "service" } = {}) {
+  const svc = category === "service"
   const t = useTranslations("purchases")
   const ts = useTranslations("sales")
   const tc = useTranslations("common")
@@ -37,7 +39,8 @@ export function PurchaseList() {
   const qc = useQueryClient()
   const can = useCan()
   const actions = useDocActions("purchase")
-  const { state, set, params, clearAll, activeCount } = useListState(FACETS)
+  const { state, set, params: listParams, clearAll, activeCount } = useListState(FACETS)
+  const params = React.useMemo(() => (svc ? { ...listParams, category: "service" } : listParams), [listParams, svc])
   const q = useQuery({ queryKey: ["purchases", params], queryFn: () => api.purchases.list(params), placeholderData: keepPreviousData })
   const approve = useMutation({
     mutationFn: (ids: string[]) => api.purchases.bulkApprove(ids),
@@ -72,6 +75,7 @@ export function PurchaseList() {
               <DropdownMenuItem onClick={() => { navigator.clipboard?.writeText(window.location.origin + appUrl(`/${locale}/purchases/${p.id}`)); toast.success(tt("linkCopied")) }}><Link2 /> {tt("copyLink")}</DropdownMenuItem>
               {p.process === "Created" && can("doc.edit") && <DropdownMenuItem onClick={() => router.push(`/purchases/${p.id}/edit`)}><Pencil /> {tc("edit")}</DropdownMenuItem>}
               {p.process === "Created" && can("doc.approve") && <DropdownMenuItem onClick={() => actions.approve(p)}><CheckCheck /> {ts("approve")}</DropdownMenuItem>}
+              {!svc && p.process === "Approved" && can("doc.create") && <DropdownMenuItem onClick={() => router.push(`/purchases/debit-notes?new=1&purchase=${p.id}`)}><Undo2 /> {t("raiseDebit")}</DropdownMenuItem>}
               {p.process === "Created" && can("doc.delete") && (<><DropdownMenuSeparator /><DropdownMenuItem variant="destructive" onClick={() => actions.askDelete(p)}><Trash2 /> {tc("deleteDraft")}</DropdownMenuItem></>)}
               {p.process !== "Cancelled" && can("doc.cancel") && (<><DropdownMenuSeparator /><DropdownMenuItem variant="destructive" onClick={() => actions.askCancel(p)}><XCircle /> {t("cancelPurchase")}</DropdownMenuItem></>)}
             </DropdownMenuContent>
@@ -80,7 +84,7 @@ export function PurchaseList() {
       },
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [locale, t, tc, tt, ts, can])
+  ], [locale, t, tc, tt, ts, can, svc])
 
   const facetOpts = {
     branch: Object.entries(q.data?.facetLabels?.branch ?? {}).map(([value, label]) => ({ value, label })),
@@ -99,16 +103,21 @@ export function PurchaseList() {
     <>
       {actions.dialog}
       <PageHeader
-        title={t("title")}
-        description={totals ? t("summary", { count: fmtNum(q.data!.total, locale), total: fmtCompact(totals.netTotal, locale), rebate: fmtCompact(totals.rebate, locale), due: fmtCompact(totals.due, locale) }) : t("subtitle")}
-        actions={can("doc.create") ? <Button render={<Link href="/purchases/new" />}><Plus /> {t("new")}</Button> : undefined}
+        title={t(svc ? "servicesTitle" : "title")}
+        description={totals ? t(svc ? "servicesSummary" : "summary", { count: fmtNum(q.data!.total, locale), total: fmtCompact(totals.netTotal, locale), rebate: fmtCompact(totals.rebate, locale), due: fmtCompact(totals.due, locale) }) : t("subtitle")}
+        actions={can("doc.create") ? (svc ? <Button render={<Link href="/purchases/services/new" />}><Plus /> {t("newService")}</Button> : (
+          <>
+            <Button variant="outline" render={<Link href="/purchases/new?type=import" />}><Ship /> {t("newImport")}</Button>
+            <Button render={<Link href="/purchases/new" />}><Plus /> {t("new")}</Button>
+          </>
+        )) : undefined}
       />
       <DataTable<Purchase>
-        tableId="purchases" caption={t("title")} columns={columns} data={q.data?.data} total={q.data?.total ?? 0} totals={totals}
+        tableId={svc ? "purchaseServices" : "purchases"} caption={t(svc ? "servicesTitle" : "title")} columns={columns} data={q.data?.data} total={q.data?.total ?? 0} totals={totals}
         loading={q.isLoading} fetching={q.isFetching} error={q.error} onRetry={() => q.refetch()}
         page={state.page} size={state.size} sort={state.sort}
         onPage={(page) => set({ page }, false)} onSize={(size) => set({ size })} onSort={(sort) => set({ sort })}
-        getRowId={(r) => r.id} onRowClick={(r) => router.push(`/purchases/${r.id}`)} selectable defaultHidden={["tti", "paid", "branchName"]} filtered={activeCount > 0}
+        getRowId={(r) => r.id} onRowClick={(r) => router.push(`/purchases/${r.id}`)} selectable defaultHidden={svc ? ["tti", "paid", "branchName", "challanNo"] : ["tti", "paid", "branchName"]} filtered={activeCount > 0}
         filters={
           <>
             <SearchInput value={state.q} onChange={(v) => set({ q: v })} placeholder={t("searchPlaceholder")} />
@@ -123,8 +132,8 @@ export function PurchaseList() {
         chips={<FilterChips chips={chips} onClearAll={clearAll} />}
         toolbarEnd={
           <>
-            <SavedViews tableId="purchases" builtIn={[
-              { name: t("views.imports"), query: "mode=Foreign" },
+            <SavedViews tableId={svc ? "purchaseServices" : "purchases"} builtIn={[
+              ...(svc ? [] : [{ name: t("views.imports"), query: "mode=Foreign" }]),
               { name: t("views.thisPeriod"), query: "from=2026-09-01&to=2026-09-30" },
               { name: t("views.payable"), query: "payment=unpaid,partial&sort=due.desc" },
             ]} />
