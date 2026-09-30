@@ -84,3 +84,10 @@ export function sendCsv(res: Response, csv: string, name: string) {
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** timestamptz from Drizzle (Date) or from a raw query (Postgres text "2026-01-12 10:05:00.123+06") → ISO-8601 UTC. */
+export function toIso(v: Date | string): string {
+  if (v instanceof Date) return v.toISOString()
+  const m = /^(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d(?:\.\d+)?)(?:([+-]\d\d)(?::?(\d\d))?|Z)?$/.exec(v)
+  return new Date(m ? `${m[1]}T${m[2]}${m[3] ? `${m[3]}:${m[4] ?? "00"}` : "Z"}` : v).toISOString()
+}

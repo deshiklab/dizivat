@@ -14,8 +14,8 @@ const NATIVE_CONTROLLERS = [AuthController, MeController, UsersController, Compa
 
 @Global()
 @Module({
-  providers: [SessionService, AuditService, UsersService, UnitsService, { provide: APP_GUARD, useClass: AuthGuard }],
-  exports: [SessionService, AuditService, UsersService, UnitsService],
+  providers: [SessionService, AuditService, UsersService, UnitsService, CompatService, { provide: APP_GUARD, useClass: AuthGuard }],
+  exports: [SessionService, AuditService, UsersService, UnitsService, CompatService],
 })
 class CoreModule {}
 
@@ -32,7 +32,7 @@ class HealthController {
   }
 }
 
-@Module({ controllers: [...NATIVE_CONTROLLERS, HealthController] , providers: [CompatService], exports: [CompatService] })
+@Module({ controllers: [...NATIVE_CONTROLLERS, HealthController] })
 class NativeModule {}
 
 /** Last, so its catch-all only sees what no native controller handles. */

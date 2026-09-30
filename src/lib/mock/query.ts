@@ -67,4 +67,6 @@ export function toCSV<T>(rows: T[], cols: { key: string; label: string; get?: (r
 export const csvResponse = (csv: string, name: string) =>
   new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="${name}"` } })
 
-export const delay = (ms = 180) => new Promise((r) => setTimeout(r, ms))
+/** Simulated latency for the browser demo; off when the handlers run inside the NestJS compat layer. */
+export const delay = (ms = 180) =>
+  (globalThis as { __dzNoDelay?: boolean }).__dzNoDelay ? Promise.resolve() : new Promise((r) => setTimeout(r, ms))

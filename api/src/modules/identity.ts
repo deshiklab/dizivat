@@ -12,7 +12,7 @@ import { ROLE_PERMS, type Me, type Preferences, type SavedView, type User } from
 import { toCSV } from "@/lib/mock/query"
 import { passwordChange, userInput, userUpdate } from "@/lib/schemas"
 import { Authed, CurrentUser, SessionService, type AuthedRequest } from "../common/auth"
-import { jsonBody, parse, Problem, searchParams, sendCsv, sleep, zodErrors } from "../common/http"
+import { jsonBody, parse, Problem, searchParams, sendCsv, sleep, toIso, zodErrors } from "../common/http"
 import { sqlList } from "../common/list"
 import { hashPassword, verifyPassword } from "../common/password"
 import { db } from "../db/client"
@@ -30,9 +30,10 @@ export const toUser = (r: UserRow): User => {
   if (r.mustChangePassword) u.mustChangePassword = true
   return u
 }
-type RawUser = Record<string, unknown> & { id: string; created_at: Date; last_sign_in_at: Date | null }
+type RawUser = Record<string, unknown> & { id: string; created_at: Date | string; last_sign_in_at: Date | string | null }
 const rawToUser = (r: RawUser): User => toUser({
-  ...(r as unknown as UserRow), mustChangePassword: r.must_change_password as boolean, createdAt: r.created_at, lastSignInAt: r.last_sign_in_at,
+  ...(r as unknown as UserRow), mustChangePassword: r.must_change_password as boolean,
+  createdAt: new Date(toIso(r.created_at)), lastSignInAt: r.last_sign_in_at ? new Date(toIso(r.last_sign_in_at)) : null,
 })
 
 /** "Md. Kamal Uddin" → "KU" (honorifics skipped) — as src/lib/mock/users.ts. */

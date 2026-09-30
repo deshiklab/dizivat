@@ -16,6 +16,14 @@ const typescript = { ignoreBuildErrors: process.env.SKIP_BUILD_TYPECHECK === "1"
 // LOW_MEM_BUILD=1: single compile worker + webpack memory optimisations (2 GB dev boxes); CI builds at full speed
 const experimental = process.env.LOW_MEM_BUILD === "1" ? { webpackMemoryOptimizations: true, cpus: 1 } : undefined
 
+/**
+ * API_UPSTREAM=http://127.0.0.1:4000 (R5, branch r5-nestjs): /api/v1/* is proxied to the NestJS + PostgreSQL API
+ * instead of the in-process mock handlers. Read at BUILD time (rewrites are compiled into the route manifest).
+ * STANDALONE=1: self-contained server in .next/standalone for the Docker image.
+ */
+const upstream = process.env.API_UPSTREAM?.replace(/\/$/, "")
+const standalone = process.env.STANDALONE === "1"
+
 const nextConfig: NextConfig = staticDemo
   ? {
       output: "export",
@@ -37,6 +45,9 @@ const nextConfig: NextConfig = staticDemo
       pageExtensions: ["server.tsx", "tsx", "ts", "jsx", "js"],
       allowedDevOrigins: ["*.e2b.app", "*.e2b.dev"],
       poweredByHeader: false,
+      ...(standalone ? { output: "standalone" as const } : {}),
+      // beforeFiles: checked before the app's own route handlers, so the backend wins over the mock
+      ...(upstream ? { rewrites: async () => ({ beforeFiles: [{ source: "/api/v1/:path*", destination: `${upstream}/api/v1/:path*` }], afterFiles: [], fallback: [] }) } : {}),
     }
 
 export default withNextIntl(nextConfig)

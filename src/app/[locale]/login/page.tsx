@@ -1,9 +1,23 @@
 import { Suspense } from "react"
 import { getTranslations, setRequestLocale } from "next-intl/server"
-import { LoginForm, LoginFormFromUrl } from "@/features/auth/login-form"
+import { LoginForm, LoginFormFromUrl, type DemoAccount } from "@/features/auth/login-form"
 import { DEMO_PASSWORD, userStore, users } from "@/lib/mock/users"
 import { companySummary } from "@/lib/mock/company"
 import { STATIC_DEMO } from "@/lib/base-path"
+
+type LoginInfo = { demo: DemoAccount[]; demoPassword: string; company: { name: string; bin: string } }
+
+async function loginInfo(): Promise<LoginInfo> {
+  // NestJS backend (API_UPSTREAM): the demo list comes from PostgreSQL — accounts still on the demo password
+  const upstream = STATIC_DEMO ? undefined : process.env.API_UPSTREAM?.replace(/\/$/, "")
+  if (upstream) {
+    const res = await fetch(`${upstream}/api/v1/auth/login-info`, { cache: "no-store" })
+    if (res.ok) return (await res.json()) as LoginInfo
+  }
+  const demo = users.filter((u) => u.active && !userStore.passwords[u.id]).map(({ username, name, designation, role }) => ({ username, name, designation, role }))
+  const { name, bin } = companySummary()
+  return { demo, demoPassword: DEMO_PASSWORD, company: { name, bin } }
+}
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params
@@ -17,9 +31,7 @@ export default async function LoginPage({ params, searchParams }: {
   setRequestLocale(locale)
   // Mock backend only: the demo accounts list is rendered so reviewers can try every role
   // (only active accounts still on the demo password — invited/reset users have their own)
-  const demo = users.filter((u) => u.active && !userStore.passwords[u.id]).map(({ username, name, designation, role }) => ({ username, name, designation, role }))
-  const { name, bin } = companySummary()
-  const props = { demo, demoPassword: DEMO_PASSWORD, company: { name, bin } }
+  const props = await loginInfo()
   // Static GitHub Pages demo: the page is pre-built, so ?next / ?reason are read in the browser
   if (STATIC_DEMO) {
     return <Suspense fallback={<LoginForm {...props} next={null} reason={null} />}><LoginFormFromUrl {...props} /></Suspense>

@@ -9,7 +9,7 @@ import type { User } from "@/lib/auth/roles"
 import { toCSV } from "@/lib/mock/query"
 import type { AuditAction, AuditChange, AuditEntity, AuditEvent } from "@/lib/types"
 import { Authed } from "../common/auth"
-import { searchParams, sendCsv } from "../common/http"
+import { searchParams, sendCsv, toIso } from "../common/http"
 import { sqlList } from "../common/list"
 import { withStateLock } from "../common/lock"
 import { db, type Tx } from "../db/client"
@@ -21,9 +21,9 @@ export interface AuditInput { actor: User | string; entity: AuditEntity; entityI
 /** Asia/Dhaka calendar day (UTC+6, no DST). */
 export const dhakaDay = (iso: string) => new Date(new Date(iso).getTime() + 6 * 36e5).toISOString().slice(0, 10)
 
-type Raw = { id: number; at: Date; day: string; actor: string; actor_id: string | null; entity: string; entity_id: string | null; ref: string; action: string; changes: AuditChange[] | null; note: string | null }
+type Raw = { id: number; at: Date | string; day: string; actor: string; actor_id: string | null; entity: string; entity_id: string | null; ref: string; action: string; changes: AuditChange[] | null; note: string | null }
 export const rawToEvent = (r: Raw): AuditEvent => {
-  const e: AuditEvent = { id: `a${r.id}`, at: r.at.toISOString(), day: r.day, actor: r.actor, entity: r.entity as AuditEntity, ref: r.ref, action: r.action as AuditAction }
+  const e: AuditEvent = { id: `a${r.id}`, at: toIso(r.at), day: r.day, actor: r.actor, entity: r.entity as AuditEntity, ref: r.ref, action: r.action as AuditAction }
   if (r.actor_id) e.actorId = r.actor_id
   if (r.entity_id) e.entityId = r.entity_id
   if (r.changes?.length) e.changes = r.changes

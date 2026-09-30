@@ -70,6 +70,8 @@ const eslintConfig = [
       "out/**",
       "build/**",
       "next-env.d.ts",
+      // NestJS backend: own tsconfig, checked with `npm --prefix api run typecheck`
+      "api/**",
     ],
   },
 ];
