@@ -1,6 +1,6 @@
 """Visual regression (FE-S2-06).
 
-Compares the deterministic screenshots written by capture.py (01–14, r1–r8, k1–k3, fresh seed, fixed "today")
+Compares the deterministic screenshots written by capture.py (01–14, r1–r8, k1–k4, fresh seed, fixed "today")
 against committed baselines in tests/visual/baseline/.
 
   SHOT_DIR=/tmp/shots python3 capture.py && SHOT_DIR=/tmp/shots python3 visual.py

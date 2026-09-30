@@ -145,6 +145,13 @@ async def main():
         md = open(await d.path(), encoding="utf-8").read()
         check("article Markdown download links back to the static site", d.suggested_filename == "DiziVAT-sales-invoices-en.md" and f"]({BASE}/en/help/credit-notes/)" in md, d.suggested_filename)
 
+        # 8f. Mushak 4.3 register (NBR VAT) and the copyright line
+        await page.goto(BASE + "/en/vat/mushak-4-3/")
+        await expect(page.locator("article[aria-label='Mushak 4.3 input-output coefficient declaration']")).to_be_visible(timeout=15000)
+        check("Mushak 4.3 register renders the official form on the static site", await page.locator("main ul li button").count() >= 1)
+        credit = await page.get_by_test_id("credit").first.inner_text()
+        check("copyright line in the footer", credit.strip() == "© BITSCOL (www.bitscol.com), Email: sales@bitscol.com, Mobile: +8801711853769", credit)
+
         # 9. CSV export link is served by the in-browser API
         await page.goto(BASE + "/en/vat/tariff/")
         await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)
