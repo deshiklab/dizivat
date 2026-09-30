@@ -1,6 +1,6 @@
 # FE-S2-06 / S3 — every push / PR: types, lint rules (S2-08 guards), production build,
 # then browser checks against the built app: console-clean capture, visual regression,
-# end-to-end flows (Sprints 1–3), API contract, axe (WCAG 2.2 AA, light + dark) and performance budgets.
+# end-to-end flows (Sprints 1–4, R2–R4, knowledge base), API contract, axe (WCAG 2.2 AA, light + dark) and performance budgets.
 name: CI
 
 on:
@@ -28,6 +28,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - name: Knowledge base lint (en/bn parity, links, routes)
+        run: npm run kb:lint
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:
@@ -96,6 +98,9 @@ jobs:
       - name: E2E — R4 (bank & wallet accounts, receipts/payments with allocation, party statements, TR-6, VDS 6.6, adjustments, 9.1 builder, period lock, compliance, 6.10)
         working-directory: scripts
         run: python e2e_r4.py
+      - name: E2E — Knowledge base (help centre, search, articles en/bn, print, HTML/Markdown downloads, help menu)
+        working-directory: scripts
+        run: python e2e_kb.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py
