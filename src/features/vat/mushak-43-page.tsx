@@ -56,7 +56,7 @@ export function Mushak43Page() {
             {d && <Button onClick={() => window.print()}><Printer /> {t("print")}</Button>}
           </>
         } />
-      <div className="grid gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <section aria-label={t("listTitle")} className="no-print grid content-start gap-3 rounded-lg border bg-card p-3">
           <div className="grid gap-1.5">
             <Label htmlFor="m43-show">{t("show")}</Label>
@@ -84,7 +84,7 @@ export function Mushak43Page() {
             : one.isLoading ? <Skeleton className="h-96" />
             : one.error || !d ? <EmptyState title={tb("notFound")} hint={one.error?.message} />
             : (
-              <div className="grid gap-3">
+              <div className="grid grid-cols-[minmax(0,1fr)] gap-3">
                 <div className="no-print flex flex-wrap items-center gap-2 text-sm">
                   <span className="font-semibold tabular">{d.no}</span>
                   <Pill tone={TONE[d.status]}>{tb(`status.${d.status}`)}</Pill>
@@ -92,8 +92,8 @@ export function Mushak43Page() {
                 </div>
                 {d.status === "draft" && <p role="status" className="no-print rounded-md border border-warning/40 bg-warning-soft p-3 text-sm">{t("draftWarn")}</p>}
                 {d.status === "superseded" && <p role="status" className="no-print rounded-md bg-muted p-3 text-sm">{tb("supersededNote", { date: d.supersededAt ? fmtDate(d.supersededAt, locale) : "—" })}</p>}
-                <div className="rounded-lg bg-muted/60 p-2 sm:p-4 print:bg-transparent print:p-0"><Mushak43 bom={d} /></div>
-                <p className="no-print text-xs text-muted-foreground">{t("pdfHint")} <Link href="/help/bom" className="text-primary hover:underline">{t("learnMore")}</Link></p>
+                <div className="min-w-0 rounded-lg bg-muted/60 p-2 sm:p-4 print:bg-transparent print:p-0"><Mushak43 bom={d} /></div>
+                <p className="no-print text-xs text-muted-foreground">{t("pdfHint")} <Link href="/help/bom" className="text-primary underline underline-offset-2">{t("learnMore")}</Link></p>
               </div>
             )}
         </section>

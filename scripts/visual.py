@@ -19,7 +19,7 @@ BASELINE = ROOT / "tests" / "visual" / "baseline"
 SHOTS = Path(os.environ.get("SHOT_DIR", "/tmp/dizivat-screens"))
 CHANNEL_TOL = 40      # 0–255 per channel
 MAX_PIXELS = 20       # absolute cap: one changed 12 px glyph is ~40–80 px, so any content change fails
-NAMES = [f"{n:02d}_" for n in range(1, 15)] + [f"v{n}_" for n in range(1, 7)] + [f"r{n}_" for n in range(1, 9)] + [f"k{n}_" for n in range(1, 4)]  # + R2 (r1–r4) and R4 (r5–r8) screens  # + dark, mobile, bn (Sprint 3)
+NAMES = [f"{n:02d}_" for n in range(1, 15)] + [f"v{n}_" for n in range(1, 7)] + [f"r{n}_" for n in range(1, 9)] + [f"k{n}_" for n in range(1, 5)]  # + R2 (r1–r4) and R4 (r5–r8) screens  # + dark, mobile, bn (Sprint 3)
 
 
 def current() -> list[Path]:

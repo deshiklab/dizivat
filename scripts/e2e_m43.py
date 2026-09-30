@@ -86,6 +86,8 @@ async def main():
             await expect(form).to_contain_text(active[0]["no"])
             await expect(form).to_contain_text("মূসক-৪.৩")
             await settle(pg); await pg.screenshot(path=f"{OUT}/120_mushak43.png")
+            sw = await pg.evaluate("[document.documentElement.scrollWidth, document.documentElement.clientWidth]")
+            assert sw[0] <= sw[1], f"page scrolls sideways: {sw}"
             ok(f"register lists the {len(active)} active declarations and shows the official form for the first")
             if len(active) > 1:
                 await items.nth(1).click()
@@ -93,7 +95,7 @@ async def main():
                 await expect(form).to_contain_text(active[1]["no"])
                 await expect(items.nth(1)).to_have_attribute("aria-current", "true")
             q = active[0]["sku"]
-            await pg.get_by_label("Search").fill(q)
+            await pg.locator("#m43-q").fill(q)
             await expect(items).to_have_count(sum(1 for x in active if q.lower() in f"{x['no']} {x['itemName']} {x['sku']} {x['hsCode']}".lower() or any(q.lower() in i["name"].lower() for i in x["inputs"])))
             await expect(pg).to_have_url(re.compile(r"q="))
             ok("selecting a declaration swaps the form and is kept in the URL; search narrows the list")
@@ -143,7 +145,8 @@ async def main():
             mp = await phone.new_page(); watch(mp, errs)
             await mp.goto(BASE + "/en", wait_until="networkidle")
             await mp.get_by_role("button", name=re.compile("Toggle sidebar", re.I)).first.click()
-            await expect(mp.locator("[data-testid='credit']").first).to_be_visible()
+            await expect(mp.locator("[data-sidebar='sidebar'] [data-testid='credit']")).to_be_visible()
+            assert not await mp.locator("footer [data-testid='credit']").is_visible(), "desktop footer hidden on phones"
             await phone.close()
             ok("phones: copyright line in the navigation drawer")
             await pg.goto(BASE + "/en/help/sales-invoices", wait_until="networkidle")
