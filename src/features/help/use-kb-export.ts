@@ -11,6 +11,7 @@ import type { ExportFormat, ExportRequest } from "./exporter"
 /** Print / PDF / download for one article (slug) or the whole manual (null). Loads the exporter on first use. */
 export function useKbExport(slug: string | null) {
   const t = useTranslations("help")
+  const tcr = useTranslations("copyright")
   const locale = useLocale()
   const [busy, setBusy] = React.useState(false)
 
@@ -18,6 +19,7 @@ export function useKbExport(slug: string | null) {
     const labels: ExportLabels = {
       contents: t("contents"), tip: t("tip"), note: t("note"), warning: t("warning"),
       generated: t("generated", { date: fmtDate(TODAY, locale) }), source: t("source"),
+      email: tcr("email"), mobile: tcr("mobile"),
       category: (c) => t(`cat.${c}` as "cat.sales"),
     }
     return { locale, slug, labels, manualTitle: t("manualTitle"), manualSubtitle: t("manualSubtitle") }

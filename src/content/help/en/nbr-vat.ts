@@ -19,7 +19,7 @@ export default {
       p("The main button reads **Prepare return**, **Continue return** or **View return**, depending on the period's status."),
       h("Every Mushak report in one place"),
       table(["Form", "What it is", "Where it lives"],
-        ["4.3", "Input–output coefficient", "[Bill of materials](/production/bom)"],
+        ["4.3", "Input–output coefficient (price declaration)", "[Mushak 4.3](/vat/mushak-4-3); declared in [Bill of materials](/production/bom)"],
         ["6.1", "Purchase book", "[Purchase book (6.1)](/vat/mushak-6-1)"],
         ["6.2", "Sales book", "[Sales book (6.2)](/vat/mushak-6-2)"],
         ["6.3", "Tax invoice", "Printed from each [sales invoice](/sales)"],

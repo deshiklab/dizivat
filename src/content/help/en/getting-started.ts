@@ -17,7 +17,7 @@ export default {
         ["**Inventory**", "Maintain items and HS codes, move stock between branches, write off damage", "6.5"],
         ["**Production**", "Declare input–output coefficients, raise work orders and batches", "4.3, 6.4"],
         ["**Accounting**", "Receive and pay money, manage bank and wallet accounts, print party statements", "none"],
-        ["**NBR VAT**", "Prepare and submit the return, deposit tax, handle VDS and adjustments", "9.1, TR-6, 6.6, 6.1, 6.2, 6.10"],
+        ["**NBR VAT**", "Prepare and submit the return, deposit tax, handle VDS and adjustments", "9.1, TR-6, 6.6, 6.1, 6.2, 6.10, 4.3 (print)"],
         ["**Master data**", "Customers, vendors, units, users, company profile and the audit trail", "none"],
       ),
       h("How a document flows"),

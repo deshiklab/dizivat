@@ -24,7 +24,7 @@ const TONE: Record<TaxPeriod["status"], "success" | "warning" | "danger" | "info
 
 /** Official Mushak outputs and where each one lives in the new UI. */
 const REPORTS: { form: string; key: string; href: string }[] = [
-  { form: "4.3", key: "m43", href: "/production/bom" },
+  { form: "4.3", key: "m43", href: "/vat/mushak-4-3" },
   { form: "6.1", key: "m61", href: "/vat/mushak-6-1" },
   { form: "6.2", key: "m62", href: "/vat/mushak-6-2" },
   { form: "6.3", key: "m63", href: "/sales" },

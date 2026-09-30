@@ -20,7 +20,7 @@
     "finishedGoods": "Finished goods",
     "masterItems": "Master items",
     "production": "Production",
-    "bom": "Bill of materials",
+    "bom": "Bill of materials (4.3)",
     "batches": "Production batches",
     "workOrders": "Work orders",
     "accounting": "Accounting",
@@ -50,7 +50,8 @@
     "statements": "Party statements",
     "accountingConfig": "Accounting config",
     "mushak610": "Mushak 6.10",
-    "vatSettings": "VAT settings"
+    "vatSettings": "VAT settings",
+    "mushak43": "Mushak 4.3"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -3087,7 +3088,7 @@
     "reportsHint": "Every NBR output and where it lives.",
     "r": {
       "m43": "Input–output coefficient",
-      "m43Hint": "Declared with each BOM",
+      "m43Hint": "Price declarations — view, print or save as PDF",
       "m61": "Purchase book",
       "m61Hint": "Inputs ledger by item",
       "m62": "Sales book",
@@ -3218,5 +3219,31 @@
       "masterData": "Customers, vendors, users, company profile and the audit log.",
       "reference": "Document statuses, a VAT glossary and frequently asked questions."
     }
+  },
+  "copyright": {
+    "email": "Email",
+    "mobile": "Mobile"
+  },
+  "m43": {
+    "title": "Mushak 4.3 — input–output coefficient declarations",
+    "subtitle": "Every price declaration filed under Rule 21, with the official form ready to print or save as PDF. Declarations are created and amended in Production › Bill of materials.",
+    "manage": "Open in Bill of materials",
+    "print": "Print / PDF",
+    "listTitle": "Declarations",
+    "formTitle": "Mushak 4.3 form",
+    "show": "Show",
+    "search": "Search",
+    "showOpt": {
+      "active": "Current (active)",
+      "draft": "Drafts awaiting approval",
+      "all": "All versions (incl. superseded)"
+    },
+    "count": "{count, plural, one {{n} declaration} other {{n} declarations}}",
+    "error": "Could not load the declarations",
+    "empty": "No declarations match",
+    "emptyHint": "Change the filter, or create a declaration in Bill of materials.",
+    "draftWarn": "Draft — not yet approved. Approve it in Bill of materials before filing this form with the VAT office.",
+    "pdfHint": "To save a PDF, click Print / PDF and choose “Save as PDF” as the printer.",
+    "learnMore": "How price declarations work"
   }
 }

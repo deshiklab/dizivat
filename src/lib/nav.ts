@@ -74,6 +74,7 @@ export const NAV: NavGroup[] = [
   {
     key: "nbrVat", icon: FileSpreadsheet, href: "/vat/mushak",
     items: [
+      { key: "mushak43", href: "/vat/mushak-4-3", release: "R4", ready: true },
       { key: "purchaseBook", href: "/vat/mushak-6-1", release: "R2", ready: true },
       { key: "salesBook", href: "/vat/mushak-6-2", release: "R2", ready: true },
       { key: "mushakReports", href: "/vat/mushak", release: "R4", ready: true },

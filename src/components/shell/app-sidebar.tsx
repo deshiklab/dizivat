@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sidebar"
 import { LogoMark } from "./logo"
 import { BRAND } from "@/lib/brand"
+import { Credit } from "@/components/common/credit"
 import { cn } from "@/lib/utils"
 
 export function AppSidebar() {
@@ -106,6 +107,8 @@ export function AppSidebar() {
             <span className="truncate text-sidebar-foreground">{me.user.designation} · {tr(me.user.role)}</span>
           </span>
         </div>
+        {/* The status footer (with the copyright line) is desktop-only; on phones the credit sits in the drawer. */}
+        <Credit className="px-2 pb-1 leading-relaxed text-sidebar-foreground md:hidden" linkClassName="text-white" />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

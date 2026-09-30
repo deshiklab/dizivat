@@ -64,7 +64,9 @@ export function CommandPalette() {
     ],
     [tn, th, can]
   )
-  const match = (s: string) => !q || s.toLowerCase().includes(q.trim().toLowerCase())
+  // Bengali digits match Latin ones, so "4.3" finds "মূসক ৪.৩" and "৬.১" finds "Purchase book (6.1)".
+  const norm = (s: string) => s.toLowerCase().replace(/[০-৯]/g, (c) => String(c.charCodeAt(0) - 0x09e6))
+  const match = (s: string) => !q || norm(s).includes(norm(q.trim()))
   const go = (href: string) => { setPaletteOpen(false); router.push(href) }
   const run = (fn: () => void) => { setPaletteOpen(false); fn() }
   const labelFor = (href: string) => pages.find((p) => p.href === href.split("?")[0])?.label ?? href

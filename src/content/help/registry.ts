@@ -30,7 +30,7 @@ export const REGISTRY = {
   "transfers": { category: "inventory", routes: ["/inventory/transfers"], related: ["company-and-branches", "damage-and-finished-goods"] },
   "damage-and-finished-goods": { category: "inventory", routes: ["/inventory/damage", "/inventory/finished-goods"], related: ["work-orders-and-batches", "purchase-sales-books"] },
 
-  "bom": { category: "production", routes: ["/production/bom"], related: ["work-orders-and-batches", "items-and-hs-codes"] },
+  "bom": { category: "production", routes: ["/production/bom", "/vat/mushak-4-3"], related: ["work-orders-and-batches", "items-and-hs-codes"] },
   "work-orders-and-batches": { category: "production", routes: ["/production/work-orders", "/production/batches", "/production/opening", "/production/config"], related: ["bom", "damage-and-finished-goods"] },
 
   "receipts-and-payments": { category: "accounting", routes: ["/accounting/receipts", "/accounting/payments"], related: ["bank-accounts-and-statements", "local-purchases"] },

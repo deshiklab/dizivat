@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { LogoMark } from "@/components/shell/logo"
 import { BRAND } from "@/lib/brand"
+import { Credit } from "@/components/common/credit"
 import { api, ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/roles"
 import { cn } from "@/lib/utils"
@@ -181,7 +182,10 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
             </section>
           )}
         </div>
-        <p className="text-center text-xs text-muted-foreground">{t("footer")}</p>
+        <div className="grid gap-1 text-center text-xs text-muted-foreground">
+          <p>{t("footer")}</p>
+          <Credit linkClassName="text-foreground" />
+        </div>
       </main>
     </div>
   )

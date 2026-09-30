@@ -6,6 +6,7 @@ import { getTranslations, setRequestLocale } from "next-intl/server"
 import { routing } from "@/i18n/routing"
 import { Providers } from "@/components/providers"
 import { prefsScript } from "@/components/prefs"
+import { CREDIT, creditText } from "@/lib/brand"
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" })
 const bengali = Noto_Sans_Bengali({ subsets: ["bengali"], variable: "--font-bengali", weight: ["400", "500", "600", "700"], display: "swap" })
@@ -17,7 +18,7 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }): Promise<Metadata> {
   const { locale } = await params
   const t = await getTranslations({ locale, namespace: "meta" })
-  return { title: { template: `%s · ${t("app")}`, default: t("app") }, description: t("description") }
+  return { title: { template: `%s · ${t("app")}`, default: t("app") }, description: t("description"), authors: [{ name: CREDIT.owner, url: CREDIT.url }], other: { copyright: creditText() } }
 }
 
 export const viewport: Viewport = {

@@ -4,6 +4,7 @@
  */
 import type { Article, Block } from "@/content/help/types"
 import { parseInline, plainInline, sectionId } from "./inline"
+import { CREDIT, creditText } from "@/lib/brand"
 
 export interface ExportLabels {
   contents: string
@@ -14,6 +15,9 @@ export interface ExportLabels {
   generated: string
   /** "Online version" */
   source: string
+  /** Localised labels for the copyright line ("Email", "Mobile"). */
+  email: string
+  mobile: string
   category: (c: string) => string
 }
 
@@ -122,6 +126,7 @@ article + article { break-before: page; page-break-before: always; }
 .toc ol { padding-left: 18px; }
 .toc > ol > li { margin-top: 10px; font-weight: 600; }
 .toc > ol > li li { font-weight: 400; margin: 2px 0; }
+.credit { font-size: 9pt; color: #51607a; margin-top: 32px; border-top: 1px solid #cfd8e6; padding-top: 8px; text-align: center; }
 .src { font-size: 9pt; color: #51607a; margin-top: 28px; border-top: 1px solid #cfd8e6; padding-top: 8px; word-break: break-all; }
 @media print { body { max-width: none; padding: 0; } a { text-decoration: none; } }
 `
@@ -143,19 +148,20 @@ export interface HtmlDocOptions {
 export function htmlDocument(o: HtmlDocOptions) {
   const { ctx, labels } = o
   const stack = o.fontStack || `"Noto Sans Bengali", "Hind Siliguri", "Nirmala UI", Vrinda, system-ui, "Segoe UI", Roboto, Arial, sans-serif`
-  const head = `<!doctype html><html lang="${ctx.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title)}</title><meta name="generator" content="DiziVAT"><style>${o.fontCss ?? ""}\n:root{--kb-font:${stack}}${CSS}</style></head><body>`
+  const head = `<!doctype html><html lang="${ctx.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(o.title)}</title><meta name="generator" content="DiziVAT"><meta name="copyright" content="${esc(creditText(labels))}"><style>${o.fontCss ?? ""}\n:root{--kb-font:${stack}}${CSS}</style></head><body>`
   const brand = `<header class="doc">${MARK}<span class="brand">DiziVAT</span><span class="meta">${esc(labels.generated)}</span></header>`
+  const credit = `<footer class="credit">© ${esc(CREDIT.owner)} (<a href="${CREDIT.url}">${esc(CREDIT.web)}</a>), ${esc(labels.email)}: <a href="mailto:${CREDIT.email}">${CREDIT.email}</a>, ${esc(labels.mobile)}: <a href="tel:${CREDIT.mobile}">${CREDIT.mobile}</a></footer>`
   const art = (a: Article, single: boolean) => {
     const h = single ? "h1" : "h2"
     return `<article id="${a.slug}"><${h}>${esc(a.title)}</${h}><p class="summary">${htmlInline(a.summary, ctx)}</p>${htmlBlocks(a.slug, a.body, ctx, labels, single ? "h2" : "h3")}${single ? `<p class="src">${esc(labels.source)}: <a href="${esc(articleUrl(ctx, a.slug))}">${esc(articleUrl(ctx, a.slug))}</a></p>` : ""}</article>`
   }
-  if (!o.manual) return `${head}${brand}${o.articles.map((a) => art(a, true)).join("\n")}</body></html>`
+  if (!o.manual) return `${head}${brand}${o.articles.map((a) => art(a, true)).join("\n")}${credit}</body></html>`
 
   const cats: string[] = []
   for (const a of o.articles) if (!cats.includes(a.category)) cats.push(a.category)
   const toc = `<nav class="toc"><h2>${esc(labels.contents)}</h2><ol>${cats.map((c) => `<li>${esc(labels.category(c))}<ol>${o.articles.filter((a) => a.category === c).map((a) => `<li><a href="#${a.slug}">${esc(a.title)}</a></li>`).join("")}</ol></li>`).join("")}</ol></nav>`
   const cover = `<section class="cover">${brand}<h1>${esc(o.title)}</h1>${o.subtitle ? `<p class="summary">${esc(o.subtitle)}</p>` : ""}<p class="src">${esc(labels.source)}: <a href="${esc(`${ctx.root}/${ctx.locale}/help${ctx.trailingSlash ? "/" : ""}`)}">${esc(`${ctx.root}/${ctx.locale}/help${ctx.trailingSlash ? "/" : ""}`)}</a></p></section>`
-  return `${head}${cover}${toc}${o.articles.map((a) => art(a, false)).join("\n")}</body></html>`
+  return `${head}${cover}${toc}${o.articles.map((a) => art(a, false)).join("\n")}${credit}</body></html>`
 }
 
 /* -------------------------------------------------------------- Markdown */
@@ -192,7 +198,7 @@ function mdBlocks(slug: string, body: Block[], ctx: ExportCtx, labels: ExportLab
 }
 
 export function articleMarkdown(a: Article, ctx: ExportCtx, labels: ExportLabels) {
-  return `# ${a.title}\n\n*${plainInline(a.summary)}*\n\n${mdBlocks(a.slug, a.body, ctx, labels, "##", false)}\n\n---\n${labels.generated} · ${labels.source}: ${articleUrl(ctx, a.slug)}\n`
+  return `# ${a.title}\n\n*${plainInline(a.summary)}*\n\n${mdBlocks(a.slug, a.body, ctx, labels, "##", false)}\n\n---\n${labels.generated} · ${labels.source}: ${articleUrl(ctx, a.slug)}\n\n${creditText(labels)}\n`
 }
 
 export function manualMarkdown(title: string, subtitle: string, articles: Article[], ctx: ExportCtx, labels: ExportLabels) {
@@ -200,7 +206,7 @@ export function manualMarkdown(title: string, subtitle: string, articles: Articl
   for (const a of articles) if (!cats.includes(a.category)) cats.push(a.category)
   const toc = cats.map((c) => `- **${labels.category(c)}**\n${articles.filter((a) => a.category === c).map((a) => `  - [${a.title}](#${a.slug})`).join("\n")}`).join("\n")
   const parts = cats.map((c) => `# ${labels.category(c)}\n\n${articles.filter((a) => a.category === c).map((a) => `<a id="${a.slug}"></a>\n## ${a.title}\n\n*${plainInline(a.summary)}*\n\n${mdBlocks(a.slug, a.body, ctx, labels, "###", true)}`).join("\n\n---\n\n")}`).join("\n\n")
-  return `# ${title}\n\n${subtitle}\n\n${labels.generated}\n\n## ${labels.contents}\n\n${toc}\n\n${parts}\n`
+  return `# ${title}\n\n${subtitle}\n\n${labels.generated}\n\n## ${labels.contents}\n\n${toc}\n\n${parts}\n\n---\n\n${creditText(labels)}\n`
 }
 
 /** Minutes to read at ~200 words (or ~1,000 characters of Bangla) per minute. */
