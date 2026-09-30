@@ -130,6 +130,21 @@ async def main():
         r = await api(page, "GET", "/vat/returns/2026-09/notes/4")
         check("9.1 sub-form API (nested dynamic route) answers in the browser", r["status"] == 200 and len((r["body"] or {}).get("rows", [])) > 0, r["status"])
 
+        # 8e. Knowledge base: pre-rendered articles, client search, downloads built in the browser
+        await page.goto(BASE + "/en/help/?q=tr-6")
+        await expect(page.locator("main ul a[href*='/help/treasury-tr6']").first).to_be_visible(timeout=15000)
+        check("knowledge base search works on the static site", True)
+        await page.goto(BASE + "/bn/help/vat-return-9-1/")
+        await expect(page.get_by_role("heading", level=1, name="মূসক ৯.১ রিটার্ন প্রস্তুত ও দাখিল")).to_be_visible(timeout=15000)
+        check("Bangla article is pre-rendered", True)
+        await page.goto(BASE + "/en/help/sales-invoices/")
+        await page.get_by_role("button", name="Download").click()
+        async with page.expect_download(timeout=15000) as dl:
+            await page.get_by_role("menuitem", name="Markdown (.md)").click()
+        d = await dl.value
+        md = open(await d.path(), encoding="utf-8").read()
+        check("article Markdown download links back to the static site", d.suggested_filename == "DiziVAT-sales-invoices-en.md" and f"]({BASE}/en/help/credit-notes/)" in md, d.suggested_filename)
+
         # 9. CSV export link is served by the in-browser API
         await page.goto(BASE + "/en/vat/tariff/")
         await expect(page.locator("table tbody tr").first).to_be_visible(timeout=15000)

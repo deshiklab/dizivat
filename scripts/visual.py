@@ -1,6 +1,6 @@
 """Visual regression (FE-S2-06).
 
-Compares the deterministic screenshots written by capture.py (01–14, r1–r4, fresh seed, fixed "today")
+Compares the deterministic screenshots written by capture.py (01–14, r1–r8, k1–k3, fresh seed, fixed "today")
 against committed baselines in tests/visual/baseline/.
 
   SHOT_DIR=/tmp/shots python3 capture.py && SHOT_DIR=/tmp/shots python3 visual.py
@@ -19,7 +19,7 @@ BASELINE = ROOT / "tests" / "visual" / "baseline"
 SHOTS = Path(os.environ.get("SHOT_DIR", "/tmp/dizivat-screens"))
 CHANNEL_TOL = 40      # 0–255 per channel
 MAX_PIXELS = 20       # absolute cap: one changed 12 px glyph is ~40–80 px, so any content change fails
-NAMES = [f"{n:02d}_" for n in range(1, 15)] + [f"v{n}_" for n in range(1, 7)] + [f"r{n}_" for n in range(1, 9)]  # + R2 (r1–r4) and R4 (r5–r8) screens  # + dark, mobile, bn (Sprint 3)
+NAMES = [f"{n:02d}_" for n in range(1, 15)] + [f"v{n}_" for n in range(1, 7)] + [f"r{n}_" for n in range(1, 9)] + [f"k{n}_" for n in range(1, 4)]  # + R2 (r1–r4) and R4 (r5–r8) screens  # + dark, mobile, bn (Sprint 3)
 
 
 def current() -> list[Path]:

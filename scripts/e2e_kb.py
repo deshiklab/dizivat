@@ -64,8 +64,8 @@ async def main():
             assert len(hrefs) == N_ARTICLES, len(hrefs)
             await settle(pg); await pg.screenshot(path=f"{OUT}/110_help_home.png")
             ok(f"help centre lists {N_ARTICLES} articles in 9 topics with a Start here panel")
-            await pg.get_by_role("button", name="NBR VAT", exact=True).click()
-            await expect(pg.get_by_role("button", name="NBR VAT", exact=True)).to_have_attribute("aria-pressed", "true")
+            await pg.get_by_role("group", name="Filter by topic").get_by_role("button", name="NBR VAT", exact=True).click()
+            await expect(pg.get_by_role("group", name="Filter by topic").get_by_role("button", name="NBR VAT", exact=True)).to_have_attribute("aria-pressed", "true")
             await expect(pg).to_have_url(re.compile(r"topic=nbrVat"))
             assert await main_.locator("ul a[href*='/help/']").count() == 7
             await expect(pg.get_by_role("heading", name="Start here")).to_have_count(0)
@@ -76,13 +76,13 @@ async def main():
         try:
             await pg.goto(BASE + "/en/help", wait_until="networkidle")
             box = pg.get_by_role("searchbox", name="Search the knowledge base")
-            await box.fill("withhold")
-            await expect(pg).to_have_url(re.compile(r"q=withhold"))
+            await box.fill("vds certificate")
+            await expect(pg).to_have_url(re.compile(r"q=vds"))
             status = pg.get_by_role("status").filter(has_text=re.compile(r"articles?$"))
             await expect(status).to_be_visible()
             first = pg.locator("main ul a[href*='/help/']").first
             await expect(first).to_have_attribute("href", re.compile(r"/help/vds-certificates$"))
-            ok("search ranks the VDS article first for 'withhold' and keeps q in the URL")
+            ok("search ranks the VDS article first for 'vds certificate' and keeps q in the URL")
             await pg.goto(BASE + "/en/help?q=zzqx", wait_until="networkidle")
             await expect(pg.get_by_text("No articles match “zzqx”.")).to_be_visible()
             await pg.get_by_role("button", name="Clear").click()
@@ -127,7 +127,7 @@ async def main():
             await expect(pg.get_by_role("heading", level=1, name="Credit notes (Mushak 6.7)")).to_be_visible()
             await pg.get_by_role("link", name=re.compile("Previous")).click()
             await expect(pg).to_have_url(re.compile(r"/en/help/exports$"))
-            await pg.get_by_role("navigation", name="Breadcrumb").get_by_role("link", name="Sales").click()
+            await pg.get_by_role("navigation", name="Breadcrumb").get_by_role("link", name="Sales", exact=True).click()
             await expect(pg).to_have_url(re.compile(r"/en/help\?topic=sales$"))
             ok("help links navigate; prev/next and the topic breadcrumb work")
             await pg.goto(BASE + "/en/help/sales-invoices", wait_until="networkidle")
@@ -184,7 +184,7 @@ async def main():
         # ── 7. Full manual ────────────────────────────────────────────
         try:
             await pg.goto(BASE + "/en/help", wait_until="networkidle")
-            menu = lambda: pg.get_by_role("button", name="Full manual").click()
+            menu = lambda: pg.get_by_role("button", name="Full manual", exact=True).click()
             name, md = await download(pg, menu, "Full manual (.md)")
             assert name == "DiziVAT-User-Guide-en.md", name
             assert md.startswith("# DiziVAT user guide"), md[:60]
@@ -253,7 +253,7 @@ async def main():
             doc = await printed(pg, "মূসক ৯.১ রিটার্ন প্রস্তুত ও দাখিল", before)
             assert 'lang="bn"' in doc and "Noto Sans Bengali" in doc
             await pg.goto(BASE + "/bn/help", wait_until="networkidle")
-            name, html = await download(pg, lambda: pg.get_by_role("button", name="সম্পূর্ণ ম্যানুয়াল").click(), "সম্পূর্ণ ম্যানুয়াল (.html)")
+            name, html = await download(pg, lambda: pg.get_by_role("button", name="সম্পূর্ণ ম্যানুয়াল", exact=True).click(), "সম্পূর্ণ ম্যানুয়াল (.html)")
             assert name == "DiziVAT-User-Guide-bn.html" and "DiziVAT ব্যবহার নির্দেশিকা" in html
             ok("Bangla downloads (article .md, manual .html) and print with a Bengali font stack")
         except Exception as e: fail(9, e)

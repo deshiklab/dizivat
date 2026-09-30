@@ -33,6 +33,10 @@ pages=[
  ("r6_compliance","/en/vat/mushak?period=2026-08",None),
  ("r7_receipts","/en/accounting/receipts",None),
  ("r8_tr6_print","/en/vat/tr-6?view=tc1&tab=print",None),
+ # Knowledge base
+ ("k1_help_home","/en/help",None),
+ ("k2_help_article","/en/help/sales-invoices",None),
+ ("k3_help_bn","/bn/help/vat-return-9-1",None),
 ]
 # Sprint 3: visual coverage beyond light desktop — dark theme, 390 px phone, Bangla form
 variants=[

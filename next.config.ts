@@ -13,11 +13,14 @@ const staticDemo = process.env.NEXT_PUBLIC_STATIC_DEMO === "1"
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH || undefined
 // SKIP_BUILD_TYPECHECK=1: skip next build's own type-check worker (low-memory boxes run `npm run typecheck` separately; CI keeps it)
 const typescript = { ignoreBuildErrors: process.env.SKIP_BUILD_TYPECHECK === "1" }
+// LOW_MEM_BUILD=1: single compile worker + webpack memory optimisations (2 GB dev boxes); CI builds at full speed
+const experimental = process.env.LOW_MEM_BUILD === "1" ? { webpackMemoryOptimizations: true, cpus: 1 } : undefined
 
 const nextConfig: NextConfig = staticDemo
   ? {
       output: "export",
       typescript,
+      experimental,
       basePath,
       trailingSlash: true,
       images: { unoptimized: true },
@@ -28,6 +31,7 @@ const nextConfig: NextConfig = staticDemo
   : {
       // Allow the sandbox preview host to use dev HMR.
       typescript,
+      experimental,
       // "server.tsx" files are routes in this build only: the [...slug] catch-all (in-shell 404 for unknown URLs).
       // The static demo has nothing to prerender there — unknown paths get out/404.html instead.
       pageExtensions: ["server.tsx", "tsx", "ts", "jsx", "js"],
