@@ -12,6 +12,7 @@ export function Rich({ text }: { text: string }) {
       {parseInline(text).map((t, i) => {
         switch (t.k) {
           case "b": return <strong key={i} className="font-semibold text-foreground">{t.v}</strong>
+          case "i": return <em key={i}>{t.v}</em>
           case "code": return <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">{t.v}</code>
           case "kbd": return <span key={i} className="whitespace-nowrap">{t.v.split("+").map((k, j) => <span key={j}>{j > 0 && "+"}<kbd className="rounded border border-b-2 bg-muted px-1.5 font-sans text-[0.8em]">{k}</kbd></span>)}</span>
           case "link": {

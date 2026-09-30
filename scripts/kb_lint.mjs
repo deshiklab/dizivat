@@ -9,6 +9,7 @@ const jiti = createJiti(import.meta.url, { alias: { "@": join(root, "src") } })
 const { REGISTRY, SLUGS } = await jiti.import(join(root, "src/content/help/registry.ts"))
 const { EN } = await jiti.import(join(root, "src/content/help/en/index.ts"))
 const { BN } = await jiti.import(join(root, "src/content/help/bn/index.ts"))
+const { parseInline } = await jiti.import(join(root, "src/lib/help/inline.ts"))
 
 const problems = []
 const bad = (m) => problems.push(m)
@@ -43,7 +44,8 @@ for (const [name, kb] of [["en", EN], ["bn", BN]]) {
     if (!a) continue
     for (const t of texts(a)) {
       if (name === "bn" && t.normalize("NFC") !== t) bad(`bn ${s}: text not NFC`)
-      if ((t.match(/\*\*/g) ?? []).length % 2) bad(`${name} ${s}: unbalanced ** in “${t.slice(0, 50)}…”`)
+      const leftover = parseInline(t).filter((x) => x.k === "text").map((x) => x.v).join("")
+      if (/[*`]|\{\{|\}\}/.test(leftover)) bad(`${name} ${s}: stray markup in “${t.slice(0, 60)}…”`)
       if ((t.match(/\{\{/g) ?? []).length !== (t.match(/\}\}/g) ?? []).length) bad(`${name} ${s}: unbalanced {{ }}`)
       for (const [, href] of t.matchAll(/\]\(([^)\s]+)\)/g)) {
         links++

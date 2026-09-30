@@ -55,6 +55,7 @@ function htmlInline(src: string, ctx: ExportCtx) {
   return parseInline(src).map((t) => {
     switch (t.k) {
       case "b": return `<strong>${esc(t.v)}</strong>`
+      case "i": return `<em>${esc(t.v)}</em>`
       case "code": return `<code>${esc(t.v)}</code>`
       case "kbd": return t.v.split("+").map((k) => `<kbd>${esc(k)}</kbd>`).join("+")
       case "link": return `<a href="${esc(resolveHref(t.href, ctx))}">${esc(t.v)}</a>`
@@ -163,6 +164,7 @@ function mdInline(src: string, ctx: ExportCtx) {
   return parseInline(src).map((t) => {
     switch (t.k) {
       case "b": return `**${t.v}**`
+      case "i": return `*${t.v}*`
       case "code": return `\`${t.v}\``
       case "kbd": return `<kbd>${t.v}</kbd>`
       case "link": return `[${t.v}](${resolveHref(t.href, ctx)})`

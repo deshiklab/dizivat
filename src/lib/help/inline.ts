@@ -2,11 +2,13 @@
 export type Inline =
   | { k: "text"; v: string }
   | { k: "b"; v: string }
+  | { k: "i"; v: string }
   | { k: "code"; v: string }
   | { k: "kbd"; v: string }
   | { k: "link"; v: string; href: string }
 
-const RE = /\*\*([^*]+)\*\*|`([^`]+)`|\{\{([^}]+)\}\}|\[([^\]]+)\]\(([^)\s]+)\)/g
+// **bold** | `code` | {{Kbd+Keys}} | [text](href) | *italic* (single asterisks, not touching a word or another asterisk)
+const RE = /\*\*([^*]+)\*\*|`([^`]+)`|\{\{([^}]+)\}\}|\[([^\]]+)\]\(([^)\s]+)\)|(?<![*\p{L}\p{N}])\*([^*\s](?:[^*]*[^*\s])?)\*(?![*\p{L}\p{N}])/gu
 
 export function parseInline(src: string): Inline[] {
   const out: Inline[] = []
@@ -17,6 +19,7 @@ export function parseInline(src: string): Inline[] {
     if (m[1] !== undefined) out.push({ k: "b", v: m[1] })
     else if (m[2] !== undefined) out.push({ k: "code", v: m[2] })
     else if (m[3] !== undefined) out.push({ k: "kbd", v: m[3] })
+    else if (m[6] !== undefined) out.push({ k: "i", v: m[6] })
     else out.push({ k: "link", v: m[4], href: m[5] })
     last = i + m[0].length
   }

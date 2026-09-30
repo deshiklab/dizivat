@@ -2,7 +2,7 @@
  * Knowledge-base content model. Articles are plain data (no JSX) so the same source renders in the app
  * (server components), prints, and exports to standalone HTML and Markdown.
  *
- * Inline mini-markup inside any text: **bold**, `code`, [label](/app/path) or [label](help:slug), {{Ctrl+K}} = key cap.
+ * Inline mini-markup inside any text: **bold**, *italic*, `code`, [label](/app/path) or [label](help:slug), {{Ctrl+K}} = key cap.
  */
 export type Block =
   | { t: "h"; text: string }

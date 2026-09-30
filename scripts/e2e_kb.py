@@ -120,7 +120,7 @@ async def main():
             await expect(art.get_by_role("link", name="credit note").first).to_have_attribute("href", re.compile(r"/en/help/credit-notes$"))
             await expect(art.get_by_role("link", name="Customers").first).to_have_attribute("href", re.compile(r"/en/master/customers$"))
             assert await art.locator("kbd").count() >= 2
-            assert "help:" not in await art.inner_html() and "**" not in await art.inner_text() and "{{" not in await art.inner_text()
+            assert "help:" not in await art.inner_html() and "*" not in await art.inner_text() and "{{" not in await art.inner_text()
             ok("related, screens covered, cross-article (help:) and in-app links resolve; inline markup rendered (no raw ** / {{ }})")
             await art.get_by_role("link", name="credit note").first.click()
             await expect(pg).to_have_url(re.compile(r"/en/help/credit-notes$"))
