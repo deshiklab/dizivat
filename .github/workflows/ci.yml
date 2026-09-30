@@ -5,7 +5,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, r5-nestjs]
   pull_request:
 
 concurrency:

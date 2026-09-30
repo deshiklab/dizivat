@@ -1,0 +1,133 @@
+# R5 — NestJS + PostgreSQL backend (branch r5-nestjs).
+# The whole browser suite runs against Next.js → NestJS → PostgreSQL (no mock), plus the backend-only checks
+# (server-side sessions, revocation, lockout, persistence across API restarts). Then the Docker image is built
+# and published to GHCR (ghcr.io/deshiklab/dizivat:r5-nestjs) — the same image Render builds from the Dockerfile.
+name: Backend (NestJS + PostgreSQL)
+
+on:
+  push:
+    branches: [r5-nestjs]
+  pull_request:
+    paths: ["api/**", "Dockerfile", "docker/**", "render.yaml", ".github/workflows/backend.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_PUBLIC_LEGACY_URL: https://rbs-vat.example.com
+  DATABASE_URL: postgres://dizivat:dizivat@127.0.0.1:5432/dizivat
+  SESSION_SECRET: ci-only-secret-not-used-anywhere-else
+  API_UPSTREAM: http://127.0.0.1:4000
+
+jobs:
+  e2e:
+    name: API + full suite on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: dizivat, POSTGRES_PASSWORD: dizivat, POSTGRES_DB: dizivat }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dizivat" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      BASE_URL: http://localhost:3000
+      SHOT_DIR: ${{ github.workspace }}/test-results/screens
+      API_RESTART_CMD: ${{ github.workspace }}/api/scripts/serve.sh
+      API_LOG: ${{ github.workspace }}/api.log
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: "package-lock.json\napi/package-lock.json" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: scripts/requirements.txt }
+      - run: npm ci
+      - run: npm --prefix api ci
+      - name: API typecheck (incl. the compat route modules)
+        run: npm --prefix api run typecheck
+      - name: Compat route table is up to date
+        run: node api/scripts/gen-compat-routes.mjs && git diff --exit-code api/src/compat/routes.gen.ts
+      - name: Migrations match the schema
+        run: cd api && npx drizzle-kit check
+      - run: npm --prefix api run build
+      - name: Build the frontend against the API (API_UPSTREAM is compiled into the rewrites)
+        run: npm run build
+      - name: Install Playwright
+        run: |
+          pip install -r scripts/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Seed PostgreSQL, start API and web
+        run: |
+          node api/dist/main.js --reset
+          api/scripts/serve.sh
+          npx next start -H 0.0.0.0 -p 3000 > server.log 2>&1 &
+          npx --yes wait-on -t 60000 http-get://localhost:3000/en/login
+      - name: Capture (fails on any console/page error)
+        working-directory: scripts
+        run: python capture.py
+      - name: Visual regression (report-only on CI)
+        working-directory: scripts
+        continue-on-error: true
+        run: python visual.py
+      - { name: E2E — Sprint 1, working-directory: scripts, run: python e2e.py }
+      - { name: E2E — Sprint 2, working-directory: scripts, run: python e2e_s2.py }
+      - { name: API contract (176 endpoints), working-directory: scripts, run: python contract.py }
+      - { name: E2E — Sprint 3, working-directory: scripts, run: python e2e_s3.py }
+      - { name: E2E — Sprint 4, working-directory: scripts, run: python e2e_s4.py }
+      - { name: E2E — R2, working-directory: scripts, run: python e2e_r2.py }
+      - { name: E2E — R3, working-directory: scripts, run: python e2e_r3.py }
+      - { name: E2E — R4, working-directory: scripts, run: python e2e_r4.py }
+      - { name: E2E — Knowledge base, working-directory: scripts, run: python e2e_kb.py }
+      - { name: E2E — Mushak 4.3 + credit line, working-directory: scripts, run: python e2e_m43.py }
+      - { name: Accessibility (axe), working-directory: scripts, run: python a11y.py }
+      - name: Backend — sessions, revocation, lockout, persistence across restarts
+        working-directory: scripts
+        run: python api_native.py
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: |
+            test-results/
+            server.log
+            api.log
+          retention-days: 14
+
+  image:
+    name: Docker image → GHCR
+    needs: e2e
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:r5-nestjs
+            ghcr.io/${{ github.repository }}:r5-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke-test the image with a throwaway PostgreSQL
+        run: |
+          docker network create t
+          docker run -d --name pg --network t -e POSTGRES_USER=d -e POSTGRES_PASSWORD=d -e POSTGRES_DB=d postgres:16
+          sleep 8
+          docker run -d --name app --network t -p 10000:10000 -e DATABASE_URL=postgres://d:d@pg:5432/d -e SESSION_SECRET=smoke ghcr.io/${{ github.repository }}:r5-${{ github.sha }}
+          for i in $(seq 1 90); do curl -sf localhost:10000/api/v1/health && break; sleep 2; done
+          curl -sf localhost:10000/api/v1/health
+          curl -sf -o /dev/null localhost:10000/en/login
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:10000/api/v1/auth/login -H 'content-type: application/json' -d '{"username":"arif","password":"demo1234"}')
+          test "$code" = 200
+          docker logs app | tail -20

@@ -1,0 +1,12 @@
+.git
+node_modules
+api/node_modules
+api/dist
+.next
+out
+tests
+test-results
+docs
+*.log
+.env*
+!.env.example

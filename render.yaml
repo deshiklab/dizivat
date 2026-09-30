@@ -1,0 +1,20 @@
+# Render Blueprint — DiziVAT R5 (NestJS + PostgreSQL), branch r5-nestjs.
+# Database: Neon (free Postgres that does not expire) — paste its connection string as DATABASE_URL when asked.
+# The GitHub Pages demo (main branch) is unaffected.
+services:
+  - type: web
+    name: dizivat-r5
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: r5-nestjs
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # Neon → Connection string (direct, sslmode=require)
+      - key: SESSION_SECRET
+        generateValue: true  # shared by the web server (middleware) and the API (sessions)
+      - key: NODE_ENV
+        value: production
