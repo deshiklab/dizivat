@@ -6,14 +6,14 @@ services:
     name: dizivat-r5
     runtime: docker
     plan: free
-    region: singapore
+    region: ohio             # same AWS region as the Neon database (us-east-2) — every API request talks to it
     branch: r5-nestjs
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/v1/health
     envVars:
       - key: DATABASE_URL
-        sync: false          # Neon → Connection string (direct, sslmode=require)
+        sync: false          # Neon → Connect → connection string; prefer the direct host (without "-pooler")
       - key: SESSION_SECRET
         generateValue: true  # shared by the web server (middleware) and the API (sessions)
       - key: NODE_ENV
