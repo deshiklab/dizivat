@@ -4,7 +4,7 @@
  * scrypt hashes, a sessions table (real sign-out and revocation), lockouts that survive restarts.
  */
 import { randomInt } from "node:crypto"
-import { Controller, Delete, Get, Inject, Injectable, Param, Post, Put, Req, Res } from "@nestjs/common"
+import { Controller, Delete, Get, HttpCode, Inject, Injectable, Param, Post, Put, Req, Res } from "@nestjs/common"
 import { and, eq, sql } from "drizzle-orm"
 import type { Request, Response } from "express"
 import { z } from "zod"
@@ -79,7 +79,7 @@ export class AuthController {
     @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
-  @Post("login")
+  @Post("login") @HttpCode(200)
   async login(@Req() req: Request, @Res() res: Response) {
     const parsed = loginBody.safeParse(jsonBody(req))
     if (!parsed.success) throw new Problem(422, "Validation failed", zodErrors(parsed.error, ""))
@@ -112,7 +112,7 @@ export class AuthController {
   }
 
   /** Ends this session server-side (the cookie stops working even if it was copied). */
-  @Post("logout")
+  @Post("logout") @HttpCode(200)
   async logout(@Req() req: Request, @Res() res: Response) {
     const s = await this.sessions.resolve(req)
     if (s) {
@@ -317,7 +317,7 @@ export class UsersController {
   }
 
   /** New one-time password, forced change at next sign-in, sessions revoked, lockout cleared. */
-  @Post(":id/reset-password") @Authed("users.manage")
+  @Post(":id/reset-password") @Authed("users.manage") @HttpCode(200)
   async reset(@Param("id") id: string, @Req() req: AuthedRequest) {
     const actor = req.dz!.user
     const row = await this.users.byId(id)
