@@ -8,6 +8,7 @@ import { parseAsInteger, parseAsString, useQueryState } from "nuqs"
 import { AlertTriangle, CheckCircle2, Download, FilePlus2, Landmark, ListTree, Lock, Pencil, Printer, Send, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -85,6 +86,7 @@ export function ReturnPage() {
               </Select>
             </div>
             {r && <Button variant="outline" onClick={() => window.print()}><Printer /> {t("print")}</Button>}
+            {r && period && <PdfButton size="default" filename={`Mushak-9.1_${period}`} />}
           </div>
         } />
 

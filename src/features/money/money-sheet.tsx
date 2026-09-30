@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { CheckCheck, Pencil, Printer, Trash2, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -102,6 +103,7 @@ export function MoneySheet({ kind, id, onOpenChange, onEdit, initialTab }: { kin
           )}
         <SheetFooter className="no-print flex-row flex-wrap justify-end gap-2 border-t">
           {d && <Button variant="outline" onClick={print}><Printer /> {t("print")}</Button>}
+          {d && <PdfButton size="default" filename={`${kind === "receipt" ? "Money-receipt" : "Payment-voucher"}_${d.no}`} prepare={() => setTab("print")} />}
           {d && draft && can("doc.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
           {d && draft && can("doc.delete") && <Button variant="outline" disabled={actions.busy} onClick={() => actions.askDelete(d)}><Trash2 /> {td("delete")}</Button>}
           {d && d.process !== "Cancelled" && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}

@@ -82,6 +82,7 @@ jobs:
       - { name: E2E — R4, working-directory: scripts, run: python e2e_r4.py }
       - { name: E2E — Knowledge base, working-directory: scripts, run: python e2e_kb.py }
       - { name: E2E — Mushak 4.3 + credit line, working-directory: scripts, run: python e2e_m43.py }
+      - { name: E2E — PDF download, working-directory: scripts, run: python e2e_pdf.py }
       - { name: Accessibility (axe), working-directory: scripts, run: python a11y.py }
       - name: Backend — sessions, revocation, lockout, persistence across restarts
         working-directory: scripts

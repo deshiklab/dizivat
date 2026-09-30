@@ -157,6 +157,11 @@
     "cancel": "Cancel",
     "save": "Save",
     "print": "Print",
+    "pdf": "PDF",
+    "pdfBusy": "Preparing PDF…",
+    "pdfDone": "PDF downloaded — {file}",
+    "pdfFailed": "Could not create the PDF. Use Print → Save as PDF instead.",
+    "pdfHint": "Download this form as an A4 PDF",
     "noResults": "No results.",
     "edit": "Edit",
     "delete": "Delete",
@@ -454,7 +459,6 @@
     "notFound": "Invoice not found",
     "backToList": "Back to invoices",
     "email": "Email",
-    "pdfLater": "Server-side PDF (Gotenberg) is wired in R3 — use Print → Save as PDF for now.",
     "detailSub": "Challan {challan} · {customer} · {date}",
     "tabOverview": "Overview",
     "tabMushak": "Mushak 6.3 preview",
@@ -3228,7 +3232,7 @@
     "title": "Mushak 4.3 — input–output coefficient declarations",
     "subtitle": "Every price declaration filed under Rule 21, with the official form ready to print or save as PDF. Declarations are created and amended in Production › Bill of materials.",
     "manage": "Open in Bill of materials",
-    "print": "Print / PDF",
+    "print": "Print",
     "listTitle": "Declarations",
     "formTitle": "Mushak 4.3 form",
     "show": "Show",
@@ -3243,7 +3247,7 @@
     "empty": "No declarations match",
     "emptyHint": "Change the filter, or create a declaration in Bill of materials.",
     "draftWarn": "Draft — not yet approved. Approve it in Bill of materials before filing this form with the VAT office.",
-    "pdfHint": "To save a PDF, click Print / PDF and choose “Save as PDF” as the printer.",
+    "pdfHint": "“PDF” downloads the form as an A4 file; “Print” opens the printer dialog.",
     "learnMore": "How price declarations work"
   }
 }

@@ -6,6 +6,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
 import { ExternalLink, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -53,6 +54,7 @@ export function Mushak43Page() {
         actions={
           <>
             <Button variant="outline" render={<Link href={d ? `/production/bom?view=${d.id}` : "/production/bom"} />}><ExternalLink /> {t("manage")}</Button>
+            {d && <PdfButton size="default" filename={`Mushak-4.3_${d.no}`} />}
             {d && <Button onClick={() => window.print()}><Printer /> {t("print")}</Button>}
           </>
         } />

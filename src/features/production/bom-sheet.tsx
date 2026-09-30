@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { ArrowDown, ArrowUp, CheckCheck, CopyPlus, Pencil, Printer, Trash2, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
@@ -81,6 +82,7 @@ export function BomSheet({ id, onOpenChange, onEdit, onAmend, initialTab }: {
           )}
         <SheetFooter className="no-print flex-row flex-wrap justify-end gap-2 border-t">
           {d && <Button variant="outline" onClick={print}><Printer /> {t("print")}</Button>}
+          {d && <PdfButton size="default" filename={`Mushak-4.3_${d.no}`} prepare={() => setTab("mushak")} />}
           {d && d.status === "active" && !hasDraft && can("master.edit") && <Button variant="outline" onClick={() => onAmend(d.id)}><CopyPlus /> {t("amend")}</Button>}
           {d && draft && can("master.edit") && <Button variant="outline" onClick={() => onEdit(d.id)}><Pencil /> {td("edit")}</Button>}
           {d && draft && can("master.edit") && <Button variant="outline" disabled={actions.busy} onClick={() => actions.askDelete(d)}><Trash2 /> {td("delete")}</Button>}

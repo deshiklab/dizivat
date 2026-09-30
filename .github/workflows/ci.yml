@@ -104,6 +104,9 @@ jobs:
       - name: E2E — Mushak 4.3 register and copyright line
         working-directory: scripts
         run: python e2e_m43.py
+      - name: E2E — PDF download of the statutory forms (6.3, 6.7, 6.8, 6.6, TR-6, 6.4, 4.3, 6.10, 9.1, 6.1 …)
+        working-directory: scripts
+        run: python e2e_pdf.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

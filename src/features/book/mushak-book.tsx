@@ -6,6 +6,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
 import { BookOpen, Download, Loader2, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/common/page-header"
@@ -55,6 +56,7 @@ export function MushakBookPage({ form }: { form: "6.1" | "6.2" }) {
         actions={b ? (
           <>
             <Button variant="outline" render={<a href={api.mushak.csvUrl(form, p)} download={`mushak-${form}-${b.item.sku}-${from}-${to}.csv`} />}><Download /> {tt("exportCsv")}</Button>
+            <PdfButton size="default" landscape filename={`Mushak-${form}_${b.item.sku}_${from}_${to}`} />
             <Button onClick={() => window.print()}><Printer /> {tc("print")}</Button>
           </>
         ) : undefined} />
@@ -78,7 +80,7 @@ export function MushakBookPage({ form }: { form: "6.1" | "6.2" }) {
         : q.isLoading ? <p role="status" className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" aria-hidden /> {tc("loading")}</p>
         : q.error ? <p role="alert" className="rounded-md bg-destructive/10 p-4 text-sm text-destructive">{q.error instanceof ApiError ? q.error.message : String(q.error)}</p>
         : b && (
-          <article className={cn("rounded-lg border bg-card print:border-0", q.isFetching && "opacity-70")} aria-busy={q.isFetching}>
+          <article className={cn("print-area rounded-lg border bg-card print:border-0", q.isFetching && "opacity-70")} aria-busy={q.isFetching}>
             <header className="grid gap-1 border-b p-4 text-center">
               <p className="text-xs text-muted-foreground">{t("govt")}</p>
               <h2 className="text-base font-semibold">{t(`${k}.official`)} <span className="tabular">({t("form", { no: form })})</span></h2>

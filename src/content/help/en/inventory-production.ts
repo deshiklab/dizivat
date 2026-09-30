@@ -114,7 +114,7 @@ export default {
         "Open **NBR VAT › [Mushak 4.3](/vat/mushak-4-3)**. It is also listed first under [Mushak reports](/vat/mushak), and {{Ctrl+K}} → *4.3* finds it.",
         "Choose what to **Show**: *Current (active)*, *Drafts awaiting approval* or *All versions*. Search by item, SKU, HS code or input.",
         "Click a declaration on the left. The official form appears on the right.",
-        "Click **Print / PDF**. To save a PDF, choose **Save as PDF** as the printer.",
+        "Click **PDF** to download the form as an A4 PDF file, or **Print** to print it.",
       ),
       p("In [Bill of materials](/production/bom), the **Mushak 4.3** tab and **Print 4.3** of a declaration do the same. **Open in Bill of materials** takes you back there to amend or approve."),
       warn("NBR may question supplies priced below the declaration. If an item's sale price falls below its declared price, DiziVAT shows the gap as a percentage."),

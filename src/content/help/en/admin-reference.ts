@@ -202,7 +202,7 @@ export default {
       h("A customer paid less because they withheld VAT"),
       p("Record their Mushak 6.6 certificate under [VDS](help:vds-certificates), sales side. It settles the difference on the invoice."),
       h("How do I print or save a form as PDF?"),
-      p("Open the document and use its **Print** button (e.g. *Print Mushak 6.3*). In the print dialog, choose **Save as PDF**. Articles in this guide work the same way; see [Using this knowledge base](help:using-this-help)."),
+      p("Open the document and click **PDF**: the official form downloads as an A4 PDF file, named after the form and document number (e.g. *Mushak-6.3_S-09260012.pdf*). To print on paper, use its **Print** button (e.g. *Print Mushak 6.3*). Articles in this guide are saved through the print dialog instead; see [Using this knowledge base](help:using-this-help)."),
       h("Where is Mushak 4.3?"),
       p("Under **NBR VAT › [Mushak 4.3](/vat/mushak-4-3)**. It lists every price declaration with the official form ready to print or save as PDF. Declarations are created and amended in [Bill of materials](/production/bom); see [Find and print Mushak 4.3](help:bom#sec-4)."),
       h("I was signed out"),

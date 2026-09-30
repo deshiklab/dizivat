@@ -37,7 +37,7 @@ export default {
       tip("If the customer has a **credit limit**, the form shows receivable, overdue and available credit, and warns before an invoice goes over the limit."),
       h("Approve, print and share"),
       p("Approving moves stock out of the branch and includes the invoice in this period's [Mushak 6.2 sales book](help:purchase-sales-books) and [9.1 return](help:vat-return-9-1). Approvers can approve drafts from the invoice page, or several at once by ticking them in the list and choosing **Approve** in the bulk bar."),
-      p("Open an invoice to see its **Overview**, the **Mushak 6.3 preview**, any **Credit notes** and its **History**. Click **Print Mushak 6.3** and choose a printer or *Save as PDF*. The layout follows the official bilingual form on A4."),
+      p("Open an invoice to see its **Overview**, the **Mushak 6.3 preview**, any **Credit notes** and its **History**. Click **PDF** to download the invoice as an A4 PDF file, or **Print Mushak 6.3** to print it. The layout follows the official bilingual form on A4."),
       h("Correcting an invoice"),
       list(
         "**Drafts** can be edited or deleted. Delete offers **Undo** for a few seconds.",

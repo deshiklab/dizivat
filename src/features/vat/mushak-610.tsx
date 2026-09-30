@@ -5,6 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
 import { Download, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -43,6 +44,7 @@ export function Mushak610Page() {
         actions={d ? (
           <>
             <Button variant="outline" render={<a href={api.mushak.m610CsvUrl({ from, to })} download={`mushak-6.10-${from}-${to}.csv`} />}><Download /> {tt("exportCsv")}</Button>
+            <PdfButton size="default" filename={`Mushak-6.10_${from}_${to}`} />
             <Button onClick={() => window.print()}><Printer /> {tc("print")}</Button>
           </>
         ) : undefined} />

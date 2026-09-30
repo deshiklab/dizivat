@@ -6,7 +6,7 @@ import type { Sale } from "@/lib/types"
 
 /**
  * Mushak-6.3 (Tax Invoice) — layout per VAT & SD Rules 2016, rule 40(1)(c)&(f).
- * Rendered as HTML + print CSS today (A4); the same template will feed Gotenberg for server PDFs.
+ * Rendered as HTML + print CSS (A4); the PDF button rasterises this same template client-side (src/lib/pdf/export.ts).
  * Statutory labels are always Bangla with English sub-labels regardless of UI language.
  */
 export function Mushak63({ sale }: { sale: Sale }) {

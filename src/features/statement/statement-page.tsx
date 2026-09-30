@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query"
 import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs"
 import { AlertTriangle, CheckCircle2, Download, HandCoins, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -57,6 +58,7 @@ export function StatementPage() {
           <div className="no-print flex flex-wrap gap-2">
             <Button variant="outline" render={<a href={api.accounting.statementCsvUrl({ kind, party: party!, from, to })} download />}><Download /> {t("csv")}</Button>
             <Button variant="outline" onClick={() => window.print()}><Printer /> {t("print")}</Button>
+            <PdfButton size="default" filename={`Statement_${kind}_${d.party.name}_${from}_${to}`} />
           </div>
         ) : undefined} />
       <Card className="no-print mb-4">

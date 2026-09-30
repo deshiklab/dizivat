@@ -6,6 +6,7 @@ import { parseAsString, useQueryState } from "nuqs"
 import { ArrowLeft, HandCoins, Link2, Printer, ShieldCheck, Ship, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -56,6 +57,7 @@ export function PurchaseDetail({ id }: { id: string }) {
           <>
             <Button variant="outline" size="sm" onClick={() => { navigator.clipboard?.writeText(window.location.href); toast.success(tt("linkCopied")) }}><Link2 /> {tt("copyLink")}</Button>
             <Button variant="outline" size="sm" onClick={() => window.print()}><Printer /> {tc("print")}</Button>
+            <PdfButton filename={`Purchase_${p.invoiceNo}`} prepare={() => setTab("overview")} />
             {goods && p.process === "Approved" && can("doc.create") && <Button variant="outline" size="sm" render={<Link href={`/purchases/debit-notes?new=1&purchase=${p.id}`} />}><Undo2 /> {t("raiseDebit")}</Button>}
             <DocActionButtons doc={p} base="/purchases" actions={actions} />
           </>

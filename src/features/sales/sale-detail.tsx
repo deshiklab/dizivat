@@ -4,9 +4,10 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { ArrowLeft, Download, FileMinus2, HandCoins, Link2, Mail, Printer, ShieldCheck, Ship } from "lucide-react"
+import { ArrowLeft, FileMinus2, HandCoins, Link2, Mail, Printer, ShieldCheck, Ship } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { PdfButton } from "@/components/common/pdf-button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -66,7 +67,7 @@ export function SaleDetail({ id }: { id: string }) {
           <>
             <Button variant="outline" size="sm" onClick={share}><Link2 /> {tt("copyLink")}</Button>
             <Button variant="outline" size="sm" render={<a href={mail} />}><Mail /> {t("email")}</Button>
-            <Button variant="outline" size="sm" onClick={() => toast.info(t("pdfLater"))}><Download /> PDF</Button>
+            <PdfButton filename={`Mushak-6.3_${s.invoiceNo}`} title={`Mushak 6.3 – ${s.invoiceNo}`} prepare={() => setTab("mushak")} />
             <Button variant="outline" size="sm" onClick={print}><Printer /> {t("printMushak")}</Button>
             <DocActionButtons doc={s} base="/sales" actions={actions} />
           </>
