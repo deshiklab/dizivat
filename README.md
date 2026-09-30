@@ -1,4 +1,9 @@
-# DiziVAT — VAT management frontend (Sprints 1–4 + R2–R4 + Knowledge base)
+# DiziVAT — VAT management system (Sprints 1–4 + R2–R4 + Knowledge base + R5 backend)
+
+> **Branch `r5-nestjs`:** the same app on a real backend: **NestJS 11 + PostgreSQL** (Drizzle ORM), deployable to
+> **Render + Neon**. See [docs/BACKEND.md](docs/BACKEND.md).
+> [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/deshiklab/dizivat/tree/r5-nestjs)
+> The `main` branch keeps the in-browser mock demo on GitHub Pages: https://deshiklab.github.io/dizivat/en/
 
 Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (Base UI) · next-intl (EN/বাংলা) · TanStack Query + Table · React Hook Form + Zod · Recharts.
 
@@ -14,9 +19,20 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
 - **Knowledge base (v0.8.0):** the app is renamed **DiziVAT**, and a built-in user guide sits under **Help & documentation** (`/help`): 34 articles in 9 topics (getting started, sales, purchase, inventory, production, accounting, NBR VAT, master data & admin, reference with a VAT glossary and FAQ), fully written in English **and** Bangla and following the language switch. The help centre has a topic filter and instant search over titles, keywords and headings (Bangla and Latin digits match, so `৯.১` finds 9.1). Each article has a table of contents, the screens it covers, related articles and prev/next. It can be **printed** or saved as **PDF** as a clean A4 document without the app chrome, **shared** (copy link, email, WhatsApp or the device share sheet) and **downloaded** as a standalone HTML page or Markdown, with links back to the app. The **whole manual** downloads or prints the same way. The top-bar help menu offers **Help for this page** on every screen, and ⌘K finds the knowledge base. Article text is rendered on the server and never ships in the page JavaScript; the exporter loads on first use. `npm run kb:lint` checks English/Bangla parity, cross-article links and app routes. The stale 9.1 note numbers in three form hints were corrected, and *Keep me signed in* now lasts 7 days.
 - **Mushak 4.3 register and credits (v0.8.1):** **NBR VAT › Mushak 4.3** (`/vat/mushak-4-3`) lists every input–output coefficient declaration (current, drafts or all versions, with search) beside the official form, ready to print or save as PDF; **Open in Bill of materials** goes back to amend or approve it. The compliance centre's 4.3 card opens it, the production entry reads *Bill of materials (4.3)*, and ⌘K matches Bangla and Latin digits (`4.3` finds `মূসক ৪.৩`). The help article and FAQ explain where to find it. The copyright line **© BITSCOL (www.bitscol.com), Email: sales@bitscol.com, Mobile: +8801711853769** appears in the status footer, on the sign-in page, in the phone navigation drawer and at the end of every exported/printed help document (HTML and Markdown).
 
+- **R5.1 — Backend: NestJS + PostgreSQL (v0.9.0, branch `r5-nestjs`):** an API in `api/` (NestJS 11, Drizzle ORM, PostgreSQL 16/17) behind the unchanged frontend. Next.js proxies `/api/v1` to it when built with `API_UPSTREAM`.
+  - **Native modules:** identity, users, company and branches, units, the tariff and the audit trail, on real tables.
+    - Passwords are stored as scrypt hashes.
+    - Server-side sessions make sign-out real; password changes, resets and deactivations revoke sessions immediately.
+    - Lockouts survive restarts.
+    - The audit table is append-only.
+    - Lists are filtered, faceted and sorted in SQL.
+  - **Compat layer:** the other 70 route modules run unchanged inside Nest, with their state saved to PostgreSQL after every write.
+  - **Tests:** the full existing suite passes against it (520 contract checks, every E2E suite, axe, 32/32 visual baselines). `scripts/api_native.py` adds 39 backend checks, including persistence across API restarts.
+  - **Deployment:** one Docker image runs both processes, via `render.yaml` for Render with Neon Postgres. The roadmap R5.2–R5.5 moves each business module to relational tables.
+
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
-All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). When the Symfony `/api/v1` is ready, point the client's base URL at it and delete `src/lib/mock` and `src/app/api`. No component changes are needed, and ESLint stops components from importing the mock directly.
+All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). ESLint stops components from importing the mock directly. On this branch the same `/api/v1` contract is also served by the **NestJS + PostgreSQL** API in `api/`: build and run with `API_UPSTREAM=http://127.0.0.1:4000` and no component changes are needed (see *Backend (R5)* below).
 
 ## Run
 
@@ -43,6 +59,19 @@ The mock database, sessions and login-attempt counters live in memory and reset 
 > On a machine with ≤ 2 GB RAM the lint step inside `next build` can run out of memory. Run `npm run lint` on its own, then `npx next build --no-lint` (CI runners are unaffected).
 
 > Start the server only after `npm run build` has finished writing `.next/BUILD_ID`. A server started mid-build serves mixed chunk hashes, which shows up as "Loading chunk … failed".
+
+## Backend (R5) — NestJS + PostgreSQL
+
+```bash
+export DATABASE_URL=postgres://dizivat:dizivat@127.0.0.1:5432/dizivat SESSION_SECRET=$(openssl rand -hex 32) API_UPSTREAM=http://127.0.0.1:4000
+npm --prefix api ci && npm --prefix api run build
+node api/dist/main.js &            # migrations + first-start seed, then http://127.0.0.1:4000/api/v1/health
+npm run build && npx next start -p 3000
+API_RESTART_CMD=api/scripts/serve.sh python3 scripts/api_native.py   # backend checks (sessions, revocation, persistence)
+```
+
+`docker build -t dizivat .` produces the deployable image (Next.js on `$PORT` + API inside). Architecture, tables,
+the compat layer, Render + Neon steps and the roadmap are in [docs/BACKEND.md](docs/BACKEND.md).
 
 ## Quality checks
 
