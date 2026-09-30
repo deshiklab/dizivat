@@ -1,0 +1,80 @@
+/**
+ * Boot: first start seeds PostgreSQL from the demo data set (the same one the mock and the Pages demo use);
+ * later starts restore everything from PostgreSQL before the compat bundle initialises.
+ */
+import { asc, eq, sql } from "drizzle-orm"
+import type { Preferences, User } from "@/lib/auth/roles"
+import type { AuditEvent, Unit } from "@/lib/types"
+import { hashPassword } from "./common/password"
+import { db } from "./db/client"
+import { auditEvents, compatState, meta, tariffLines, units, users } from "./db/schema"
+import { markPersisted, rawToEvent } from "./modules/audit"
+import { compatSnapshot, markSaved } from "./modules/compat"
+import { toUser } from "./modules/identity"
+import { loadCompany, saveCompany } from "./modules/reference"
+import { G, loadCompat, restoreGlobals } from "./state"
+
+export const SEED_VERSION = "r5.1"
+
+export async function bootState(log: (m: string) => void) {
+  const [state] = await db.select().from(compatState).where(eq(compatState.key, "main"))
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(users)
+  if (state && n) return restore(state.data as { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log)
+  return seed(log)
+}
+
+async function seed(log: (m: string) => void) {
+  const t0 = Date.now()
+  const m = loadCompat() // fresh globals: demo users, company, documents, audit history
+  const demoHash = await Promise.all(m.userStore.users.map(() => hashPassword(m.DEMO_PASSWORD)))
+  const events = m.auditStore.events
+  const snapshot = compatSnapshot()
+  await db.transaction(async (tx) => {
+    for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "tariff_lines", "audit_events", "compat_state", "meta"])
+      await tx.execute(sql.raw(`delete from ${t}`))
+    await tx.insert(users).values(m.userStore.users.map((u, i) => ({
+      id: u.id, username: u.username, name: u.name, designation: u.designation, initials: u.initials, email: u.email, role: u.role,
+      mobile: u.mobile ?? null, department: u.department ?? null, active: u.active, mustChangePassword: !!u.mustChangePassword,
+      passwordHash: demoHash[i], passwordIsDemo: true, preferences: {}, createdAt: new Date(u.createdAt),
+      lastSignInAt: u.lastSignInAt ? new Date(u.lastSignInAt) : null,
+    })))
+    await saveCompany(tx, m.company)
+    await tx.insert(units).values(m.db.units.map((u) => ({ id: u.id, code: u.code, name: u.name, decimals: u.decimals, active: u.active, createdAt: new Date(u.createdAt) })))
+    const unitSeq = (m.db.seq as Record<string, number>).unit
+    await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
+    for (let i = 0; i < m.tariff.length; i += 500)
+      await tx.insert(tariffLines).values(m.tariff.slice(i, i + 500).map((t) => ({ fy: m.TARIFF_FY, ...t })))
+    await tx.execute(sql`alter sequence audit_events_id_seq restart with 1`)
+    for (let i = 0; i < events.length; i += 500) {
+      const chunk = events.slice(i, i + 500)
+      const ids = await tx.insert(auditEvents).values(chunk.map((e) => ({
+        at: new Date(e.at), day: e.day, actor: e.actor, actorId: e.actorId ?? null, entity: e.entity, entityId: e.entityId ?? null,
+        ref: e.ref, action: e.action, changes: e.changes?.length ? e.changes : null, note: e.note ?? null,
+      }))).returning({ id: auditEvents.id })
+      ids.forEach((r, j) => { chunk[j].id = `a${r.id}` })
+    }
+    await tx.insert(compatState).values({ key: "main", data: JSON.parse(snapshot) as unknown })
+    await tx.insert(meta).values([
+      { key: "seed_version", value: SEED_VERSION }, { key: "seeded_at", value: new Date().toISOString() }, { key: "tariff_fy", value: m.TARIFF_FY },
+    ])
+  })
+  G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
+  markPersisted(events)
+  markSaved(snapshot)
+  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
+}
+
+async function restore(state: { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log: (m: string) => void) {
+  const t0 = Date.now()
+  const userRows = await db.select().from(users).orderBy(asc(users.ord))
+  const prefs: Record<string, Preferences> = {}
+  const list: User[] = userRows.map((r) => { prefs[r.id] = r.preferences as Preferences; return toUser(r) })
+  const unitRows: Unit[] = (await db.select().from(units).orderBy(asc(units.ord))).map((r) => ({ id: r.id, code: r.code, name: r.name, decimals: r.decimals, active: r.active, createdAt: r.createdAt.toISOString() }))
+  const raw = await db.execute(sql`select * from audit_events order by id`)
+  const events: AuditEvent[] = (raw.rows as Parameters<typeof rawToEvent>[0][]).map(rawToEvent)
+  restoreGlobals({ db: state.db as never, notifRead: state.notifRead, users: list, prefs, company: await loadCompany(), units: unitRows, events })
+  loadCompat()
+  markPersisted(events)
+  markSaved(compatSnapshot())
+  log(`restored from PostgreSQL: ${list.length} users, ${events.length} audit events (${Date.now() - t0} ms)`)
+}
