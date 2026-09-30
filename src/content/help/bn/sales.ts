@@ -1,5 +1,5 @@
 import type { ArticleText } from "../types"
-import { h, list, p, steps, table, tip, warn } from "../blocks"
+import { h, list, note, p, steps, table, tip, warn } from "../blocks"
 
 export default {
   "sales-invoices": {
@@ -97,6 +97,7 @@ export default {
         "এলসির তারিখ চালানের তারিখের পরে হতে পারে না।",
       ),
       tip("শূন্য হারের বিক্রয়েও ব্যবহৃত উপকরণের উপকরণ কর রেয়াত নেওয়া যায়। ক্রয়ের রেকর্ড সম্পূর্ণ রাখুন; দেখুন [স্থানীয় ও আমদানি ক্রয়](help:local-purchases)।"),
+      note("[বিক্রয় চালান](/sales)-এর **রপ্তানি বিক্রয়** দ্রুত ভিউতে আপনার স্থানীয় বিক্রয়ের পাশাপাশি রপ্তানিও দেখায়।"),
     ],
   },
 
