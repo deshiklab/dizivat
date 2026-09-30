@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { LogoMark } from "@/components/shell/logo"
+import { BRAND } from "@/lib/brand"
 import { api, ApiError } from "@/lib/api/client"
 import type { Role } from "@/lib/auth/roles"
 import { cn } from "@/lib/utils"
@@ -87,7 +88,7 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
         <div className="relative flex items-center gap-3">
           <LogoMark className="size-10" />
           <div>
-            <p className="text-lg font-semibold">DiziVAT</p>
+            <p className="text-lg font-semibold">{BRAND}</p>
             <p className="text-sm text-white/70">{t("tagline")}</p>
           </div>
         </div>
@@ -105,7 +106,7 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
       {/* Form */}
       <main id="main" className="flex flex-col bg-background px-4 py-6 sm:px-8">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 lg:invisible"><LogoMark /><span className="font-semibold">DiziVAT</span></div>
+          <div className="flex items-center gap-2 lg:invisible"><LogoMark /><span className="font-semibold">{BRAND}</span></div>
           <Button variant="ghost" size="sm" render={<a href={switchHref} hrefLang={otherLocale} lang={otherLocale} />}>
             <Languages /> {otherLocale === "bn" ? "বাংলা" : "English"}
           </Button>

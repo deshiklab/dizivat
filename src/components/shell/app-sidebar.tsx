@@ -11,6 +11,7 @@ import {
   SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem, SidebarRail, useSidebar,
 } from "@/components/ui/sidebar"
 import { LogoMark } from "./logo"
+import { BRAND } from "@/lib/brand"
 import { cn } from "@/lib/utils"
 
 export function AppSidebar() {
@@ -35,10 +36,10 @@ export function AppSidebar() {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link href="/" onClick={close} />} tooltip="DiziVAT">
+            <SidebarMenuButton size="lg" render={<Link href="/" onClick={close} />} tooltip={BRAND}>
               <LogoMark className="size-8! shrink-0" />
               <span className="grid min-w-0 leading-tight">
-                <span className="truncate font-semibold text-white">DiziVAT</span>
+                <span className="truncate font-semibold text-white">{BRAND}</span>
                 <span className="truncate text-xs text-sidebar-foreground">{company.name}</span>
               </span>
             </SidebarMenuButton>
