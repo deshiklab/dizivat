@@ -124,10 +124,13 @@ CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 One Docker container runs both processes (`Dockerfile`, `docker/start.sh`): Next.js on `$PORT` and the API on
 `127.0.0.1:4000`. The database is Neon, whose free plan does not expire (unlike Render's free Postgres, which is deleted after 30 days).
 
-1. **Neon** → create a project in region **AWS Asia Pacific (Singapore)** → *Connect* → copy the connection string
-   (`postgresql://…neon.tech/neondb?sslmode=require…`). `sslmode=require` and `channel_binding=require` are handled.
+1. **Neon** → project → *Connect* → copy the connection string (`postgresql://…neon.tech/neondb?sslmode=require…`).
+   Prefer the **direct** host (drop `-pooler` from the host name), since migrations run at start-up. `sslmode=require` and
+   `channel_binding=require` are handled (upgraded to full certificate verification plus channel binding).
 2. **Render** → [Deploy to Render](https://render.com/deploy?repo=https://github.com/deshiklab/dizivat/tree/r5-nestjs)
-   (reads `render.yaml`: free web service, Singapore, branch `r5-nestjs`, health check `/api/v1/health`). Paste the Neon string as `DATABASE_URL`. `SESSION_SECRET` is generated for you.
+   (reads `render.yaml`: free web service, branch `r5-nestjs`, health check `/api/v1/health`). Paste the Neon string as
+   `DATABASE_URL`. `SESSION_SECRET` is generated for you. Keep Render and Neon in the same region: `render.yaml` uses
+   **Ohio** for a Neon project in AWS us-east-2 (pick Singapore for ap-southeast-1, and so on).
 3. The first deploy builds the image, migrates and seeds Neon, then serves `https://dizivat-r5.onrender.com` (or the name Render assigns).
 
 Free-plan notes:
