@@ -117,7 +117,9 @@ It runs 39 checks: real sign-out, revocation on password change, reset and deact
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
 1. Starts a PostgreSQL 16 service, runs the full suite plus `api_native.py`, and checks that the migrations and the compat table are current.
-2. Builds the Docker image, pushes it to `ghcr.io/deshiklab/dizivat:r5-nestjs`, and smoke-tests it against a fresh PostgreSQL.
+2. Builds the Docker image, pushes it to `ghcr.io/deshiklab/dizivat:<branch>`, and smoke-tests it against a fresh PostgreSQL
+   (including that `/api/v1/health` reports the commit baked into the image).
+3. On `r5-nestjs` only: deploys to production (see *Continuous deployment* below).
 
 ## Deploy: Render + Neon (free)
 
@@ -137,6 +139,49 @@ Free-plan notes:
 - The service sleeps after 15 minutes idle; the first request then takes about a minute.
 - Data lives in Neon, so it survives sleeps and redeploys.
 - If a build ever runs out of memory, set the service to deploy the prebuilt image `ghcr.io/deshiklab/dizivat:r5-nestjs` instead (the package must be public: GitHub → Packages → dizivat → Package settings → Change visibility).
+
+## Continuous deployment (GitHub Actions → Render)
+
+Every push to **`r5-nestjs`** (the branch the Render service tracks) goes live automatically once it is proven good:
+
+```
+push r5-nestjs ─▶ Backend workflow: full browser suite on NestJS + PostgreSQL ─▶ Docker image → GHCR + smoke test
+                                                                                        │
+                  CI workflow (lint, types, mock E2E, visual, a11y, perf) ── green? ────┤  deploy job waits for it
+                                                                                        ▼
+                     still the branch head? ─▶ Render deploy hook ─▶ wait until live /api/v1/health reports this commit
+                                                                                        ▼
+                     smoke tests on https://dizivat-r5.onrender.com ─▶ GitHub "production" environment shows the deploy
+```
+
+- **Gates:** nothing deploys unless the Backend run (all E2E suites against PostgreSQL, the backend checks and the
+  image smoke test) **and** the CI workflow for the same commit pass. A red run never reaches production.
+- **Newest wins:** the hook builds the branch head, so a run whose commit is no longer the head skips the deploy;
+  the newer commit's own run deploys after its tests. Deploys never overlap (`concurrency: render-production`).
+- **Proof it is live:** `/api/v1/health` returns `commit` (Render's `RENDER_GIT_COMMIT`; the GHCR image bakes
+  `GIT_COMMIT`). The job waits up to 40 minutes for the live service to report the tested commit, then runs
+  `scripts/deploy_render.py smoke`. That script checks health and the database, the login page, sign-in, `/me`, the
+  dashboard with the session (catches a `SESSION_SECRET` mismatch), the audit hash chain, the export register,
+  the compliance centre and sign-out.
+- **Render side:** `render.yaml` sets `autoDeployTrigger: "off"`, so untested commits are never auto-deployed.
+  A Blueprint-managed service picks that up on the next sync. For a service set up by hand, set
+  *Settings → Build & Deploy → Auto-Deploy* to **Off**.
+
+**One-time setup** (repository → Settings → Secrets and variables → Actions):
+
+| Secret | Required | Where |
+|---|---|---|
+| `RENDER_DEPLOY_HOOK_URL` | yes | Render → dizivat-r5 → Settings → **Deploy Hook** (`https://api.render.com/deploy/srv-…?key=…`) |
+| `RENDER_API_KEY` | optional | Render → Account settings → API Keys. With it the job follows the Render build and fails fast on `build_failed` |
+
+Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and nothing is deployed. The tests still run.
+
+**Release / redeploy:**
+- Release a tested branch: `git push origin r6-enlistment-rmg:r5-nestjs` (fast-forward).
+- Redeploy the current head with full tests: Actions → *Backend (NestJS + PostgreSQL)* → **Run workflow** on `r5-nestjs`.
+- Check the live site by hand: `python3 scripts/deploy_render.py smoke --base https://dizivat-r5.onrender.com`.
+- Roll back: push the earlier commit as a new commit (`git revert`), never force-push. You can also use
+  Render → Deploys → **Rollback** for an immediate switch, then revert in Git so the next deploy keeps the fix.
 
 ## Roadmap (compat → relational, one module per slice)
 

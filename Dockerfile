@@ -33,6 +33,10 @@ COPY --from=build --chown=node:node /app/api/node_modules ./api/node_modules
 COPY --from=build --chown=node:node /app/api/dist ./api/dist
 COPY --from=build --chown=node:node /app/api/drizzle ./api/drizzle
 COPY --chown=node:node docker/start.sh ./start.sh
+# Commit of this build, reported by /api/v1/health (the deploy pipeline checks it). CI passes GIT_COMMIT; on Render
+# the runtime variable RENDER_GIT_COMMIT takes precedence. Declared last so it never invalidates the cached layers.
+ARG GIT_COMMIT=
+ENV GIT_COMMIT=$GIT_COMMIT
 USER node
 EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

@@ -19,6 +19,10 @@ const NATIVE_CONTROLLERS = [AuthController, MeController, UsersController, Compa
 })
 class CoreModule {}
 
+/** Git commit of the running build: Render sets RENDER_GIT_COMMIT at runtime; the Docker image bakes GIT_COMMIT
+ *  (CI build-arg). The deploy pipeline waits until the live health reports the commit it just tested. */
+const COMMIT = (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || "").trim() || null
+
 @Controller("api/v1/health")
 class HealthController {
   constructor(@Inject(CompatService) private readonly compat: CompatService) {}
@@ -28,7 +32,7 @@ class HealthController {
   async health() {
     const t = Date.now()
     await db.execute(sql`select 1`)
-    return { ok: true, version: VERSION, seed: SEED_VERSION, db: { ok: true, ms: Date.now() - t }, modules: { native: NATIVE_CONTROLLERS.length, compatRoutes: this.compat.size }, uptime: Math.round(process.uptime()) }
+    return { ok: true, version: VERSION, commit: COMMIT, seed: SEED_VERSION, db: { ok: true, ms: Date.now() - t }, modules: { native: NATIVE_CONTROLLERS.length, compatRoutes: this.compat.size }, uptime: Math.round(process.uptime()) }
   }
 }
 

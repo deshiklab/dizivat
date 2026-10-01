@@ -8,6 +8,10 @@ services:
     plan: free
     region: ohio             # same AWS region as the Neon database (us-east-2) — every API request talks to it
     branch: r5-nestjs
+    # Deploys come from GitHub Actions (.github/workflows/backend.yml → "Deploy → Render") only after the full test
+    # suite, the Docker image smoke test and the CI workflow pass for the commit — so no Git auto-deploy here.
+    # Quoted: a bare off is YAML false, which the Blueprint schema rejects.
+    autoDeployTrigger: "off"
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/v1/health

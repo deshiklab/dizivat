@@ -2,6 +2,8 @@
 
 > **Branch `r5-nestjs`:** the same app on a real backend: **NestJS 11 + PostgreSQL** (Drizzle ORM), deployable to
 > **Render + Neon**. See [docs/BACKEND.md](docs/BACKEND.md).
+> **CI/CD:** every push to `r5-nestjs` that passes the full PostgreSQL suite, the Docker smoke test and CI is deployed to Render
+> automatically, verified by commit and smoke-tested live ([docs/BACKEND.md › Continuous deployment](docs/BACKEND.md#continuous-deployment-github-actions--render)).
 > [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/deshiklab/dizivat/tree/r5-nestjs)
 > The `main` branch keeps the in-browser mock demo on GitHub Pages: https://deshiklab.github.io/dizivat/en/
 >

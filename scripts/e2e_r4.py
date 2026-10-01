@@ -229,7 +229,9 @@ async def main():
             await expect(pg.get_by_role("rowheader", name=re.compile(r"Total"))).to_be_visible()
             await settle(pg); await pg.screenshot(path=f"{OUT}/99_subform.png"); ok("note drill-down opens the sub-form with source documents")
             await pg.keyboard.press("Escape")
+            await expect(pg.get_by_role("heading", name="Sub-form — note 4")).to_be_hidden()  # sheet fully closed
             await pg.locator("#subform-pick").click()
+            await expect(pg.get_by_role("option").first).to_be_visible()  # all_inner_texts() does not wait for the list
             opts = await pg.get_by_role("option").all_inner_texts()
             assert len(opts) == sum(1 for n in c["notes"] if n.get("drill")) and len(opts) > 5, opts; ok(f"sub-form selector lists {len(opts)} notes instead of an HTTP 500 (D-04)")
             await pg.keyboard.press("Escape")

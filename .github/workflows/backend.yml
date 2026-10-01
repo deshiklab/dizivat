@@ -1,7 +1,10 @@
 # R5 — NestJS + PostgreSQL backend (branch r5-nestjs).
 # The whole browser suite runs against Next.js → NestJS → PostgreSQL (no mock), plus the backend-only checks
 # (server-side sessions, revocation, lockout, persistence across API restarts). Then the Docker image is built
-# and published to GHCR (ghcr.io/deshiklab/dizivat:r5-nestjs) — the same image Render builds from the Dockerfile.
+# and published to GHCR (ghcr.io/deshiklab/dizivat:<branch>) — the same image Render builds from the Dockerfile.
+# CD: on the deploy branch (r5-nestjs, the branch the Render service tracks) a green run also waits for the CI
+# workflow of the same commit, triggers the Render deploy hook, waits until the live /api/v1/health reports this
+# commit and smoke-tests the live site (scripts/deploy_render.py). Needs the secret RENDER_DEPLOY_HOOK_URL.
 name: Backend (NestJS + PostgreSQL)
 
 on:
@@ -116,8 +119,9 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:r5-nestjs
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository }}:r5-${{ github.sha }}
+          build-args: GIT_COMMIT=${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -132,4 +136,57 @@ jobs:
           curl -sf -o /dev/null localhost:10000/en/login
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:10000/api/v1/auth/login -H 'content-type: application/json' -d '{"username":"arif","password":"demo1234"}')
           test "$code" = 200
+          curl -s localhost:10000/api/v1/health | grep -q '"commit":"${{ github.sha }}"'
           docker logs app | tail -20
+
+  deploy-gate:
+    name: Deploy gate
+    needs: image
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/r5-nestjs'
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.cfg.outputs.enabled }}
+    steps:
+      - id: cfg
+        env: { HOOK: "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" }
+        run: |
+          if [ -n "$HOOK" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          msg="Continuous deployment is not configured: add the repository secret RENDER_DEPLOY_HOOK_URL (Render → dizivat-r5 → Settings → Deploy Hook). Tests and the image passed; nothing was deployed."
+          echo "::warning::$msg"; echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy → Render (production)
+    needs: deploy-gate
+    if: needs.deploy-gate.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: { name: production, url: "https://dizivat-r5.onrender.com" }
+    concurrency: { group: render-production, cancel-in-progress: false }
+    permissions: { contents: read, actions: read }
+    env:
+      LIVE_URL: https://dizivat-r5.onrender.com
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}   # optional: follow the Render deploy and fail fast on build errors
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for the CI workflow (lint, types, mock E2E, visual, a11y, perf) on this commit
+        env: { GITHUB_TOKEN: "${{ github.token }}" }
+        run: python3 scripts/deploy_render.py wait-ci --sha "${{ github.sha }}" --workflow CI --timeout 3600
+      - name: Still the newest commit on the branch?
+        id: head
+        run: |
+          # The deploy hook builds the branch head; if a newer commit arrived, its own run deploys it after its tests.
+          head=$(git ls-remote origin "refs/heads/${{ github.ref_name }}" | cut -f1)
+          if [ "$head" = "${{ github.sha }}" ]; then echo "current=true" >> "$GITHUB_OUTPUT"
+          else echo "current=false" >> "$GITHUB_OUTPUT"; echo "::notice::${{ github.ref_name }} moved on to ${head:0:7}; its own run will deploy it."; fi
+      - name: Trigger the Render deploy
+        id: trigger
+        if: steps.head.outputs.current == 'true'
+        run: python3 scripts/deploy_render.py trigger
+      - name: Wait until live serves this commit, then smoke-test production
+        if: steps.head.outputs.current == 'true'
+        run: >
+          python3 scripts/deploy_render.py verify --base "$LIVE_URL" --sha "${{ github.sha }}"
+          --version "$(node -p "require('./package.json').version")"
+          --since "${{ steps.trigger.outputs.since }}" --deploy-id "${{ steps.trigger.outputs.deploy_id }}" --timeout 2400
