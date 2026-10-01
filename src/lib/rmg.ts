@@ -5,7 +5,7 @@
  * Bill of Export. Deemed export: a local supply to a 100 % export-oriented factory is zero-rated (note 2) only when
  * all five conditions of NBR's clarification of 9 October 2025 hold — otherwise VAT at 15 % applies.
  */
-import type { BondRow, ExportInfo, Party, ProceedsState, Sale, UdRecord, UdRow, UdState } from "./types"
+import type { SubconProcess, BondRow, ExportInfo, Party, ProceedsState, Sale, UdRecord, UdRow, UdState } from "./types"
 
 export const EXPORT_CURRENCIES = ["USD", "EUR", "GBP", "BDT"] as const
 
@@ -151,6 +151,9 @@ export function bondRows(own: { name: string; licenceNo: string; expiry: string 
 
 /** Export proceeds must be repatriated within 120 days of shipment (Bangladesh Bank, Guidelines for Foreign Exchange
  *  Transactions, ch. 8). Deemed exports (back-to-back LCs) are tracked against the same limit. */
+/** R6.2: what a contractor does on a contractual (Mushak 6.4) batch */
+export const SUBCON_PROCESSES = ["manufacture", "printing", "embroidery", "washing", "dyeing", "lamination", "other"] as const satisfies readonly SubconProcess[]
+
 export const PROCEEDS_DAYS = 120
 export const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 864e5).toISOString().slice(0, 10)
 

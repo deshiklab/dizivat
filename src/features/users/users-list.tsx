@@ -18,8 +18,8 @@ import { Pill } from "@/components/common/status-badge"
 import { useConfirm } from "@/components/common/confirm"
 import { RequirePerm, useMe } from "@/components/auth/me-provider"
 import { api, ApiError } from "@/lib/api/client"
-import { ROLES, type User } from "@/lib/auth/roles"
-import { fmtDateTime, fmtNum } from "@/lib/format"
+import { accessExpired, ROLES, type User } from "@/lib/auth/roles"
+import { fmtDate, fmtDateTime, fmtNum } from "@/lib/format"
 import { UserSheet } from "./user-sheet"
 import { TempPasswordDialog } from "./temp-password-dialog"
 import { RolesMatrix } from "./roles-matrix"
@@ -92,7 +92,7 @@ function UsersInner() {
         )
       },
     },
-    { id: "role", accessorKey: "role", meta: { label: t("col.role") }, header: t("col.role"), cell: ({ row }) => <Pill tone={roleTone[row.original.role]}>{tr(row.original.role)}</Pill> },
+    { id: "role", accessorKey: "role", meta: { label: t("col.role") }, header: t("col.role"), cell: ({ row }) => <><Pill tone={roleTone[row.original.role]}>{tr(row.original.role)}</Pill><AccessNote u={row.original} /></> },
     { id: "department", accessorKey: "department", meta: { label: t("col.department"), className: "min-w-28 max-w-36 whitespace-normal" /* wraps so the table fits 1440 px */ }, header: t("col.department"), cell: ({ row }) => row.original.department || "—" },
     { id: "email", accessorKey: "email", meta: { label: t("col.email") }, header: t("col.email"), cell: ({ row }) => <a href={`mailto:${row.original.email}`} onClick={(e) => e.stopPropagation()} className="block max-w-56 truncate hover:underline" title={row.original.email}>{row.original.email}</a> },
     { id: "mobile", accessorKey: "mobile", meta: { label: t("col.mobile") }, header: t("col.mobile"), cell: ({ row }) => <span className="tabular whitespace-nowrap">{row.original.mobile || "—"}</span> },
@@ -179,7 +179,7 @@ function UsersInner() {
             toolbarEnd={<Button variant="outline" size="sm" render={<a href={api.users.csvUrl(params)} download />}><Download /> <span className="hidden lg:inline">{tt("exportCsv")}</span></Button>}
             mobileCard={(u) => (
               <div className="grid gap-1">
-                <div className="flex items-center justify-between gap-2"><span className="truncate font-medium">{u.name}</span><Pill tone={roleTone[u.role]}>{tr(u.role)}</Pill></div>
+                <div className="flex items-center justify-between gap-2"><span className="truncate font-medium">{u.name}</span><span className="text-right"><Pill tone={roleTone[u.role]}>{tr(u.role)}</Pill><AccessNote u={u} /></span></div>
                 <p className="truncate text-sm text-muted-foreground">@{u.username} · {u.designation}</p>
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
                   <span>{u.lastSignInAt ? fmtDateTime(u.lastSignInAt, locale) : t("never")}</span>
@@ -198,4 +198,13 @@ function UsersInner() {
       <TempPasswordDialog value={temp} onClose={() => setTemp(null)} />
     </>
   )
+}
+
+/** R6.2: a VAT officer's access period — "until …" or "expired". */
+function AccessNote({ u }: { u: User }) {
+  const t = useTranslations("users")
+  const locale = useLocale()
+  if (u.role !== "vatOfficer") return null
+  const expired = accessExpired(u)
+  return <span className={expired ? "block text-xs font-medium text-destructive" : "block text-xs text-muted-foreground"}>{expired ? t("accessExpired") : t("accessUntil", { date: u.accessUntil ? fmtDate(u.accessUntil, locale) : "—" })}</span>
 }

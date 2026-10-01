@@ -69,7 +69,8 @@ export function LoginForm({ demo, demoPassword, company, next, reason }: {
         if (left === 0) setLockedFor(60)
         setPassword(""); passRef.current?.focus()
       } else if (err instanceof ApiError && err.status === 403) {
-        setError(t("disabled"))
+        // R6.2: a VAT officer whose access period has ended gets its own message
+        setError(t(err.message === "expired" ? "accessExpired" : "disabled"))
       } else {
         setError(err instanceof Error ? err.message : t("network"))
       }

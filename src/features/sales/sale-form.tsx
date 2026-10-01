@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from "next-intl"
 import { useFieldArray, useForm, useWatch, Controller } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import type { z } from "zod"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Globe2, Info, Loader2, Plus, Save, Send, Ship, Trash2, UserPlus, Wallet } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -109,7 +109,17 @@ export function SaleForm({ initial, category = "goods", preset }: { initial?: Sa
   const overLimit = limit > 0 ? Math.max(0, openDue + due - limit) : 0
   const setExport = (v: ExportInfo | undefined) => setValue("export", v as never, { shouldDirty: true })
   // R6 (RMG): live NBR zero-rating checklist for the export / deemed export
-  const compliance = exp ? exportCompliance({ export: exp as ExportInfo, issueDate: w.issueDate || TODAY }, customer) : undefined
+  // R6.2: deemed exports must fit inside the exporter's UD (when the UD is in the register) — checked live, debounced
+  const fitLines = (w.lines ?? []).filter((l) => l?.itemId && Number(l.qty) > 0).map((l) => ({ itemId: l!.itemId!, qty: Number(l!.qty) }))
+  const fitKey = JSON.stringify([w.customerId, w.issueDate, exp?.udNo, fitLines])
+  const [fitArgs, setFitArgs] = React.useState(fitKey)
+  React.useEffect(() => { const h = setTimeout(() => setFitArgs(fitKey), 400); return () => clearTimeout(h) }, [fitKey])
+  const fit = useQuery({
+    queryKey: ["uds", "fit", initial?.id ?? "new", fitArgs], enabled: !!exp?.deemed && !!exp?.udNo && !!w.customerId && fitLines.length > 0, placeholderData: keepPreviousData,
+    queryFn: () => { const [customerId, issueDate, udNo, lines] = JSON.parse(fitArgs); return api.vat.uds.fit({ saleId: initial?.id, customerId, issueDate: issueDate || TODAY, udNo, lines }) },
+  })
+  const fitData = exp?.deemed && exp?.udNo ? fit.data : null
+  const compliance = exp ? exportCompliance({ export: exp as ExportInfo, issueDate: w.issueDate || TODAY }, customer, fitData) : undefined
   const fcBdt = exp ? fcToBdt(exp as ExportInfo) : 0
   // Zero-rating follows the export flag: VAT 0 while exporting, the product's rate otherwise
   const lastZero = React.useRef(zero)
@@ -308,7 +318,7 @@ export function SaleForm({ initial, category = "goods", preset }: { initial?: Sa
                   <Field id="export.fcValue" label={trm("fcValue")} error={err("export.fcValue")}>{(a) => <Input type="number" inputMode="decimal" step="0.01" min={0} className="tabular" {...a} {...register("export.fcValue", optNum)} />}</Field>
                   <Field id="export.exchangeRate" label={trm("exchangeRate")} error={err("export.exchangeRate")} hint={fcBdt ? trm("fcBdt", { amount: fmtNum(fcBdt, locale, 2) }) : undefined}>{(a) => <Input type="number" inputMode="decimal" step="0.01" min={0} className="tabular" {...a} {...register("export.exchangeRate", optNum)} />}</Field>
                 </div>
-                {compliance && <ExportChecklist c={compliance} className="md:col-span-2" />}
+                {compliance && <ExportChecklist c={compliance} className="md:col-span-2" fit={fitData} names={Object.fromEntries(products.map((p) => [p.id, p.name]))} />}
                 {typeof err("export") === "string" && <p role="alert" className="text-sm font-medium text-destructive md:col-span-2">{tv.has(err("export")!) ? tv(err("export")!) : err("export")}</p>}
               </CardContent>
             </Card>

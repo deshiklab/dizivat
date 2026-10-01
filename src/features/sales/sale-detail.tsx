@@ -26,6 +26,7 @@ import type { Sale } from "@/lib/types"
 import { Mushak63 } from "./mushak-63"
 import { RecordHistory } from "@/features/audit/record-history"
 import { useDocActions } from "@/features/docs/use-doc-actions"
+import { ProceedsCard } from "@/features/vat/proceeds"
 import { DocActionButtons, DocBanner, HistoryCard } from "@/features/docs/doc-parts"
 import { PeriodLockNote } from "@/features/r4/period-lock"
 
@@ -146,6 +147,7 @@ export function SaleDetail({ id }: { id: string }) {
                 </CardContent>
               </Card>
               {s.export && <ExportCard s={s} />}
+              {s.export && <ProceedsCard s={s} />}
               <CreditNotesCard s={s} />
               <HistoryCard history={s.history} />
             </div>
@@ -166,7 +168,12 @@ function ExportCard({ s }: { s: Sale }) {
   const e = s.export!
   // R6 (RMG): the buyer's bond licence / exporter type feed the deemed-export conditions
   const buyer = useQuery({ queryKey: ["customers", "credit", s.customerId], queryFn: () => api.customers.get(s.customerId) })
-  const c = buyer.data || !e.deemed ? exportCompliance(s, buyer.data) : undefined
+  // R6.2: deemed exports are checked against the exporter's UD quantities when the UD is in the register
+  const fit = useQuery({
+    queryKey: ["uds", "fit", s.id, s.export?.udNo ?? ""], enabled: !!e.deemed && !!e.udNo && s.process !== "Cancelled",
+    queryFn: () => api.vat.uds.fit({ saleId: s.id, customerId: s.customerId, issueDate: s.issueDate, udNo: e.udNo, lines: s.lines.map((l) => ({ itemId: l.itemId, qty: l.qty })) }),
+  })
+  const c = buyer.data || !e.deemed ? exportCompliance(s, buyer.data, fit.data) : undefined
   const bdt = fcToBdt(e)
   const rows: [string, string][] = [
     [t("export.lcNo"), `${e.lcNo} · ${fmtDate(e.lcDate, locale)}`],
@@ -185,7 +192,7 @@ function ExportCard({ s }: { s: Sale }) {
       <CardHeader><CardTitle className="flex items-center gap-2"><Ship className="size-4" aria-hidden /> {e.deemed ? t("export.deemedTitle") : t("export.title")}</CardTitle></CardHeader>
       <CardContent className="grid gap-3">
         <dl className="grid gap-2 text-sm">{rows.map(([k, v]) => <div key={k} className="grid gap-0.5"><dt className="text-xs text-muted-foreground">{k}</dt><dd className="break-words">{v}</dd></div>)}</dl>
-        {c && s.process !== "Cancelled" && <ExportChecklist c={c} />}
+        {c && s.process !== "Cancelled" && <ExportChecklist c={c} fit={fit.data} names={Object.fromEntries(s.lines.map((l) => [l.itemId, l.name]))} />}
       </CardContent>
     </Card>
   )

@@ -52,7 +52,12 @@
     "mushak610": "Mushak 6.10",
     "vatSettings": "VAT settings",
     "mushak43": "Mushak 4.3",
-    "exportRegister": "Export register"
+    "exportRegister": "Export register",
+    "subcontract": "Subcontracting register",
+    "tradingBook": "Purchase-sales book (6.2.1)",
+    "udRegister": "UD / bond register",
+    "dataImport": "Data import",
+    "backups": "Backups"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -333,7 +338,16 @@
     "purchaseOnly": "Only for purchase-side VDS.",
     "refundExceeds": "The refund can't be more than the closing balance.",
     "refundNotRequested": "Turn on the refund request first.",
-    "zoneCode": "Enter the 4-digit zone code."
+    "zoneCode": "Enter the 4-digit zone code.",
+    "accessPast": "The date cannot be in the past.",
+    "accessTooLong": "Access can be granted for at most 90 days.",
+    "expiryBeforeDate": "Expiry must be on or after the UD date.",
+    "notExporter": "This customer is not marked as an exporter (set the exporter type on the customer).",
+    "udInUse": "Already used on invoices — cannot change.",
+    "belowUsed": "Cannot go below the quantity already supplied.",
+    "exceedsOutstanding": "More than the amount still outstanding.",
+    "duplicateInFile": "Appears twice in the file.",
+    "customerMode": "Customers must be registered (Local) or foreign."
   },
   "form": {
     "discardTitle": "Discard unsaved changes?",
@@ -766,7 +780,8 @@
     "admin": "Administrator",
     "approver": "Approver",
     "operator": "Operator",
-    "viewer": "Viewer"
+    "viewer": "Viewer",
+    "vatOfficer": "VAT officer"
   },
   "auth": {
     "noAccessTitle": "You don't have access to this page",
@@ -803,7 +818,8 @@
     "staticDemoTitle": "Static demo on GitHub Pages",
     "staticDemoBody": "There is no server behind this copy: everything you create or change is saved in this browser only, and nobody else sees it.",
     "resetDemo": "Reset demo data",
-    "resetDemoConfirm": "Delete every change made in this browser and restore the original demo data?"
+    "resetDemoConfirm": "Delete every change made in this browser and restore the original demo data?",
+    "accessExpired": "Your audit access period has ended. Ask the company's administrator to extend it."
   },
   "cancel": {
     "title": "Cancel {no}?",
@@ -1085,19 +1101,22 @@
       "mobile": "Mobile",
       "department": "Department / branch",
       "role": "Role",
-      "active": "Can sign in"
+      "active": "Can sign in",
+      "accessUntil": "Access until"
     },
     "hint": {
       "username": "Used to sign in; cannot be changed later.",
       "usernameFixed": "Usernames can't be changed (the audit trail refers to them).",
       "department": "For example: Factory — Kaliakair",
-      "active": "Turn off to block sign-in without deleting the account."
+      "active": "Turn off to block sign-in without deleting the account.",
+      "accessUntil": "Last day the officer can sign in — at most {days} days from today."
     },
     "roleHint": {
       "admin": "Everything, including users, company settings and the audit trail.",
       "approver": "Create, approve and cancel documents; edit master data; view the audit trail.",
       "operator": "Create and edit draft documents; cannot approve.",
-      "viewer": "Read-only access plus exports and the audit trail (e.g. VAT consultant)."
+      "viewer": "Read-only access plus exports and the audit trail (e.g. VAT consultant).",
+      "vatOfficer": "NBR / VAT official on audit: read-only access to books, returns and the audit trail for a limited period. Every page opened is logged."
     },
     "selfNote": "This is your account: your role and status can only be changed by another administrator.",
     "inviteNote": "After saving you'll see a temporary password once. Pass it to the user; they must change it at first sign-in.",
@@ -1125,7 +1144,9 @@
       "settings_manage": "Edit company profile",
       "audit_view": "View audit trail",
       "export": "Export CSV / print"
-    }
+    },
+    "accessUntil": "until {date}",
+    "accessExpired": "access expired"
   },
   "company": {
     "title": "Company profile",
@@ -1254,7 +1275,12 @@
       "signedIn": "Signed in",
       "signedOut": "Signed out",
       "signInFailed": "Failed sign-in",
-      "submitted": "Submitted"
+      "submitted": "Submitted",
+      "viewed": "Viewed",
+      "realised": "Proceeds realised",
+      "backedUp": "Backed up",
+      "downloaded": "Downloaded",
+      "imported": "Imported"
     },
     "entity": {
       "sale": "Sales invoice",
@@ -1284,7 +1310,11 @@
       "adjustment": "VAT adjustment",
       "vatReturn": "Mushak 9.1 return",
       "accountingConfig": "Accounting config",
-      "vatSettings": "VAT settings"
+      "vatSettings": "VAT settings",
+      "ud": "UD / UP",
+      "backup": "Backup",
+      "access": "Officer access",
+      "import": "Data import"
     },
     "facet": {
       "entity": "Record type",
@@ -1511,7 +1541,8 @@
     "deleted": "{no} deleted",
     "deleteBody": "The draft is removed. Its number is not reused and the audit trail keeps the record.",
     "viewDoc": "View {no}",
-    "approveDoc": "Approve {no}"
+    "approveDoc": "Approve {no}",
+    "tabMushak65": "Mushak 6.5"
   },
   "fg": {
     "title": "Finished goods",
@@ -1894,6 +1925,19 @@
       "value": "Value",
       "no": "No.",
       "name": "Name / address"
+    },
+    "b621": {
+      "title": "Purchase-sales book — Mushak 6.2.1",
+      "subtitle": "Goods bought and resold without processing: purchases and sales side by side (rule 40(1)(a) & 41(1)(a))",
+      "official": "Purchase-sales account book",
+      "rule": "For goods supplied in the same state as purchased — rule 40(1)(a) and 41(1)(a)",
+      "pickItem": "Select an item",
+      "emptyHint": "Choose a traded item to generate its purchase-sales book.",
+      "inTotal": "Purchased / in",
+      "outTotal": "Sold / out",
+      "purchase": "Purchase",
+      "sale": "Sale",
+      "remarks": "Remarks"
     }
   },
   "credit": {
@@ -3123,7 +3167,13 @@
       "tariff": "Tariff",
       "tariffHint": "HS codes and rates",
       "exports": "Export & deemed-export register",
-      "exportsHint": "LC, UD, EXP and NBR zero-rating conditions"
+      "exportsHint": "LC, UD, EXP and NBR zero-rating conditions",
+      "m621": "Purchase-sales book",
+      "m621Hint": "Traded goods: purchases and sales on one register",
+      "uds": "UD / bond register",
+      "udsHint": "Exporters' UD balances and bond licence expiry",
+      "m64": "Subcontracting register",
+      "m64Hint": "Inputs at contractors (Mushak 6.4) and overdue returns"
     },
     "vdsIssueBy": "Issue Mushak 6.6 by {date} (3 working days after filing)"
   },
@@ -3270,7 +3320,8 @@
       "exportLc": "Export LC / sales contract (no. and date)",
       "expForm": "EXP form number",
       "billOfExport": "Bill of Export (no. and date)",
-      "customsDestination": "Customs house and destination"
+      "customsDestination": "Customs house and destination",
+      "udBalance": "Quantity within the UD balance (UD valid and open)"
     },
     "deemedRule": "Deemed exports are zero-rated only when all five conditions of NBR's clarification of 9 October 2025 are met; otherwise VAT at 15% applies.",
     "directRule": "Keep these documents for every direct export — they support Mushak 9.1 note 1 at audit.",
@@ -3388,6 +3439,347 @@
       "head": "Latest {alg} seal",
       "checked": "checked {when}",
       "verify": "Verify now"
+    },
+    "udProblems": "UD problems",
+    "udp": {
+      "closed": "The UD is closed.",
+      "expired": "The UD has expired on the invoice date.",
+      "notListed": "{item} is not listed in this UD.",
+      "exceeds": "{item}: {qty} exceeds the UD balance of {remaining}."
     }
+  },
+  "subcon": {
+    "title": "Subcontracting register",
+    "subtitle": "Inputs sent to contractors under Mushak 6.4 — what is still out, for how long, and what came back",
+    "filters": "Filters",
+    "from": "From",
+    "to": "To",
+    "toBeforeFrom": "'To' must be on or after 'From'.",
+    "status": "Status",
+    "days": "Overdue after (days)",
+    "error": "Could not load the register",
+    "table": "Contractual batches",
+    "empty": "No contractual batches in this period.",
+    "process": "Process",
+    "processHint": "What the contractor does with the inputs.",
+    "wastage": "wastage {n}",
+    "note": "Pending quantities are inputs issued to the contractor that have not come back as finished goods or recorded wastage. Material value of pending inputs is proportional to the quantity still out.",
+    "totals": {
+      "atContractor": "At contractors",
+      "pendingValue": "Material still out",
+      "overdue": "Out more than {n} days",
+      "returned": "Returned"
+    },
+    "col": {
+      "batch": "Batch / dates",
+      "contractor": "Contractor",
+      "sent": "Sent",
+      "returned": "Returned",
+      "pending": "Pending",
+      "material": "Material value",
+      "days": "Days"
+    },
+    "st": {
+      "all": "All",
+      "atContractor": "At contractor",
+      "partial": "Partly returned",
+      "overdue": "Overdue",
+      "returned": "Returned",
+      "draft": "Draft",
+      "cancelled": "Cancelled"
+    },
+    "proc": {
+      "manufacture": "Full manufacture",
+      "printing": "Printing",
+      "embroidery": "Embroidery",
+      "washing": "Washing",
+      "dyeing": "Dyeing",
+      "lamination": "Lamination",
+      "other": "Other process"
+    }
+  },
+  "ud": {
+    "title": "UD / bond register",
+    "subtitle": "Exporters' Utilization Declarations: quantities allowed, supplied against deemed-export invoices and remaining; bond licence validity",
+    "new": "New UD",
+    "error": "Could not load the UD register",
+    "tabUds": "UD / UP",
+    "tabBonds": "Bond licences",
+    "bondAttention": "needs attention",
+    "filters": "Filters",
+    "exporter": "Exporter",
+    "allExporters": "All exporters",
+    "status": "Status",
+    "table": "UD / UP register",
+    "empty": "No UDs yet — add the exporter's UD to check deemed-export quantities against it.",
+    "noMatch": "No UDs match the filters.",
+    "usageOf": "Usage of {item}",
+    "invoices": "{count, plural, =0 {no invoices} one {# invoice} other {# invoices}}",
+    "editOne": "Edit {no}",
+    "daysLeft": "{n} days left",
+    "expiredAgo": "expired {n} days ago",
+    "remaining": "Remaining: {qty} {uom}",
+    "note": "A deemed-export invoice that quotes a UD in this register must fit inside its remaining quantity, on or before its expiry, for zero-rating. Drafts count against the balance until cancelled.",
+    "totals": {
+      "active": "Active UDs",
+      "warn": "{pct} % used or more",
+      "over": "Over-supplied",
+      "expired": "Expired"
+    },
+    "state": {
+      "all": "All",
+      "ok": "Active",
+      "warn": "Nearly used",
+      "exhausted": "Fully used",
+      "over": "Over-supplied",
+      "expired": "Expired",
+      "closed": "Closed"
+    },
+    "col": {
+      "no": "UD / UP no.",
+      "exporter": "Exporter",
+      "validity": "Expiry",
+      "lc": "Export LC · buyer",
+      "usage": "Supplied / allowed",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "bondTable": "Bond licences",
+    "bond": {
+      "holder": "Licence holder",
+      "licence": "Licence no.",
+      "expiry": "Expiry",
+      "status": "Status",
+      "own": "Our company",
+      "customer": "Exporter customer",
+      "empty": "No bond licences on file.",
+      "note": "Bond licences are renewed every two years. Deemed exports to an exporter whose licence has expired are not zero-rated; the list warns 90 days ahead.",
+      "state": {
+        "valid": "Valid",
+        "expiring": "Expiring soon",
+        "expired": "Expired",
+        "missing": "Not on file"
+      }
+    },
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleted": "UD deleted",
+    "inUse": "This UD is quoted on invoices — close it instead of deleting.",
+    "deleteTitle": "Delete {no}?",
+    "deleteBody": "The UD is removed from the register. This is recorded in the audit trail.",
+    "newTitle": "New UD / UP",
+    "editTitle": "Amend {no}",
+    "formSub": "As issued by BGMEA / BKMEA (UD) or customs (UP) for one export order.",
+    "created": "UD {no} added",
+    "saved": "UD {no} saved",
+    "pickExporter": "Select an exporter",
+    "searchExporter": "Search exporters",
+    "noExporters": "No exporter customers",
+    "pickItem": "Select an item",
+    "searchItem": "Search items",
+    "lineItem": "Item, line {n}",
+    "lineQty": "Quantity, line {n}",
+    "removeLine": "Remove line {n}",
+    "addLine": "Add item",
+    "usedHint": "{qty} already supplied",
+    "statusActive": "Open",
+    "kind": {
+      "UD": "UD — Utilization Declaration",
+      "UP": "UP — Utilization Permission"
+    },
+    "field": {
+      "kind": "Type",
+      "no": "UD / UP number",
+      "customer": "Exporter",
+      "date": "Date",
+      "expiry": "Expiry",
+      "masterLc": "Export LC / sales contract",
+      "buyer": "Foreign buyer",
+      "lines": "Items and quantities allowed",
+      "status": "Status",
+      "note": "Note"
+    },
+    "hint": {
+      "no": "e.g. BKMEA/UD/2026/08812",
+      "noExporters": "Mark a customer as a direct or deemed exporter first."
+    },
+    "err": {
+      "required": "Required.",
+      "positive": "Must be greater than zero.",
+      "duplicate": "Item listed twice.",
+      "unknown": "Unknown item.",
+      "atLeastOneLine": "Add at least one item.",
+      "belowUsed": "Below the quantity already supplied."
+    }
+  },
+  "proceeds": {
+    "title": "Record export proceeds",
+    "sub": "Invoice {no} — outstanding {amount}",
+    "date": "Realisation date",
+    "prcNo": "PRC number",
+    "bank": "Bank and branch",
+    "fcAmount": "Amount realised ({cur})",
+    "rate": "Exchange rate (Tk)",
+    "bdt": "Value in Taka",
+    "note": "Note",
+    "record": "Record proceeds",
+    "recordShort": "Record PRC",
+    "recordFor": "Record proceeds for {no}",
+    "saved": "Proceeds recorded on {no}",
+    "notRealisable": "Proceeds can be recorded only on approved export invoices with a foreign-currency value.",
+    "removed": "Realisation removed",
+    "cardTitle": "Export proceeds",
+    "realised": "Realised",
+    "outstanding": "Outstanding",
+    "due": "Due ({days} days after shipment)",
+    "removeOne": "Remove PRC {no}",
+    "removeTitle": "Remove PRC {no}?",
+    "removeBody": "Use this only for an entry made in error. The removal is recorded in the audit trail.",
+    "remove": "Remove",
+    "filter": "Proceeds",
+    "col": "Proceeds",
+    "short": "Outstanding {amount}",
+    "dueOn": "due {date}",
+    "totalsOpen": "Proceeds outstanding",
+    "totalsOverdue": "Proceeds overdue",
+    "overdueHint": "Past 120 days from shipment — follow up with the bank; unrealised exports can lose zero-rating and incentives.",
+    "state": {
+      "realised": "Realised",
+      "partial": "Part-realised",
+      "outstanding": "Awaited",
+      "overdue": "Overdue",
+      "na": "—"
+    },
+    "f": {
+      "all": "All",
+      "open": "Outstanding",
+      "overdue": "Overdue",
+      "partial": "Part-realised",
+      "realised": "Realised"
+    }
+  },
+  "imp": {
+    "title": "Data import",
+    "subtitle": "Add items, customers or vendors in bulk from a CSV or Excel sheet — validated first, then created in one go",
+    "step1": "1. What are you importing?",
+    "entity": "Record type",
+    "e": {
+      "items": "Items",
+      "customers": "Customers",
+      "vendors": "Vendors"
+    },
+    "eHint": {
+      "items": "Products, inputs and packing materials with HS code and VAT rate",
+      "customers": "Buyers, including exporters and their bond licences",
+      "vendors": "Suppliers of goods and services"
+    },
+    "choose": "Choose file",
+    "template": "Download template",
+    "formats": "CSV or Excel (.xlsx), first sheet, header in row 1, up to 2,000 rows.",
+    "columns": "Columns",
+    "colsHint": {
+      "items": "Required: name, sku, hsCode (8 digits), group (Raw Material / Consumable / Packing Materials / Finished Goods), unit (from the Units master). VAT defaults to 15 %.",
+      "customers": "Required: name, address; Local customers need a BIN (000000000-0000). mode = Local or Foreign; exporterType = direct or deemed.",
+      "vendors": "Required: name, address; Local vendors need a BIN. mode = Local, Foreign or Non-registered (NID)."
+    },
+    "noRows": "The sheet has no data rows.",
+    "unsupported": "Only .csv and .xlsx files are supported.",
+    "notXlsx": "This is not a readable Excel (.xlsx) file.",
+    "readFailed": "The file could not be read.",
+    "step2": "2. Check and import",
+    "loaded": "{source}: {count, plural, one {# row} other {# rows}}",
+    "missingCols": "Required columns missing: {cols}",
+    "unknownCols": "Ignored columns (not recognised): {cols}",
+    "preview": "Preview of the first rows",
+    "previewMore": "… and {n} more rows",
+    "validate": "Validate",
+    "import": "Import {n}",
+    "clear": "Clear",
+    "validateFirst": "Validate first — nothing is saved until every row passes.",
+    "resultTitle": "Validation result",
+    "doneTitle": "Import complete",
+    "r": {
+      "total": "Rows",
+      "valid": "Valid",
+      "duplicates": "Already on file (skipped)",
+      "issues": "Problems",
+      "created": "Created"
+    },
+    "doneBody": "{n} records were created and logged in the audit trail.",
+    "openList": "Open the list",
+    "readyBody": "All rows passed — {n} will be created.",
+    "issuesBody": "Fix these rows in the file and validate again. Nothing has been saved.",
+    "issuesTable": "Problems by row",
+    "col": {
+      "row": "Row",
+      "field": "Column",
+      "problem": "Problem"
+    },
+    "created": "{count, plural, one {# record} other {# records}} imported",
+    "catalogTitle": "RMG starter catalogue",
+    "catalogBody": "{n} common garment inputs, labels, trims, packaging and garments with HS codes — load them instead of a file.",
+    "catalogCats": "Catalogue sections",
+    "cat": {
+      "packaging": "Packaging",
+      "labels": "Labels & tags",
+      "trims": "Trims & accessories",
+      "fabric": "Fabric & yarn",
+      "garment": "Finished garments"
+    },
+    "useCatalog": "Load selected",
+    "catalogSource": "RMG catalogue ({n} items)",
+    "catalogNote": "Prices start at zero — set them after import. Check each HS code against the current tariff.",
+    "rulesTitle": "How it works",
+    "rule1": "The file is read in your browser; only the rows are sent.",
+    "rule2": "Every row is validated with the same rules as the entry forms.",
+    "rule3": "Records that already exist (same SKU, BIN or name) are skipped, not duplicated.",
+    "rule4": "All or nothing: if any row has a problem, nothing is created.",
+    "err": {
+      "hs8": "HS code must have 8 digits.",
+      "unknownUnit": "Unit not in the Units master.",
+      "duplicateInFile": "Appears twice in the file."
+    }
+  },
+  "backup": {
+    "title": "Backups",
+    "subtitle": "Automatic database backups twice a day, as NBR requires for enlisted VAT software — verify or download any of them",
+    "takeNow": "Back up now",
+    "taken": "Backup taken ({size})",
+    "verified": "Checksum matches — backup intact",
+    "verifyFailed": "Checksum mismatch — the backup is damaged",
+    "error": "Could not load backups",
+    "today": "Backups today",
+    "required": "required",
+    "schedule": "Schedule",
+    "next": "Next: {at}",
+    "last": "Last backup",
+    "none": "None yet",
+    "retention": "Retention",
+    "keep": "Last {n} kept",
+    "storage": {
+      "postgres": "Stored in the database (backups table)",
+      "memory": "Demo: kept in memory"
+    },
+    "kind": {
+      "scheduled": "Scheduled",
+      "manual": "Manual"
+    },
+    "table": "Backups",
+    "empty": "No backups yet.",
+    "col": {
+      "at": "Taken",
+      "kind": "Type",
+      "size": "Size",
+      "records": "Records",
+      "sha": "SHA-256",
+      "actions": "Actions"
+    },
+    "intact": "intact",
+    "corrupt": "damaged",
+    "verify": "Verify",
+    "download": "Download",
+    "verifyOne": "Verify backup of {at}",
+    "downloadOne": "Download backup of {at}",
+    "note": "Each backup is a compressed JSON snapshot of every table, including the audit trail. Downloads are recorded in the audit trail. Keep an off-site copy of at least one backup a week."
   }
 }

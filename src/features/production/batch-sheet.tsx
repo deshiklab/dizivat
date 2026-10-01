@@ -30,6 +30,7 @@ import { Mushak64 } from "./mushak-64"
 /** Read view of a production batch: output lines, input consumption, contractual receipt, Mushak 6.4 print and history. */
 export function BatchSheet({ id, onOpenChange, onEdit, initialTab }: { id: string | null; onOpenChange: (o: boolean) => void; onEdit: (id: string) => void; initialTab?: string }) {
   const t = useTranslations("batch")
+  const tsc = useTranslations("subcon")
   const td = useTranslations("docs")
   const tc = useTranslations("common")
   const locale = useLocale()
@@ -71,6 +72,7 @@ export function BatchSheet({ id, onOpenChange, onEdit, initialTab }: { id: strin
                   ...(contractual ? [
                     [t("field.vendor"), <span key="v">{d.vendorName}<span className="block text-xs text-muted-foreground tabular">{d.vendorBin}</span></span>],
                     [t("field.address"), d.address || d.vendorAddress || "—"],
+                    [tsc("process"), tsc(`proc.${d.jobProcess ?? "manufacture"}`)],
                   ] as [string, React.ReactNode][] : []),
                   [t("field.branch"), d.branchName],
                   [t("field.issuedBy"), `${d.issuedBy} · ${d.designation}`],

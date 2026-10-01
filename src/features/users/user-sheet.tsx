@@ -18,7 +18,7 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetT
 import { Field } from "@/components/common/field"
 import { useMe } from "@/components/auth/me-provider"
 import { api, ApiError } from "@/lib/api/client"
-import { ROLES, type User } from "@/lib/auth/roles"
+import { dhakaToday, OFFICER_MAX_DAYS, ROLES, type User } from "@/lib/auth/roles"
 import { userInput } from "@/lib/schemas"
 
 type In = z.input<typeof userInput>
@@ -36,12 +36,15 @@ export function UserSheet({ open, onOpenChange, user, onInvited }: {
   const qc = useQueryClient()
   const self = !!user && user.id === me.user.id
   const form = useForm<In, unknown, Out>({ resolver: zodResolver(userInput), defaultValues: blank, mode: "onTouched" })
-  const { register, control, handleSubmit, reset, setError, formState: { errors } } = form
+  const { register, control, handleSubmit, reset, setError, watch, formState: { errors } } = form
+  const role = watch("role")
+  const today = dhakaToday()
+  const maxAccess = new Date(Date.parse(today) + OFFICER_MAX_DAYS * 864e5).toISOString().slice(0, 10)
   React.useEffect(() => {
     if (!open) return
     reset(user ? {
       username: user.username, name: user.name, designation: user.designation, email: user.email,
-      mobile: user.mobile ?? "", department: user.department ?? "", role: user.role, active: user.active,
+      mobile: user.mobile ?? "", department: user.department ?? "", role: user.role, active: user.active, accessUntil: user.accessUntil ?? "",
     } : blank)
   }, [open, user, reset])
 
@@ -112,6 +115,11 @@ export function UserSheet({ open, onOpenChange, user, onInvited }: {
               )} />
               {errors.role?.message && <p id="role-err" role="alert" className="text-xs font-medium text-destructive">{t(`error.${errors.role.message}`)}</p>}
             </fieldset>
+            {role === "vatOfficer" && (
+              <Field id="accessUntil" label={t("field.accessUntil")} required error={errors.accessUntil?.message} hint={t("hint.accessUntil", { days: OFFICER_MAX_DAYS })} className="sm:col-span-2">
+                {(a) => <Input type="date" min={today} max={maxAccess} className="tabular sm:max-w-56" {...a} {...register("accessUntil")} />}
+              </Field>
+            )}
 
             <div className="flex items-center justify-between gap-3 rounded-md border p-3 sm:col-span-2">
               <div className="grid gap-0.5">

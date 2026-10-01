@@ -671,6 +671,7 @@ function buildBatch(body: unknown, self?: Batch) {
     fields: {
       mode: d.mode, issueDate: d.issueDate, receiveDate: d.receiveDate || (receiving ? d.issueDate : undefined),
       vendorId: vendor?.id, vendorName: vendor?.name, vendorBin: vendor?.bin, vendorAddress: vendor?.address,
+      jobProcess: d.mode === "contractual" ? d.jobProcess ?? "manufacture" : undefined,
       address: d.mode === "contractual" ? d.address || (vendor ? `${vendor.name}, ${vendor.address}` : undefined) : undefined,
       remark: d.remark || undefined, issuedBy: d.issuedBy, designation: d.designation, lines, consumption,
       totalIssue: round2(lines.reduce((a, l) => a + l.issueQty, 0)), totalReceive: round2(lines.reduce((a, l) => a + l.receiveQty, 0)), totalDamage: round2(lines.reduce((a, l) => a + l.damageQty, 0)),

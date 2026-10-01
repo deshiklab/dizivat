@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
-import { ArrowRight, CheckCheck, FileText, Pencil, Trash2, XCircle } from "lucide-react"
+import { ArrowRight, CheckCheck, FileText, Pencil, Printer, Trash2, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
@@ -17,6 +17,8 @@ import { RecordHistory } from "@/features/audit/record-history"
 import { fmtDate } from "@/lib/format"
 import type { StockDoc, StockDocKind } from "@/lib/types"
 import { stockClient, useStockActions } from "./use-stock-actions"
+import { Mushak65 } from "./mushak-65"
+import { PdfButton } from "@/components/common/pdf-button"
 
 export const REASON_TONE = { damaged: "danger", expired: "warning", wastage: "neutral", lost: "danger" } as const
 
@@ -50,6 +52,7 @@ export function StockDocSheet({ kind, id, onOpenChange, onEdit }: {
             <Tabs value={tab} onValueChange={(v) => setTab(v as string)} className="flex min-h-0 flex-1 flex-col gap-0">
               <TabsList className="mx-4 mt-3">
                 <TabsTrigger value="details">{t("tabDetails")}</TabsTrigger>
+                {d.kind === "transfer" && <TabsTrigger value="mushak">{t("tabMushak65")}</TabsTrigger>}
                 <TabsTrigger value="history">{t("tabHistory")}</TabsTrigger>
               </TabsList>
               <TabsContent value="details" className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto p-4">
@@ -91,6 +94,7 @@ export function StockDocSheet({ kind, id, onOpenChange, onEdit }: {
                 )}
                 <HistoryCard history={d.history} />
               </TabsContent>
+              {d.kind === "transfer" && <TabsContent value="mushak" className="min-h-0 flex-1 overflow-y-auto bg-muted/60 p-2 sm:p-4 print:bg-transparent print:p-0"><Mushak65 doc={d} /></TabsContent>}
               <TabsContent value="history" className="min-h-0 flex-1 overflow-y-auto p-4"><RecordHistory entityId={d.id} /></TabsContent>
             </Tabs>
           )}
@@ -99,6 +103,7 @@ export function StockDocSheet({ kind, id, onOpenChange, onEdit }: {
           {d && draft && can("doc.delete") && <Button variant="outline" disabled={actions.busy} onClick={() => actions.askDelete(d)}><Trash2 /> {td("delete")}</Button>}
           {d && d.process !== "Cancelled" && can("doc.cancel") && <Button variant="destructive" disabled={actions.busy} onClick={() => actions.askCancel(d)}><XCircle /> {td("cancel")}</Button>}
           {d && draft && can("doc.approve") && <Button disabled={actions.busy} onClick={() => actions.approve(d)}><CheckCheck /> {td("approve")}</Button>}
+          {d && d.kind === "transfer" && tab === "mushak" && <><PdfButton filename={`Mushak-6.5_${d.no}`} /><Button variant="outline" onClick={() => window.print()}><Printer /> {tc("print")}</Button></>}
           <Button variant="outline" onClick={() => onOpenChange(false)}>{tc("close")}</Button>
         </SheetFooter>
         {actions.dialog}

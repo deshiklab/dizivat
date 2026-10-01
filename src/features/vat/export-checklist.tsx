@@ -2,11 +2,11 @@
 
 import { useTranslations } from "next-intl"
 import { CheckCircle2, CircleAlert, XCircle } from "lucide-react"
-import type { ExportCompliance } from "@/lib/rmg"
+import type { UdFit, ExportCompliance } from "@/lib/rmg"
 import { cn } from "@/lib/utils"
 
 /** R6 (RMG): the NBR zero-rating conditions of an export / deemed-export invoice, ticked or missing. */
-export function ExportChecklist({ c, className }: { c: ExportCompliance; className?: string }) {
+export function ExportChecklist({ c, className, fit, names }: { c: ExportCompliance; className?: string; fit?: UdFit | null; names?: Record<string, string> }) {
   const t = useTranslations("rmg")
   const n = c.missing.length
   return (
@@ -23,6 +23,14 @@ export function ExportChecklist({ c, className }: { c: ExportCompliance; classNa
           </li>
         ))}
       </ul>
+      {fit && !fit.ok && (
+        <ul className="grid gap-0.5 rounded bg-background/60 p-2 text-xs" aria-label={t("udProblems")}>
+          {fit.problems.includes("closed") && <li>{t("udp.closed")}</li>}
+          {fit.problems.includes("expired") && <li>{t("udp.expired")}</li>}
+          {fit.lines.filter((l) => !l.listed).map((l) => <li key={`n-${l.itemId}`}>{t("udp.notListed", { item: names?.[l.itemId] ?? l.itemId })}</li>)}
+          {fit.lines.filter((l) => l.listed && l.qty > l.remaining + 1e-9).map((l) => <li key={`x-${l.itemId}`}>{t("udp.exceeds", { item: names?.[l.itemId] ?? l.itemId, qty: l.qty, remaining: Math.max(0, l.remaining) })}</li>)}
+        </ul>
+      )}
       <p className="text-xs text-muted-foreground">{c.kind === "deemed" ? t("deemedRule") : t("directRule")}</p>
     </section>
   )

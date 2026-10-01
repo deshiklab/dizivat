@@ -23,7 +23,8 @@ import { TODAY } from "@/lib/company"
 import { fmtNum } from "@/lib/format"
 import { batchInput } from "@/lib/schemas"
 import { round2, round4 } from "@/lib/vat"
-import type { Batch, BatchMode, BomRow } from "@/lib/types"
+import type { Batch, BatchMode, BomRow, SubconProcess } from "@/lib/types"
+import { SUBCON_PROCESSES } from "@/lib/rmg"
 import { useR3Refresh } from "@/features/r3/use-r3-actions"
 import { MiniTable } from "./parts"
 import type { BatchVariant } from "./batch-list"
@@ -31,6 +32,7 @@ import type { BatchVariant } from "./batch-list"
 interface LineValues { itemId: string; workOrderId: string; issueQty: number; receiveQty: number; damageQty: number; unitCost?: number }
 interface FormValues {
   mode: BatchMode; issueDate: string; receiveDate: string; vendorId: string; address: string; remark: string
+  jobProcess: SubconProcess
   issuedBy: string; designation: string; process: "Created" | "Approved"; lines: LineValues[]
   consumption: { itemId: string; qty: number }[]
 }
@@ -45,6 +47,7 @@ export function BatchForm({ open, onOpenChange, variant, doc, workOrderId, onSav
   open: boolean; onOpenChange: (o: boolean) => void; variant: BatchVariant; doc?: Batch | null; workOrderId?: string | null; onSaved?: (b: Batch) => void
 }) {
   const t = useTranslations("batch")
+  const tr = useTranslations("subcon")
   const tc = useTranslations("common")
   const locale = useLocale()
   const can = useCan()
@@ -68,7 +71,7 @@ export function BatchForm({ open, onOpenChange, variant, doc, workOrderId, onSav
   const actual = cfg.data?.consumption === "actual"
 
   const blank = React.useCallback((): FormValues => ({
-    mode: opening ? "opening" : "inHouse", issueDate: TODAY, receiveDate: opening ? TODAY : "", vendorId: "", address: "", remark: "",
+    mode: opening ? "opening" : "inHouse", issueDate: TODAY, receiveDate: opening ? TODAY : "", vendorId: "", address: "", remark: "", jobProcess: "manufacture",
     issuedBy: me.user.name, designation: me.user.designation, process: "Created",
     lines: [{ itemId: "", workOrderId: "", issueQty: 0, receiveQty: 0, damageQty: 0 }], consumption: [],
   }), [opening, me.user.name, me.user.designation])
@@ -80,7 +83,7 @@ export function BatchForm({ open, onOpenChange, variant, doc, workOrderId, onSav
     if (!open) return
     if (doc) {
       reset({
-        mode: doc.mode, issueDate: doc.issueDate, receiveDate: doc.receiveDate ?? "", vendorId: doc.vendorId ?? "", address: doc.address ?? "", remark: doc.remark ?? "",
+        mode: doc.mode, issueDate: doc.issueDate, receiveDate: doc.receiveDate ?? "", vendorId: doc.vendorId ?? "", address: doc.address ?? "", remark: doc.remark ?? "", jobProcess: doc.jobProcess ?? "manufacture",
         issuedBy: doc.issuedBy, designation: doc.designation, process: "Created",
         lines: doc.lines.map((l) => ({ itemId: l.itemId, workOrderId: l.workOrderId ?? "", issueQty: l.issueQty, receiveQty: l.receiveQty, damageQty: l.damageQty, unitCost: doc.mode === "opening" ? l.unitCost : undefined })),
         consumption: doc.consumption.map((c) => ({ itemId: c.itemId, qty: c.qty })),
@@ -178,6 +181,14 @@ export function BatchForm({ open, onOpenChange, variant, doc, workOrderId, onSav
                   )} />}
                 </Field>
                 <Field id="address" label={t("field.address")} error={errors.address?.message} hint={t("hint.address")}>{(a) => <Input {...a} {...register("address")} />}</Field>
+                <Field id="jobProcess" label={tr("process")} hint={tr("processHint")}>
+                  {(a) => <Controller control={control} name="jobProcess" render={({ field }) => (
+                    <Select value={field.value} onValueChange={(v) => field.onChange(v as SubconProcess)} items={SUBCON_PROCESSES.map((p) => ({ value: p, label: tr(`proc.${p}`) }))}>
+                      <SelectTrigger id={a.id} aria-describedby={a["aria-describedby"]} className="w-full"><SelectValue /></SelectTrigger>
+                      <SelectContent>{SUBCON_PROCESSES.map((p) => <SelectItem key={p} value={p}>{tr(`proc.${p}`)}</SelectItem>)}</SelectContent>
+                    </Select>
+                  )} />}
+                </Field>
               </>
             )}
             <Field id="issueDate" label={t("field.issueDate")} required error={errors.issueDate?.message}>{(a) => <Input type="date" max={TODAY} {...a} {...register("issueDate")} />}</Field>
