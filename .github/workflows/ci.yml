@@ -110,6 +110,9 @@ jobs:
       - name: E2E — R6 NBR enlistment readiness + RMG (rules engine, business profile, export register, audit chain)
         working-directory: scripts
         run: python e2e_r6.py
+      - name: E2E — R6.2 (UD register, export proceeds, subcontracting, Mushak 6.2.1, backups, bulk import, VAT officer)
+        working-directory: scripts
+        run: python e2e_r62.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

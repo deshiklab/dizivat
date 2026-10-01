@@ -87,6 +87,7 @@ jobs:
       - { name: E2E — Mushak 4.3 + credit line, working-directory: scripts, run: python e2e_m43.py }
       - { name: E2E — PDF download, working-directory: scripts, run: python e2e_pdf.py }
       - { name: E2E — R6 enlistment + RMG, working-directory: scripts, run: python e2e_r6.py }
+      - { name: E2E — R6.2 UD register + proceeds + subcontracting + backups + import + VAT officer, working-directory: scripts, run: python e2e_r62.py }
       - { name: Accessibility (axe), working-directory: scripts, run: python a11y.py }
       - name: Backend — sessions, revocation, lockout, persistence across restarts, append-only hash-chained audit
         working-directory: scripts
