@@ -1,7 +1,7 @@
 import { TODAY } from "@/lib/company"
 import { csvResponse, delay, toCSV } from "@/lib/mock/query"
 import { registerFrom } from "@/lib/rmg"
-import { json, withAuth } from "../../_lib"
+import { json, problem, withAuth } from "../../_lib"
 import { subconRegister, SUBCON_OVERDUE_DAYS } from "../../_r62"
 
 /**
@@ -11,6 +11,8 @@ import { subconRegister, SUBCON_OVERDUE_DAYS } from "../../_r62"
 export const GET = withAuth(null, async (req) => {
   const sp = new URL(req.url).searchParams
   const from = sp.get("from") || registerFrom(TODAY), to = sp.get("to") || TODAY
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return problem(422, "Validation failed", { [/^\d{4}-\d{2}-\d{2}$/.test(from) ? "to" : "from"]: ["date"] })
+  if (to < from) return problem(422, "Validation failed", { to: ["toBeforeFrom"] })
   const days = Math.min(365, Math.max(1, Number(sp.get("days")) || SUBCON_OVERDUE_DAYS))
   const reg = subconRegister(from, to, TODAY, days)
   const status = sp.get("status")

@@ -30,8 +30,9 @@ export function seedUds(customers: Party[], items: Item[]): UdRecord[] {
 }
 
 /**
- * Export proceeds: older direct exports are realised in full (PRC 45–90 days after shipment); the second-latest is
- * part-paid and the latest is unrealised — both past the 120-day limit, so the register flags them.
+ * Export proceeds: older direct exports are realised in full (PRC 45–90 days after shipment). Of the latest four:
+ * the 4th-latest is part-paid and the 3rd-latest unrealised — both past the 120-day limit, so the register flags them
+ * overdue; the 2nd-latest is part-paid and the latest unrealised, both still inside the window.
  */
 export function seedRealisations(sales: Sale[]) {
   const banks = ["Eastern Bank PLC, Gulshan", "Dutch-Bangla Bank PLC, Motijheel", "The City Bank PLC, Principal Office"]
@@ -39,9 +40,10 @@ export function seedRealisations(sales: Sale[]) {
   direct.forEach((s, i) => {
     const e = s.export!
     const ship = e.billDate || s.issueDate
-    const last = i === direct.length - 1, second = i === direct.length - 2
-    if (last) return
-    const part = second ? 0.7 : 1
+    const fromEnd = direct.length - 1 - i
+    if (fromEnd === 0 || fromEnd === 2) return // unrealised: latest (in window) and 3rd-latest (overdue)
+    const second = fromEnd === 1 || fromEnd === 3
+    const part = fromEnd === 1 ? 0.7 : fromEnd === 3 ? 0.6 : 1
     const date = addDays(ship, 45 + ((i * 17) % 46))
     const fc = Math.round(e.fcValue! * part * 100) / 100
     const rate = Math.round((e.exchangeRate! + ((i % 3) - 1) * 0.35) * 100) / 100

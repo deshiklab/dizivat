@@ -302,7 +302,7 @@ function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onO
             <SheetDescription>{t("formSub")}</SheetDescription>
           </SheetHeader>
           <div className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto p-4 sm:grid-cols-2">
-            <Field id="ud-kind" label={t("field.kind")} required>
+            <Field id="udf-kind" label={t("field.kind")} required>
               {(a) => <Controller control={control} name="kind" render={({ field }) => (
                 <Select value={field.value} onValueChange={(v) => field.onChange(v as In["kind"])} items={[{ value: "UD", label: t("kind.UD") }, { value: "UP", label: t("kind.UP") }]}>
                   <SelectTrigger id={a.id} className="w-full"><SelectValue /></SelectTrigger>
@@ -310,20 +310,20 @@ function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onO
                 </Select>
               )} />}
             </Field>
-            <Field id="ud-no" label={t("field.no")} required error={errors.no?.message} hint={t("hint.no")}>
+            <Field id="udf-no" label={t("field.no")} required error={errors.no?.message} hint={t("hint.no")}>
               {(a) => <Input autoComplete="off" className="uppercase tabular" {...a} {...register("no")} />}
             </Field>
-            <Field id="ud-customer" label={t("field.customer")} required error={errors.customerId?.message} hint={exporters.length ? undefined : t("hint.noExporters")} className="sm:col-span-2">
+            <Field id="udf-customer" label={t("field.customer")} required error={errors.customerId?.message} hint={exporters.length ? undefined : t("hint.noExporters")} className="sm:col-span-2">
               {(a) => <Controller control={control} name="customerId" render={({ field }) => (
                 <Combobox id={a.id} describedBy={a["aria-describedby"]} invalid={!!a["aria-invalid"]} value={field.value} onChange={field.onChange}
                   options={exporters.map((c) => ({ value: c.id, label: c.name, description: `BIN ${c.bin}${c.bondLicenseNo ? ` · ${c.bondLicenseNo}` : ""}`, keywords: [c.bin] }))}
                   placeholder={t("pickExporter")} searchPlaceholder={t("searchExporter")} empty={t("noExporters")} />
               )} />}
             </Field>
-            <Field id="ud-date" label={t("field.date")} required error={errors.date?.message}>{(a) => <Input type="date" max={TODAY} {...a} {...register("date")} />}</Field>
-            <Field id="ud-expiry" label={t("field.expiry")} required error={errors.expiry?.message}>{(a) => <Input type="date" {...a} {...register("expiry")} />}</Field>
-            <Field id="ud-lc" label={t("field.masterLc")} required error={errors.masterLcNo?.message}>{(a) => <Input autoComplete="off" className="tabular" {...a} {...register("masterLcNo")} />}</Field>
-            <Field id="ud-buyer" label={t("field.buyer")} error={errors.buyer?.message}>{(a) => <Input autoComplete="off" {...a} {...register("buyer")} />}</Field>
+            <Field id="udf-date" label={t("field.date")} required error={errors.date?.message}>{(a) => <Input type="date" max={TODAY} {...a} {...register("date")} />}</Field>
+            <Field id="udf-expiry" label={t("field.expiry")} required error={errors.expiry?.message}>{(a) => <Input type="date" {...a} {...register("expiry")} />}</Field>
+            <Field id="udf-lc" label={t("field.masterLc")} required error={errors.masterLcNo?.message}>{(a) => <Input autoComplete="off" className="tabular" {...a} {...register("masterLcNo")} />}</Field>
+            <Field id="udf-buyer" label={t("field.buyer")} error={errors.buyer?.message}>{(a) => <Input autoComplete="off" {...a} {...register("buyer")} />}</Field>
             <fieldset className="grid gap-2 sm:col-span-2">
               <legend className="mb-1 text-sm font-medium">{t("field.lines")}<span className="text-destructive" aria-hidden> *</span></legend>
               {lines.fields.map((f, i) => {
@@ -348,7 +348,7 @@ function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onO
               {(errors.lines?.message || errors.lines?.root?.message) && <p role="alert" className="text-xs font-medium text-destructive">{t(`err.${errors.lines?.message ?? errors.lines?.root?.message}`)}</p>}
               <Button type="button" variant="outline" size="sm" className="justify-self-start" onClick={() => lines.append({ itemId: "", qty: 0 })}><Plus /> {t("addLine")}</Button>
             </fieldset>
-            <Field id="ud-status" label={t("field.status")}>
+            <Field id="udf-status" label={t("field.status")}>
               {(a) => <Controller control={control} name="status" render={({ field }) => (
                 <Select value={field.value} onValueChange={(v) => field.onChange(v as "active" | "closed")} items={[{ value: "active", label: t("statusActive") }, { value: "closed", label: t("state.closed") }]}>
                   <SelectTrigger id={a.id} className="w-full"><SelectValue /></SelectTrigger>
@@ -356,7 +356,7 @@ function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onO
                 </Select>
               )} />}
             </Field>
-            <Field id="ud-note" label={t("field.note")} error={errors.note?.message} className="sm:col-span-2">{(a) => <Textarea rows={2} {...a} {...register("note")} />}</Field>
+            <Field id="udf-note" label={t("field.note")} error={errors.note?.message} className="sm:col-span-2">{(a) => <Textarea rows={2} {...a} {...register("note")} />}</Field>
           </div>
           <SheetFooter className="flex-row justify-end border-t">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{tc("cancel")}</Button>

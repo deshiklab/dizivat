@@ -95,7 +95,8 @@
     "newVendor": "New vendor",
     "breadcrumb": "Breadcrumb",
     "buildInfo": "v{version} · {release}",
-    "changePassword": "Change password"
+    "changePassword": "Change password",
+    "liveData": "PostgreSQL"
   },
   "prefs": {
     "theme": "Theme",

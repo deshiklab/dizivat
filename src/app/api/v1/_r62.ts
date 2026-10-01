@@ -107,12 +107,14 @@ const num = (v: unknown, dflt: number) => { const s = str(v).replace(/,/g, ""); 
 const bool = (v: unknown, dflt: boolean) => { const s = str(v).toLowerCase(); return !s ? dflt : !["0", "no", "false", "n", "inactive", "না"].includes(s) }
 const GROUPS: Record<string, Item["group"]> = { raw: "Raw Material", "raw material": "Raw Material", consumable: "Consumable", packing: "Packing Materials", "packing materials": "Packing Materials", "packing material": "Packing Materials", finished: "Finished Goods", "finished goods": "Finished Goods" }
 
+/** Units are matched case-insensitively against the Units master ("pcs" → "Pcs"). */
+const unitCode = (u: string) => db.units.find((x) => x.code.toLowerCase() === u.toLowerCase())?.code ?? u
 /** Map one spreadsheet row (header names already normalised to field names) to the item create payload. */
 function itemPayload(r: Record<string, unknown>) {
   const hs = str(r.hsCode).replace(/\D/g, "")
   return {
     name: str(r.name), hsCode: hs.length === 10 ? hs.slice(0, 8) : hs, group: GROUPS[str(r.group).toLowerCase()] ?? str(r.group),
-    unit: str(r.unit), sku: str(r.sku).toUpperCase(),
+    unit: unitCode(str(r.unit)), sku: str(r.sku).toUpperCase(),
     purchasePrice: num(r.purchasePrice, 0), salePrice: num(r.salePrice, 0), vatRate: num(r.vatRate, 15), sdRate: num(r.sdRate, 0),
     reorderLevel: num(r.reorderLevel, 0), active: bool(r.active, true),
   }

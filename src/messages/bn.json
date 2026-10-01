@@ -95,7 +95,8 @@
     "newVendor": "নতুন সরবরাহকারী",
     "breadcrumb": "পৃষ্ঠার অবস্থান",
     "buildInfo": "v{version} · {release}",
-    "changePassword": "পাসওয়ার্ড পরিবর্তন"
+    "changePassword": "পাসওয়ার্ড পরিবর্তন",
+    "liveData": "PostgreSQL ডেটাবেস"
   },
   "prefs": {
     "theme": "থিম",

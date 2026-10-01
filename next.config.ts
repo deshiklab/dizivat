@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import type { NextConfig } from "next"
 import createNextIntlPlugin from "next-intl/plugin"
 
@@ -23,10 +24,16 @@ const experimental = process.env.LOW_MEM_BUILD === "1" ? { webpackMemoryOptimiza
  */
 const upstream = process.env.API_UPSTREAM?.replace(/\/$/, "")
 const standalone = process.env.STANDALONE === "1"
+// Footer build info: package version and where the data lives (inlined at build time)
+const env = {
+  NEXT_PUBLIC_APP_VERSION: (JSON.parse(readFileSync(`${process.cwd()}/package.json`, "utf8")) as { version: string }).version,
+  NEXT_PUBLIC_DATA_MODE: upstream ? "postgres" : "mock",
+}
 
 const nextConfig: NextConfig = staticDemo
   ? {
       output: "export",
+      env,
       typescript,
       experimental,
       basePath,
@@ -38,6 +45,7 @@ const nextConfig: NextConfig = staticDemo
     }
   : {
       // Allow the sandbox preview host to use dev HMR.
+      env,
       typescript,
       experimental,
       // "server.tsx" files are routes in this build only: the [...slug] catch-all (in-shell 404 for unknown URLs).
