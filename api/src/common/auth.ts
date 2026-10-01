@@ -7,7 +7,7 @@ import { createParamDecorator, Inject, Injectable, SetMetadata, type CanActivate
 import { Reflector } from "@nestjs/core"
 import { and, eq, isNull, ne, sql } from "drizzle-orm"
 import type { Request, Response } from "express"
-import { ROLE_PERMS, type Permission, type User } from "@/lib/auth/roles"
+import { accessExpired, ROLE_PERMS, type Permission, type User } from "@/lib/auth/roles"
 import { db } from "../db/client"
 import { sessions } from "../db/schema"
 import { mirror } from "../state"
@@ -55,7 +55,7 @@ export class SessionService {
     }
     if (!s || s.userId !== token.uid || s.expiresAt <= Date.now()) return null
     const user = mirror.findUser(s.userId)
-    if (!user || !user.active) return null
+    if (!user || !user.active || accessExpired(user)) return null // R6.2: an officer's access period ends at midnight Dhaka
     if (Date.now() - s.seenAt > 5 * 60_000) { // throttled "last seen" for the sessions list
       s.seenAt = Date.now()
       void db.update(sessions).set({ lastSeenAt: new Date() }).where(eq(sessions.id, token.sid)).catch(() => undefined)
@@ -90,9 +90,17 @@ function cookieMode(req: Request): Pick<CookieOptions, "sameSite" | "secure" | "
   return isHttps(req) ? { sameSite: "none", secure: true, partitioned: true } : { sameSite: "lax" }
 }
 
+/** Records a VAT officer's read of a native endpoint (compat handlers log through the mock's withAuth). */
+export interface AccessLogger { officerAccess(user: User, req: Request): void }
+export const ACCESS_LOGGER = "dz:accessLogger"
+
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(@Inject(Reflector) private readonly reflector: Reflector, @Inject(SessionService) private readonly sessions: SessionService) {}
+  constructor(
+    @Inject(Reflector) private readonly reflector: Reflector,
+    @Inject(SessionService) private readonly sessions: SessionService,
+    @Inject(ACCESS_LOGGER) private readonly access: AccessLogger,
+  ) {}
 
   async canActivate(ctx: ExecutionContext) {
     const perm = this.reflector.getAllAndOverride<Permission | null | undefined>(PERM_KEY, [ctx.getHandler(), ctx.getClass()])
@@ -102,6 +110,8 @@ export class AuthGuard implements CanActivate {
     if (!s) throw new Problem(401, "Your session has expired. Please sign in again.")
     if (perm && !ROLE_PERMS[s.user.role].includes(perm)) throw new Problem(403, `Your role (${s.user.role}) is not allowed to do this (${perm}).`)
     req.dz = s
+    // R6.2 (GO 16/Mushak/2019): VAT officials' audit access is itself audited
+    if (s.user.role === "vatOfficer") this.access.officerAccess(s.user, req)
     return true
   }
 }

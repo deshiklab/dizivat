@@ -1,21 +1,25 @@
 import { Controller, Get, Global, Inject, Module } from "@nestjs/common"
 import { APP_GUARD } from "@nestjs/core"
 import { sql } from "drizzle-orm"
-import { AuthGuard, SessionService } from "./common/auth"
+import { ACCESS_LOGGER, AuthGuard, SessionService } from "./common/auth"
 import { db } from "./db/client"
 import { AuditController, AuditService } from "./modules/audit"
+import { BackupsController, BackupsService } from "./modules/backups"
 import { CompatController, CompatService } from "./modules/compat"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
 import { SEED_VERSION } from "./boot"
 
-export const VERSION = "0.10.0"
-const NATIVE_CONTROLLERS = [AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController]
+export const VERSION = "0.11.0"
+const NATIVE_CONTROLLERS = [AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController]
 
 @Global()
 @Module({
-  providers: [SessionService, AuditService, UsersService, UnitsService, CompatService, { provide: APP_GUARD, useClass: AuthGuard }],
-  exports: [SessionService, AuditService, UsersService, UnitsService, CompatService],
+  providers: [
+    SessionService, AuditService, UsersService, UnitsService, CompatService, BackupsService,
+    { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+  ],
+  exports: [SessionService, AuditService, UsersService, UnitsService, CompatService, BackupsService],
 })
 class CoreModule {}
 

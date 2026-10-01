@@ -1,3 +1,4 @@
+import { backupRef } from "@/lib/backup-schedule"
 import { recordAudit } from "@/lib/mock/audit"
 import { json, withAuth } from "../_lib"
 import { backupStatus, createBackup, ensureScheduled, lastSlot } from "../_r62"
@@ -14,6 +15,6 @@ export const GET = withAuth("settings.manage", async () => {
 /** Take a backup now. */
 export const POST = withAuth("settings.manage", async (_req, _ctx, user) => {
   const b = await createBackup("manual", user.name, lastSlot().slot)
-  recordAudit({ actor: user, entity: "backup", entityId: b.id, ref: `Backup ${b.at.slice(0, 16).replace("T", " ")} UTC`, action: "backedUp", note: `${Math.round(b.size / 1024)} KB · SHA-256 ${b.sha256.slice(0, 12)}…` })
+  recordAudit({ actor: user, entity: "backup", entityId: b.id, ref: backupRef(b.at), action: "backedUp", note: `${Math.round(b.size / 1024)} KB · SHA-256 ${b.sha256.slice(0, 12)}…` })
   return json(b, { status: 201 })
 })

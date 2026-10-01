@@ -5,7 +5,7 @@
  */
 import { sql } from "drizzle-orm"
 import {
-  bigserial, boolean, check, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
+  bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
 import type { AuditChange } from "@/lib/types"
 
@@ -20,7 +20,7 @@ export const users = pgTable("users", {
   designation: text("designation").notNull(),
   initials: text("initials").notNull(),
   email: text("email").notNull(),
-  role: text("role", { enum: ["admin", "approver", "operator", "viewer"] }).notNull(),
+  role: text("role", { enum: ["admin", "approver", "operator", "viewer", "vatOfficer"] }).notNull(),
   mobile: text("mobile"),
   department: text("department"),
   active: boolean("active").notNull().default(true),
@@ -32,10 +32,13 @@ export const users = pgTable("users", {
   preferences: jsonb("preferences").$type<Record<string, string>>().notNull().default({}),
   createdAt: ts("created_at").notNull().defaultNow(),
   lastSignInAt: ts("last_sign_in_at"),
+  /** R6.2: VAT officer — last day (Asia/Dhaka) the account may sign in; null for every other role */
+  accessUntil: date("access_until", { mode: "string" }),
 }, (t) => [
   uniqueIndex("users_username_key").on(t.username),
   uniqueIndex("users_email_lower_key").on(sql`lower(${t.email})`),
-  check("users_role_check", sql`${t.role} in ('admin','approver','operator','viewer')`),
+  check("users_role_check", sql`${t.role} in ('admin','approver','operator','viewer','vatOfficer')`),
+  check("users_officer_access_check", sql`${t.role} <> 'vatOfficer' or ${t.accessUntil} is not null`),
 ])
 
 /** Server-side sessions: the signed cookie carries `sid`; revoking a row signs that browser out immediately. */
@@ -158,3 +161,22 @@ export const meta = pgTable("meta", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
 })
+
+/** R6.2 (GO 16/Mushak/2019 — at least two backups a day): gzip JSON snapshots of every table, with their SHA-256. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" })
+export const backups = pgTable("backups", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  at: ts("at").notNull().defaultNow(),
+  kind: text("kind", { enum: ["scheduled", "manual"] }).notNull(),
+  /** schedule slot "YYYY-MM-DD HH:MM" (Asia/Dhaka) the backup belongs to */
+  slot: text("slot").notNull(),
+  by: text("by").notNull(),
+  size: integer("size").notNull(),
+  sha256: text("sha256").notNull(),
+  tables: jsonb("tables").$type<Record<string, number>>().notNull(),
+  data: bytea("data").notNull(),
+}, (t) => [
+  index("backups_at_idx").on(t.at),
+  uniqueIndex("backups_scheduled_slot_key").on(t.slot).where(sql`${t.kind} = 'scheduled'`),
+  check("backups_kind_check", sql`${t.kind} in ('scheduled','manual')`),
+])

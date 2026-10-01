@@ -8,7 +8,7 @@ import { Controller, Delete, Get, HttpCode, Inject, Injectable, Param, Post, Put
 import { and, eq, sql } from "drizzle-orm"
 import type { Request, Response } from "express"
 import { z } from "zod"
-import { ROLE_PERMS, type Me, type Preferences, type SavedView, type User } from "@/lib/auth/roles"
+import { accessExpired, accessUntilError, ROLE_PERMS, type Me, type Preferences, type SavedView, type User } from "@/lib/auth/roles"
 import { toCSV } from "@/lib/mock/query"
 import { passwordChange, userInput, userUpdate } from "@/lib/schemas"
 import { Authed, CurrentUser, SessionService, type AuthedRequest } from "../common/auth"
@@ -28,11 +28,12 @@ export const toUser = (r: UserRow): User => {
   if (r.department != null) u.department = r.department
   if (r.lastSignInAt) u.lastSignInAt = r.lastSignInAt.toISOString()
   if (r.mustChangePassword) u.mustChangePassword = true
+  if (r.accessUntil) u.accessUntil = r.accessUntil
   return u
 }
 type RawUser = Record<string, unknown> & { id: string; created_at: Date | string; last_sign_in_at: Date | string | null }
 const rawToUser = (r: RawUser): User => toUser({
-  ...(r as unknown as UserRow), mustChangePassword: r.must_change_password as boolean,
+  ...(r as unknown as UserRow), mustChangePassword: r.must_change_password as boolean, accessUntil: (r.access_until as string | null) ?? null,
   createdAt: new Date(toIso(r.created_at)), lastSignInAt: r.last_sign_in_at ? new Date(toIso(r.last_sign_in_at)) : null,
 })
 
@@ -104,6 +105,11 @@ export class AuthController {
     if (f) await db.delete(loginFailures).where(eq(loginFailures.username, key))
     // Checked after the password so a disabled account is not revealed to someone guessing
     if (!row.active) throw new Problem(403, "disabled")
+    // R6.2: a VAT officer's access period has ended
+    if (accessExpired(toUser(row))) {
+      await this.audit.record({ actor: toUser(row), entity: "session", entityId: row.id, ref: row.username, action: "signInFailed", note: `Access period ended ${row.accessUntil ?? ""}`.trim() })
+      throw new Problem(403, "expired")
+    }
     await db.update(users).set({ lastSignInAt: new Date() }).where(eq(users.id, row.id))
     const user = await this.users.refresh(row.id)
     await this.audit.record({ actor: user, entity: "session", entityId: user.id, ref: user.username, action: "signedIn" })
@@ -223,7 +229,7 @@ async function listViews(uid: string, table: string): Promise<SavedView[]> {
 
 /* ── users (admin) ───────────────────────────────────────────────────── */
 
-const USER_FIELDS = ["name", "designation", "email", "mobile", "department", "role", "active"]
+const USER_FIELDS = ["name", "designation", "email", "mobile", "department", "role", "active", "accessUntil"]
 
 @Controller("api/v1/users")
 export class UsersController {
@@ -267,16 +273,18 @@ export class UsersController {
     if (await this.users.byUsername(d.username)) throw new Problem(422, "Validation failed", { username: ["duplicate"] })
     const [dupe] = await db.select({ id: users.id }).from(users).where(sql`lower(${users.email}) = lower(${d.email})`)
     if (dupe) throw new Problem(422, "Validation failed", { email: ["duplicate"] })
+    const ae = accessUntilError(d.role, d.accessUntil)
+    if (ae) throw new Problem(422, "Validation failed", { accessUntil: [ae] })
     const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(users)
     const pw = tempPassword()
     const id = `u${n + 1}-${Date.now().toString(36)}`
     await db.insert(users).values({
       id, username: d.username, name: d.name, designation: d.designation, email: d.email, role: d.role,
       mobile: d.mobile ?? null, department: d.department ?? null, active: d.active, initials: initialsOf(d.name),
-      mustChangePassword: true, passwordHash: await hashPassword(pw), passwordIsDemo: false,
+      accessUntil: d.role === "vatOfficer" ? d.accessUntil : null, mustChangePassword: true, passwordHash: await hashPassword(pw), passwordIsDemo: false,
     })
     const user = await this.users.refresh(id)
-    await this.audit.record({ actor: req.dz!.user, entity: "user", entityId: user.id, ref: user.username, action: "invited", note: `Role: ${user.role}` })
+    await this.audit.record({ actor: req.dz!.user, entity: "user", entityId: user.id, ref: user.username, action: "invited", note: `Role: ${user.role}${user.accessUntil ? ` · access until ${user.accessUntil}` : ""}` })
     res.status(201).json({ user, tempPassword: pw })
   }
 
@@ -297,6 +305,11 @@ export class UsersController {
     const d = parse(userUpdate, jsonBody(req))
     const [dupe] = await db.select({ id: users.id }).from(users).where(sql`lower(${users.email}) = lower(${d.email}) and ${users.id} <> ${id}`)
     if (dupe) throw new Problem(422, "Validation failed", { email: ["duplicate"] })
+    // R6.2: an officer's access date is validated when it changes (an unchanged past date can stay while deactivating)
+    if (d.role === "vatOfficer" && (d.accessUntil !== u.accessUntil || u.role !== "vatOfficer")) {
+      const ae = accessUntilError(d.role, d.accessUntil)
+      if (ae) throw new Problem(422, "Validation failed", { accessUntil: [ae] })
+    } else if (d.role === "vatOfficer" && !d.accessUntil) throw new Problem(422, "Validation failed", { accessUntil: ["required"] })
     const roleChanged = d.role !== u.role, statusChanged = d.active !== u.active
     if (u.id === actor.id && roleChanged) throw new Problem(422, "Validation failed", { role: ["self"] })
     if (u.id === actor.id && !d.active) throw new Problem(422, "Validation failed", { active: ["self"] })
@@ -308,6 +321,7 @@ export class UsersController {
     await db.update(users).set({
       name: d.name, designation: d.designation, email: d.email, role: d.role, active: d.active,
       mobile: d.mobile ?? null, department: d.department ?? null, initials: initialsOf(d.name),
+      accessUntil: d.role === "vatOfficer" ? d.accessUntil : null,
     }).where(eq(users.id, id))
     if (statusChanged && !d.active) await this.sessions.revokeUser(id, "deactivated")
     const after = await this.users.refresh(id)

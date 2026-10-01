@@ -107,6 +107,21 @@ export class AuditService {
     })
   }
 
+  /**
+   * R6.2: a VAT officer's request to a native endpoint → entity "access", action "viewed" — at most once a minute per
+   * path (same rule and the same dedupe map as the mock's logOfficerAccess, so compat requests are not logged twice).
+   */
+  officerAccess(user: User, req: Request) {
+    const url = new URL(req.originalUrl, "http://x")
+    const path = url.pathname.replace(/^.*\/api\/v1/, "") || "/"
+    const seen = ((globalThis as unknown as { __dzAccess?: Map<string, number> }).__dzAccess ??= new Map())
+    const key = `${user.id}|${req.method}|${path}`, now = Date.now()
+    if ((seen.get(key) ?? 0) > now - 60_000) return
+    seen.set(key, now)
+    void this.record({ actor: user, entity: "access", entityId: user.id, ref: path, action: "viewed", note: [req.method !== "GET" ? req.method : "", url.search.slice(1, 200)].filter(Boolean).join(" ") || undefined })
+      .catch((e) => console.error("[access log]", e))
+  }
+
   /** Cheap check from the end (events are only ever appended). */
   hasPending() {
     const ev = mirror.audit().events

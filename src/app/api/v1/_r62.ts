@@ -4,6 +4,7 @@
  *  - RMG: UD / UP register with bond licence watch-list, subcontracting (Mushak 6.4) register
  *  - NBR enlistment: bulk master-data import, database backups (GO 16/Mushak/2019: at least two a day)
  */
+import { BACKUP_FORMAT, BACKUP_KEEP, BACKUP_SLOTS, dhakaDayOf, lastSlot, nextSlot } from "@/lib/backup-schedule"
 import { db } from "@/lib/mock/db"
 import { auditStore } from "@/lib/mock/audit"
 import { userStore } from "@/lib/mock/users"
@@ -194,27 +195,9 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
 
 /* ── Backups (mock: in memory; the PostgreSQL build stores them in the backups table) ── */
 
-export const BACKUP_SLOTS = ["02:00", "14:00"] as const
-export const BACKUP_KEEP = 30
+export { BACKUP_KEEP, BACKUP_SLOTS, lastSlot, nextSlot } from "@/lib/backup-schedule"
 interface Stored extends BackupRow { data: Uint8Array }
 const bstore = (globalThis as unknown as { __dzBackups?: { rows: Stored[]; seq: number } }).__dzBackups ??= { rows: [], seq: 0 }
-
-/** The most recent schedule slot at or before `now` (Asia/Dhaka, UTC+6), as "YYYY-MM-DD HH:MM" and its instant. */
-export function lastSlot(now = Date.now()): { slot: string; at: number } {
-  const local = new Date(now + 6 * 36e5)
-  const day = local.toISOString().slice(0, 10)
-  const hm = local.toISOString().slice(11, 16)
-  const today = [...BACKUP_SLOTS].reverse().find((s) => s <= hm)
-  if (today) return { slot: `${day} ${today}`, at: Date.parse(`${day}T${today}:00+06:00`) }
-  const y = new Date(now + 6 * 36e5 - 864e5).toISOString().slice(0, 10)
-  const s = BACKUP_SLOTS[BACKUP_SLOTS.length - 1]
-  return { slot: `${y} ${s}`, at: Date.parse(`${y}T${s}:00+06:00`) }
-}
-export function nextSlot(now = Date.now()): string {
-  const { at } = lastSlot(now)
-  for (let h = 1; h <= 24; h++) { const t = at + h * 36e5; const s = lastSlot(t); if (s.at > at) return new Date(s.at).toISOString() }
-  return new Date(at + 864e5).toISOString()
-}
 
 async function sha256(b: Uint8Array) {
   const h = await crypto.subtle.digest("SHA-256", b as unknown as ArrayBuffer)
@@ -237,7 +220,7 @@ export function snapshotTables(): Record<string, unknown[]> {
 export async function createBackup(kind: "scheduled" | "manual", by: string, slot: string): Promise<BackupRow> {
   const tables = snapshotTables()
   const at = new Date().toISOString()
-  const data = await gzip(JSON.stringify({ format: "dizivat-backup/1", at, company: COMPANY.name, tables, settings: { vat: db.vatSettings, accounting: db.accountingConfig } }))
+  const data = await gzip(JSON.stringify({ format: BACKUP_FORMAT, at, company: COMPANY.name, tables, settings: { vat: db.vatSettings, accounting: db.accountingConfig } }))
   const row: Stored = {
     id: `bk${++bstore.seq}`, at, kind, slot, by, size: data.byteLength, sha256: await sha256(data),
     tables: Object.fromEntries(Object.entries(tables).map(([k, v]) => [k, v.length])), data,
@@ -259,7 +242,7 @@ export function backupStatus(): BackupStatus {
   const rows = bstore.rows.map(strip)
   return {
     timezone: "Asia/Dhaka", schedule: [...BACKUP_SLOTS], retention: BACKUP_KEEP, storage: "memory",
-    today: rows.filter((r) => new Date(Date.parse(r.at) + 6 * 36e5).toISOString().slice(0, 10) === today).length,
+    today: rows.filter((r) => dhakaDayOf(r.at) === today).length,
     next: nextSlot(), last: rows[0], rows,
   }
 }

@@ -2,12 +2,17 @@
  * Boot: first start seeds PostgreSQL from the demo data set (the same one the mock and the Pages demo use);
  * later starts restore everything from PostgreSQL before the compat bundle initialises.
  */
+import { createHash } from "node:crypto"
+import { promisify } from "node:util"
+import { gzip } from "node:zlib"
 import { asc, eq, sql } from "drizzle-orm"
+import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
 import type { AuditEvent, Unit } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, compatState, meta, tariffLines, units, users } from "./db/schema"
+import { auditEvents, backups, compatState, meta, tariffLines, units, users } from "./db/schema"
+import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
 import { compatSnapshot, markSaved } from "./modules/compat"
@@ -15,13 +20,26 @@ import { toUser } from "./modules/identity"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, restoreGlobals } from "./state"
 
-export const SEED_VERSION = "r5.1"
+export const SEED_VERSION = "r6.2"
+
+/**
+ * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —
+ * after taking a backup of everything, so the old data can still be downloaded from Settings → Backups.
+ * Customer installations set DEMO_RESEED=off and keep their data across upgrades.
+ */
+const demoReseed = () => (process.env.DEMO_RESEED ?? "on") !== "off"
 
 export async function bootState(log: (m: string) => void) {
   const [state] = await db.select().from(compatState).where(eq(compatState.key, "main"))
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(users)
   if (state && n) {
     await sealUnchained(log) // R6: upgrade — chain the events written by R5.1
+    const [v] = await db.select().from(meta).where(eq(meta.key, "seed_version"))
+    if (v?.value !== SEED_VERSION && demoReseed()) {
+      log(`demo data set ${v?.value ?? "?"} → ${SEED_VERSION}: backing up, then re-seeding (DEMO_RESEED=off keeps the data)`)
+      await backupBeforeReseed(v?.value ?? "?", log)
+      return seed(log)
+    }
     return restore(state.data as { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log)
   }
   return seed(log)
@@ -41,6 +59,7 @@ async function seed(log: (m: string) => void) {
     await tx.insert(users).values(m.userStore.users.map((u, i) => ({
       id: u.id, username: u.username, name: u.name, designation: u.designation, initials: u.initials, email: u.email, role: u.role,
       mobile: u.mobile ?? null, department: u.department ?? null, active: u.active, mustChangePassword: !!u.mustChangePassword,
+      accessUntil: u.role === "vatOfficer" ? u.accessUntil ?? null : null,
       passwordHash: demoHash[i], passwordIsDemo: true, preferences: {}, createdAt: new Date(u.createdAt),
       lastSignInAt: u.lastSignInAt ? new Date(u.lastSignInAt) : null,
     })))
@@ -86,4 +105,15 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   markPersisted(events)
   markSaved(compatSnapshot())
   log(`restored from PostgreSQL: ${list.length} users, ${events.length} audit events (${Date.now() - t0} ms)`)
+}
+
+/** Pre-reseed safety net: one gzip snapshot of the database in the backups table (kept by the re-seed). */
+async function backupBeforeReseed(from: string, log: (m: string) => void) {
+  const { tables, counts } = await snapshot()
+  const data = await promisify(gzip)(Buffer.from(JSON.stringify({ format: BACKUP_FORMAT, at: new Date().toISOString(), storage: "postgres", reason: `before demo re-seed ${from} → ${SEED_VERSION}`, tables })))
+  await db.insert(backups).values({
+    kind: "manual", slot: lastSlot().slot, by: `System (before demo reset ${from} → ${SEED_VERSION})`,
+    size: data.byteLength, sha256: createHash("sha256").update(data).digest("hex"), tables: counts, data,
+  })
+  log(`pre-reseed backup: ${Math.round(data.byteLength / 1024)} KB`)
 }

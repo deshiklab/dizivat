@@ -10,6 +10,7 @@ const root = join(here, "../../src/app/api/v1")
 export const NATIVE = [
   "auth/login", "auth/logout", "me", "me/password", "me/preferences", "me/views",
   "users", "users/[id]", "users/[id]/reset-password", "company", "audit", "audit/verify", "tariff", "units", "units/[id]",
+  "backups", "backups/[id]", "backups/[id]/verify",
 ]
 
 const found = []
