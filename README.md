@@ -88,8 +88,8 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     takes a backup and reseeds once on upgrade (`DEMO_RESEED=off` disables it).
   - The footer shows the real version and the data mode (mock / PostgreSQL). Four new bilingual help articles
     (38 in total).
-  - **Tests:** `e2e_r62.py` (27 checks); contract 563 checks / 194 endpoints (16 new); `api_native.py` R6.2 block
-    (officer limits and expiry, backups surviving restarts); axe 0 violations / 244 runs (10 new pages). Visual
+  - **Tests:** `e2e_r62.py` (27 checks); contract 563 checks / 194 endpoints (16 new); `api_native.py` 65 checks (+18:
+    officer limits and expiry, backups, backups survive a restart); axe 0 violations / 244 runs (10 new pages). Visual
     baselines re-captured for the new footer.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.

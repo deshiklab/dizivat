@@ -216,9 +216,9 @@ def run():
     # R6.2: backups in PostgreSQL
     st = admin.get(f"{BASE}/backups").json()
     check(st.get("storage") == "postgres" and st.get("schedule") == ["02:00", "14:00"] and any(x["kind"] == "scheduled" for x in st.get("rows", [])), "R6.2: backups stored in PostgreSQL; the current slot's scheduled backup exists")
-    b = admin.post(f"{BASE}/backups")
-    check(b.status_code == 201 and len(b.json().get("sha256", "")) == 64, f"R6.2: manual backup ({round(b.json().get('size', 0) / 1024)} KB)")
-    bid = b.json()["id"]
+    bk = admin.post(f"{BASE}/backups")
+    check(bk.status_code == 201 and len(bk.json().get("sha256", "")) == 64, f"R6.2: manual backup ({round(bk.json().get('size', 0) / 1024)} KB)")
+    bid = bk.json()["id"]
     check(admin.post(f"{BASE}/backups/{bid}/verify").json().get("ok") is True, "R6.2: backup checksum verifies")
     d = admin.get(f"{BASE}/backups/{bid}")
     import gzip as _gz
@@ -227,10 +227,12 @@ def run():
     check(not any("password_hash" in u for u in snap.get("tables", {}).get("users", [])), "R6.2: password hashes are not in backups")
     check(session("arif").get(f"{BASE}/backups").status_code == 403, "R6.2: backups need settings.manage")
     if DB_URL:
-        check(int(psql("select count(*) from backups")) >= 2 and psql(f"select sha256 from backups where id = {bid[2:]}") == b.json()["sha256"], "R6.2: backups are rows in the backups table")
+        check(int(psql("select count(*) from backups")) >= 2 and psql(f"select sha256 from backups where id = {bid[2:]}") == bk.json()["sha256"], "R6.2: backups are rows in the backups table")
         dup = subprocess.run(["psql", DB_URL, "-At", "-c", f"insert into backups (kind, slot, by, size, sha256, tables, data) select 'scheduled', slot, 'x', 1, 'x', '{{}}', '\\x00' from backups where kind = 'scheduled' limit 1"], capture_output=True, text=True)
         check(dup.returncode != 0, "R6.2: only one scheduled backup per slot (unique index)")
 
+    # re-baseline: the R6.2 block above adds audit events for this run's tag (officer, access log, backups)
+    before_ids = sorted(e["id"] for e in arif.get(f"{BASE}/audit", params={"q": TAG, "size": 50}).json()["data"])
     if RESTART:
         print("restart: everything survives")
         secs = restart()
