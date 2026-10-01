@@ -182,6 +182,55 @@ def run():
     check(len(v.json().get("head", "")) == 64 if v.ok else False, "R6: chain head is a SHA-256 hex digest")
     check(session("kamal").get(f"{BASE}/audit/verify").status_code == 403, "R6: operators cannot run the verification (audit.view)")
 
+    # R6.2: VAT officer — time-boxed, read-only, every read logged
+    print("R6.2: VAT officer + backups")
+    import datetime
+    admin = session("admin")
+    dhaka = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=6)).date()
+    oname = f"nbr{TAG}"
+    obody = {"username": oname, "name": f"Officer {TAG}", "designation": "Revenue Officer", "email": f"{oname}@nbr.example", "mobile": "", "department": "NBR",
+             "role": "vatOfficer", "active": True, "accessUntil": str(dhaka + datetime.timedelta(days=200))}
+    r = admin.post(f"{BASE}/users", json=obody)
+    check(r.status_code == 422 and r.json()["errors"].get("accessUntil") == ["accessTooLong"], "R6.2: officer access longer than 90 days → 422")
+    r = admin.post(f"{BASE}/users", json={**obody, "accessUntil": str(dhaka + datetime.timedelta(days=7))})
+    check(r.status_code == 201 and r.json()["user"].get("accessUntil") == str(dhaka + datetime.timedelta(days=7)), "R6.2: officer created with access-until date")
+    off = r.json()
+    o = session(oname, off["tempPassword"])
+    check(o.get(f"{BASE}/vat/exports").status_code == 200 and o.get(f"{BASE}/audit", params={"size": 2}).status_code == 200, "R6.2: officer can read (compat + native)")
+    check(o.post(f"{BASE}/units", json={"code": "ZZ", "name": "x", "decimals": 0}).status_code == 403, "R6.2: officer cannot write")
+    acc = admin.get(f"{BASE}/audit", params={"entity": "access", "size": 50}).json()["data"]
+    refs = {e["ref"] for e in acc if e.get("actorId") == off["user"]["id"]}
+    check({"/vat/exports", "/audit"} <= refs, f"R6.2: officer reads are in the audit trail ({sorted(refs)})")
+    if DB_URL:
+        check(psql(f"select access_until from users where username = '{oname}'") == str(dhaka + datetime.timedelta(days=7)), "R6.2: users.access_until stored")
+        psql(f"update users set access_until = '{dhaka - datetime.timedelta(days=1)}' where username = '{oname}'")
+        u = admin.get(f"{BASE}/users/{off['user']['id']}").json()
+        admin.put(f"{BASE}/users/{off['user']['id']}", json={**u, "designation": "Revenue Officer (expired)"})  # refreshes the server's copy
+        check(o.get(f"{BASE}/me").status_code == 401, "R6.2: an expired officer's session stops working")
+        r = requests.post(f"{BASE}/auth/login", json={"username": oname, "password": off["tempPassword"]})
+        check(r.status_code == 403 and r.json().get("title") == "expired", "R6.2: expired officer cannot sign in (403 expired)")
+        check(subprocess.run(["psql", DB_URL, "-At", "-c", f"update users set access_until = null where username = '{oname}'"], capture_output=True, text=True).returncode != 0, "R6.2: the database requires an access date for officers")
+    else:
+        skipped("officer expiry (DATABASE_URL not set)")
+
+    # R6.2: backups in PostgreSQL
+    st = admin.get(f"{BASE}/backups").json()
+    check(st.get("storage") == "postgres" and st.get("schedule") == ["02:00", "14:00"] and any(x["kind"] == "scheduled" for x in st.get("rows", [])), "R6.2: backups stored in PostgreSQL; the current slot's scheduled backup exists")
+    b = admin.post(f"{BASE}/backups")
+    check(b.status_code == 201 and len(b.json().get("sha256", "")) == 64, f"R6.2: manual backup ({round(b.json().get('size', 0) / 1024)} KB)")
+    bid = b.json()["id"]
+    check(admin.post(f"{BASE}/backups/{bid}/verify").json().get("ok") is True, "R6.2: backup checksum verifies")
+    d = admin.get(f"{BASE}/backups/{bid}")
+    import gzip as _gz
+    snap = json.loads(_gz.decompress(d.content)) if d.ok else {}
+    check(d.ok and snap.get("format") == "dizivat-backup/1" and "audit_events" in snap.get("tables", {}) and "compat_state" in snap.get("tables", {}), "R6.2: download is a gzip JSON snapshot of the tables")
+    check(not any("password_hash" in u for u in snap.get("tables", {}).get("users", [])), "R6.2: password hashes are not in backups")
+    check(session("arif").get(f"{BASE}/backups").status_code == 403, "R6.2: backups need settings.manage")
+    if DB_URL:
+        check(int(psql("select count(*) from backups")) >= 2 and psql(f"select sha256 from backups where id = {bid[2:]}") == b.json()["sha256"], "R6.2: backups are rows in the backups table")
+        dup = subprocess.run(["psql", DB_URL, "-At", "-c", f"insert into backups (kind, slot, by, size, sha256, tables, data) select 'scheduled', slot, 'x', 1, 'x', '{{}}', '\\x00' from backups where kind = 'scheduled' limit 1"], capture_output=True, text=True)
+        check(dup.returncode != 0, "R6.2: only one scheduled backup per slot (unique index)")
+
     if RESTART:
         print("restart: everything survives")
         secs = restart()
@@ -200,6 +249,8 @@ def run():
         check(requests.post(f"{BASE}/auth/login", json={"username": name, "password": new_pw}).status_code == 200, "changed password survives a restart")
         n = arif.post(f"{BASE}/customers", json={"name": f"R5 After Restart {TAG}", "mode": "Foreign", "country": "Japan", "address": "4-5-6 Shibuya, Tokyo"})
         check(n.status_code == 201 and n.json()["id"] != cid, "new records after a restart get fresh ids")
+        bl = admin.get(f"{BASE}/backups").json()
+        check(any(x["id"] == bid for x in bl.get("rows", [])), "R6.2: backups survive a restart")
         v2 = arif.get(f"{BASE}/audit/verify").json()
         check(v2.get("ok") is True and v2.get("count", 0) > v.json().get("count", 0), "R6: the chain continues across a restart")
     else:

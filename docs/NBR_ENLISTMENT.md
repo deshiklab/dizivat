@@ -1,4 +1,4 @@
-# NBR VAT-software enlistment — readiness (R6)
+# NBR VAT-software enlistment — readiness (R6 / R6.2)
 
 DiziVAT is being prepared for enlistment as **NBR-approved VAT software** under General Order 16/Mushak/2019. Taxpayers with
 an annual turnover above Tk 5 crore must keep their VAT records in enlisted software. The non-compliance penalty is
@@ -8,7 +8,7 @@ This page maps the enlistment requirements to what the software does, and lists 
 document for the application, **not** legal advice. Check every rule against the current Act, rules, SROs and
 general orders before you file.
 
-Branch `r6-enlistment-rmg`, version **0.10.0**. The git tag `v0.9.1` marks the state before this work.
+Branch `r6-enlistment-rmg`, version **0.11.0** (R6.2). The git tag `v0.9.1` marks the state before R6; `v0.10.0` is R6.1.
 
 ## 1. Requirements → status
 
@@ -16,13 +16,13 @@ Branch `r6-enlistment-rmg`, version **0.10.0**. The git tag `v0.9.1` marks the s
 |---|---|---|---|
 | 1 | Comply with the VAT & SD Act 2012, the Rules and orders | Rules engine with effective-dated parameters (`src/lib/rules.ts`, below); Mushak forms per the 2019 rules and the 2024 9.1 layout | ✅ ongoing |
 | 2 | Automated generation and printing of the return, purchase book, sales book and current account | 9.1 return builder with note drill-down; Mushak 6.1 / 6.2 books; party statements; PDF + print on every form | ✅ |
-| 3 | Statutory forms | 4.3, 6.1, 6.2, 6.3 (local / export / service), 6.5 data, 6.6, 6.7, 6.8, 6.10, 9.1, TR-6; 6.4 for contractual batches | ✅ 6.2.1 and 9.3 / 9.4 are planned |
+| 3 | Statutory forms | 4.3, 6.1, 6.2, **6.2.1** (purchase-sales book of traded goods), 6.3 (local / export / service), 6.4 (contractual batches + subcontracting register), **6.5** (transfer challan print), 6.6, 6.7, 6.8, 6.10, 9.1, TR-6 | ✅ R6.2 (9.3 / 9.4 not in scope) |
 | 4 | **Tamper protection** — records must not be altered or deleted unnoticed | Audit trail is **append-only in the database** (triggers) and **hash-chained** (SHA-256); integrity check in the UI and the API (§2) | ✅ R6.1 |
-| 5 | **VAT officials must have access for audit** | `auditor` role is read-only with audit-trail access. A dedicated VAT-officer login with time-boxed access is planned | 🟡 R6.2 |
-| 6 | **At least two backups of transaction data a day** | Neon (managed Postgres) keeps point-in-time recovery. Two scheduled logical dumps a day to separate storage are planned | 🟡 R6.2 |
+| 5 | **VAT officials must have access for audit** | **VAT officer** role: read-only, audit trail and exports, **time-boxed** (access-until date, max 90 days, enforced at sign-in and on every request) and **every read logged** in the audit trail (§5) | ✅ R6.2 |
+| 6 | **At least two backups of transaction data a day** | **Two scheduled backups a day** (02:00 and 14:00 Asia/Dhaka) plus on demand: gzip JSON snapshot of every table with its SHA-256, last 30 kept, verify and download in *Master data › Backups* (§6). Neon point-in-time recovery on top | ✅ R6.2 |
 | 7 | Manual records during outages, entered later | Back-dated entry within open periods; period lock after the return is submitted | ✅ |
-| 8 | Integration with the taxpayer's ERP / books | Typed REST API (`docs/API.md`, 178 endpoints) and CSV exports on every register. Bulk Excel import is planned | 🟡 |
-| 9 | User access control | Roles (admin, approver, operator, viewer/auditor) with per-permission checks in the API; sessions revoked on password change, reset or deactivation; lockout | ✅ |
+| 8 | Integration with the taxpayer's ERP / books | Typed REST API (`docs/API.md`) and CSV exports on every register; **bulk import** of items, customers and vendors from CSV / Excel with a dry run (§7). Transaction import is planned | ✅ masters · 🟡 transactions |
+| 9 | User access control | Roles (admin, approver, operator, viewer/auditor, VAT officer) with per-permission checks in the API; sessions revoked on password change, reset or deactivation; lockout | ✅ |
 | 10 | Records kept for 5 years | No hard deletes of tax documents (cancel with reason); audit rows cannot be deleted | ✅ (retention job planned) |
 | 11 | e-VAT filing pack (GO 12/Musak/2026) | 9.1 values computed per note, ready to key into the e-return. A direct upload format will follow once NBR publishes one | 🟡 |
 | 12 | Developer: RJSC company, 5 years' experience, after-sales service | Company paperwork — outside the software | — |
@@ -98,11 +98,43 @@ Where it is used:
 
 Every change is audited field by field. A 100 % export-oriented RMG unit cannot be saved without a bond licence.
 
-## 5. Next (R6.2+)
+## 5. VAT-officer access (R6.2)
 
-1. VAT-officer access: a read-only role with an expiry date, and an access log.
-2. Scheduled backups: two logical dumps a day to separate storage, with a restore drill and a backup log page.
-3. Mushak 6.4 (contractual production) register, 6.2.1, 9.3 / 9.4 (late and corrected returns), and a 6.5 printout.
-4. A UD / bond register for RMG customers, matching deemed-export quantities against each UD.
-5. Bulk Excel import (sales, purchases) and an e-VAT filing export.
-6. Late-filing penalty and §127 interest calculator on the compliance centre.
+- Role `vatOfficer` — permissions: view everything, export (CSV / PDF) and the audit trail; **no** create, edit, approve,
+  settings or user administration (403 from the API, buttons hidden in the UI).
+- **Access until** (Asia/Dhaka date) is required, may not be in the past and at most **90 days** ahead
+  (`OFFICER_MAX_DAYS`). The day after it, sign-in answers `403 expired` (logged as a failed sign-in) and open sessions
+  stop working at once. Admins extend or end the access in *Users & roles*; the list shows "until …".
+- **Access log:** every request an officer makes is written to the audit trail as *access · viewed* with the path and
+  query (at most once a minute per path), so the taxpayer can show exactly what was inspected. Native and compat
+  endpoints share one de-duplication map.
+- Database: `users.access_until` (date) with a check constraint that officers have one (migration `0004`).
+
+## 6. Backups (R6.2)
+
+| | |
+|---|---|
+| Schedule | 02:00 and 14:00 Asia/Dhaka (`src/lib/backup-schedule.ts`); a slot missed while the service slept is taken as soon as it wakes (catch-up, checked every 5 minutes and on every visit to the page) |
+| Content | `dizivat-backup/1`: gzip JSON of every table — documents, masters, users (without password hashes), audit trail with its hash chain, settings. Sessions and lockouts are left out |
+| Integrity | SHA-256 stored with each backup; *Verify* re-hashes the stored bytes; downloads carry `X-Backup-SHA256` and are audited |
+| Retention | last 30 (15 days at two a day) in the `backups` table; download copies for off-site storage |
+| Demo upgrades | when a release ships a new demo data set, the server backs up everything first, then re-seeds (`DEMO_RESEED=off` keeps customer data) |
+
+API: `GET /api/v1/backups` (status + list), `POST /api/v1/backups`, `GET /api/v1/backups/{id}` (download),
+`POST /api/v1/backups/{id}/verify` — permission `settings.manage`.
+
+## 7. Bulk master-data import (R6.2)
+
+*Master data › Data import*: items, customers or vendors from **CSV or Excel (.xlsx)** — read in the browser, header row
+mapped by name (common aliases such as "HS code", "UoM", "Item code" are recognised), up to 2,000 rows.
+**Validate** runs the same rules as the entry forms on every row (row numbers as in the sheet); **Import** is enabled only
+after a clean validation and is all-or-nothing. Records already on file (same SKU / BIN / name) are skipped; duplicates
+inside the file are errors. An **RMG starter catalogue** (31 garment inputs, trims, packaging and garments with HS codes)
+can be loaded instead of a file. Each created record and the import itself are audited.
+
+## 8. Next
+
+1. Transaction import (sales, purchases) and an e-VAT filing export once NBR publishes the format.
+2. Restore drill from a backup file into a fresh database (documented procedure + script).
+3. Late-filing penalty and §127 interest calculator on the compliance centre.
+4. 9.3 / 9.4 (late and corrected returns) if NBR requires them for enlistment.

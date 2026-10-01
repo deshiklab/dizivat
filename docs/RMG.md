@@ -1,4 +1,4 @@
-# RMG (ready-made garments) — VAT features (R6)
+# RMG (ready-made garments) — VAT features (R6 / R6.2)
 
 DiziVAT's main customer segment is the garment industry. That covers two kinds of business:
 
@@ -74,11 +74,34 @@ API: `GET /api/v1/vat/exports?from&to&kind=direct|deemed&risk=1&format=csv`. Cus
 - The company profile is *RMG — deemed exporter (accessories / packaging)*: not 100 % export-oriented, manufacturer
   (AT 2 %), with its own bond licence.
 
-## 4. Planned (R6.2+)
+## 4. R6.2 — deeper RMG
 
-1. **UD / bond register:** UD quantities per item and consumption by deemed-export invoices, with an alert before a UD
-   is exhausted, and bond licence renewals.
-2. **Mushak 6.4** for subcontracted processes (printing, washing, embroidery) and the contractual-production register.
-3. **Export proceeds realisation (PRC):** link bank realisation to EXP / invoices.
-4. **SD decreasing adjustment** when inputs are exported within six months.
-5. A garment-industry item and HS dataset (accessories, packaging, fabrics) for faster setup.
+- **UD / bond register** (*NBR VAT › UD / bond register*, `/vat/ud-register`): each exporter's Utilization Declaration
+  (or UP) with its items and quantities, the master export LC and buyer, and expiry. Quantities supplied are summed from
+  the deemed-export invoices that quote the UD; the register shows used %, remaining and state — *ok*, *warn* (≥ 80 %),
+  *exhausted*, *over*, *expired*, *closed*. A second tab lists **bond licences** (your own and every exporter
+  customer's), warning 90 days ahead. Once a UD is used, its number and exporter are locked and it cannot be deleted.
+- **UD fit on the invoice:** when a deemed-export invoice quotes a UD from the register, the checklist on the sale form
+  (live) and the invoice view adds a sixth check — the items are on the UD, the UD is valid on the invoice date and the
+  quantities fit what is left. A UD that is not in the register adds no check.
+- **Export proceeds (PRC):** on approved foreign-currency exports, record each bank realisation — date, PRC number,
+  bank, FC amount and rate (0.5 % over-payment tolerance, PRC numbers unique). The export register shows realised /
+  outstanding / **overdue** (unrealised 120 days after shipment) with totals, a filter and a *Record PRC* button; the
+  invoice has an *Export proceeds* card. Removing a PRC needs an approver and is audited.
+- **Subcontracting (Mushak 6.4) register** (*Production › Subcontracting register*): contractual batches with the
+  process (manufacture, printing, embroidery, washing, dyeing, lamination), inputs still at the contractor, days out and
+  value; overdue after 30 days by default; CSV.
+- **Mushak 6.2.1** purchase-sales book for traded goods and **Mushak 6.5** challan print on stock transfers.
+- **RMG starter catalogue** in *Data import*: 31 common garment inputs, trims, labels, packaging and garments with HS
+  codes.
+
+Demo data (R6.2): AURORA KNIT has three UDs — the current one 83 % used (warn), a fresh one, and last year's, expired.
+Older direct exports are fully realised; two are overdue (one part-paid) and two are still inside the 120-day window.
+
+API: `GET/POST /vat/uds`, `GET/PUT/DELETE /vat/uds/{id}`, `POST /vat/uds/fit`, `POST/DELETE /sales/{id}/realisations`,
+`GET /production/subcontract`, `GET /mushak/6.2.1`, `POST /import` — see `docs/API.md`.
+
+## 5. Still planned
+
+1. **SD decreasing adjustment** when inputs are exported within six months.
+2. UD amendments (quantity changes with history) and BBLC value tracking against the UD.

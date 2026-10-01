@@ -27,6 +27,7 @@ is lost on restart or redeploy.
 | Units of measure | `units`, `units/{id}` | **native** — `units` |
 | NBR tariff | `tariff` | **native** — `tariff_lines` (per fiscal year) |
 | Audit trail | `audit` | **native** — `audit_events` (append-only) |
+| Backups (R6.2) | `backups`, `backups/{id}`, `backups/{id}/verify` | **native** — `backups` (gzip snapshot + SHA-256), scheduler 02:00 / 14:00 Dhaka with catch-up |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
 | Everything else: sales, purchases, parties, items, stock, production, accounting, VAT returns, notifications, dashboard, search… | 70 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
@@ -69,7 +70,7 @@ plan runs exactly one.
 
 | Table | Purpose |
 | --- | --- |
-| `users` | accounts, role, status, scrypt hash, `password_is_demo`, preferences (JSONB) |
+| `users` | accounts, role (incl. `vatOfficer`), status, scrypt hash, `password_is_demo`, preferences (JSONB); **R6.2** `access_until` for VAT officers |
 | `sessions` | one row per sign-in; `revoked_at` + `revoke_reason` (signedOut, passwordChanged, passwordReset, deactivated) |
 | `login_failures` | failures per username, `locked_until` |
 | `saved_views` | list views per user and table |
@@ -77,8 +78,13 @@ plan runs exactly one.
 | `units` | units of measure; ids from `unit_id_seq` |
 | `tariff_lines` | NBR tariff per fiscal year (`numeric` rates) |
 | `audit_events` | append-only audit trail (indexed by time, Dhaka day, record, record type). **R6:** every row is sealed with `prev_hash` + `hash` (SHA-256 chain); triggers refuse UPDATE / DELETE / TRUNCATE — see [NBR_ENLISTMENT.md](NBR_ENLISTMENT.md) |
+| `backups` | **R6.2:** scheduled / manual snapshots (`bytea` gzip JSON, SHA-256, row counts); last 30 kept; one scheduled row per slot (partial unique index) |
 | `compat_state` | JSONB state of the modules not yet ported |
 | `meta` | seed version, tariff fiscal year |
+
+**Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
+API takes a backup of every table into `backups` and re-seeds the demo data set. Set `DEMO_RESEED=off` on a customer
+installation to keep its data across upgrades. `BACKUPS=off` disables the scheduler (tests).
 
 The schema is in `api/src/db/schema.ts`. Migrations are generated with `npm --prefix api run db:generate` into `api/drizzle/` and applied automatically at start-up.
 

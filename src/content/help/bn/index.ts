@@ -6,6 +6,7 @@ import inventoryProduction from "./inventory-production"
 import accounting from "./accounting"
 import nbrVat from "./nbr-vat"
 import adminReference from "./admin-reference"
+import r62 from "./r62"
 
 /** Bangla knowledge base (NFC). `satisfies` makes a missing or unknown article a type error. */
-export const BN = { ...gettingStarted, ...sales, ...purchase, ...inventoryProduction, ...accounting, ...nbrVat, ...adminReference } satisfies HelpTexts
+export const BN = { ...gettingStarted, ...sales, ...purchase, ...inventoryProduction, ...accounting, ...nbrVat, ...adminReference, ...r62 } satisfies HelpTexts
