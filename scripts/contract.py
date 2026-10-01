@@ -194,6 +194,8 @@ ENDPOINTS = [
     E("PUT", "/vat/settings", "settings.manage", "Update the NBR settings (explicit edit mode in the UI)"),
     E("GET", "/mushak/6.10?from=2026-08-01&to=2026-08-31", None, "Mushak 6.10 — purchases and sales above Tk 2,00,000 {company, from, to, purchases, sales, totals} (legacy \"totalPurchase\" error, D-05)", csv=True),
     E("GET", "/audit", "audit.view", "Audit trail — Page<AuditEvent>; filters q/from/to/entity/action/actor/entityId", page=True, csv=True),
+    E("GET", "/audit/verify", "audit.view", "R6: verify the tamper-evident SHA-256 audit chain {ok, algorithm, count, head, checkedAt, broken?}"),
+    E("GET", "/vat/exports?from=2025-07-01&to=2026-09-25", None, "R6 (RMG): export & deemed-export register {from, to, rows (LC/UD/EXP/FC + NBR conditions met / missing), totals}; ?kind=direct|deemed, ?risk=1", csv=True),
 ]
 
 sessions = {}

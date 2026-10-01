@@ -19,6 +19,7 @@ import { fmtDateTime } from "@/lib/format"
 import { economicCode, HEAD_NOTE, RETURN_NOTES, RETURN_PARTS, TREASURY_HEADS } from "@/lib/r4"
 import { vatSettingsInput } from "@/lib/schemas"
 import { useR4Refresh } from "@/features/r4/r4-actions"
+import { ProfileCard } from "./profile-card"
 
 /** NBR settings: VAT zone code for the economic codes (Part 9 of 9.1), and the Mushak 9.1 note catalogue with where each note comes from. */
 export function VatSettingsPage() {
@@ -34,7 +35,7 @@ export function VatSettingsPage() {
   const { register, handleSubmit, reset, setError, watch, formState: { errors, isDirty } } = form
   React.useEffect(() => { if (q.data) reset({ zoneCode: q.data.zoneCode }) }, [q.data, reset])
   const save = useMutation({
-    mutationFn: (v: { zoneCode: string }) => api.vat.saveSettings(v),
+    mutationFn: (v: { zoneCode: string }) => api.vat.saveSettings({ ...v, profile: q.data?.profile }),
     onSuccess: () => { refresh(); toast.success(t("saved")); setEditing(false) },
     onError: (e) => {
       if (e instanceof ApiError && e.errors && Object.keys(e.errors).length) Object.entries(e.errors).forEach(([k, v]) => setError(k as never, { message: v[0] }))
@@ -48,6 +49,7 @@ export function VatSettingsPage() {
     <>
       <PageHeader title={t("title")} description={t("subtitle")} />
       <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid content-start gap-4">
         <form onSubmit={handleSubmit((v) => save.mutate(v))} noValidate>
           <Card>
             <CardHeader className="flex-row items-start justify-between gap-2">
@@ -82,6 +84,8 @@ export function VatSettingsPage() {
             )}
           </Card>
         </form>
+        <ProfileCard settings={q.data} />
+        </div>
         <Card>
           <CardHeader><CardTitle>{t("notesCard")}</CardTitle><CardDescription>{t("notesHint")}</CardDescription></CardHeader>
           <CardContent className="px-0">

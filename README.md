@@ -1,9 +1,12 @@
-# DiziVAT — VAT management system (Sprints 1–4 + R2–R4 + Knowledge base + R5 backend)
+# DiziVAT — VAT management system (Sprints 1–4 + R2–R4 + Knowledge base + R5 backend + R6 enlistment & RMG)
 
 > **Branch `r5-nestjs`:** the same app on a real backend: **NestJS 11 + PostgreSQL** (Drizzle ORM), deployable to
 > **Render + Neon**. See [docs/BACKEND.md](docs/BACKEND.md).
 > [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/deshiklab/dizivat/tree/r5-nestjs)
 > The `main` branch keeps the in-browser mock demo on GitHub Pages: https://deshiklab.github.io/dizivat/en/
+>
+> **Branch `r6-enlistment-rmg` (v0.10.0):** readiness for **NBR VAT-software enlistment** and features for the **RMG
+> (garments)** segment — see [docs/NBR_ENLISTMENT.md](docs/NBR_ENLISTMENT.md) and [docs/RMG.md](docs/RMG.md). Tag `v0.9.1` is the state before.
 
 Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (Base UI) · next-intl (EN/বাংলা) · TanStack Query + Table · React Hook Form + Zod · Recharts.
 
@@ -34,6 +37,32 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
   - **Layout:** the form is laid out in an off-screen A4-wide frame (paper-width breakpoints, always the light print look, even in dark mode), paginated between table rows, rasterised at about 240 dpi and written as a multi-page A4 PDF named after the form and document (e.g. `Mushak-6.3_S-09260012.pdf`).
   - **Trade-off:** the pages are images, so the text can't be selected; Print → *Save as PDF* still gives a text PDF.
   - **Also fixed:** the Mushak 6.1/6.2 books printed a blank page (they weren't marked as a print area).
+- **R6.1 — NBR enlistment readiness + RMG (v0.10.0, branch `r6-enlistment-rmg`):**
+  - **Tamper-evident audit trail:** every event is sealed in a SHA-256 hash chain (`prev_hash` → `hash`). PostgreSQL
+    triggers refuse UPDATE, DELETE and TRUNCATE on `audit_events`, and earlier rows are sealed once on upgrade.
+    `GET /audit/verify` and a card on **Audit trail** recompute the chain and name the first altered or deleted
+    record.
+  - **Rules engine** (`src/lib/rules.ts`): effective-dated statutory parameters, each with its legal reference.
+    - Return due date: 15 days, or 20 for the extended category, moved to the next working day. Fri/Sat, the fixed
+      national days and company-defined gazetted holidays are skipped.
+    - Mushak 6.6 due 3 working days after the return (VDS Guidelines 2025).
+    - Advance tax on imports at **2 %** for manufacturers / **7.5 %** for commercial importers (Finance Ordinance
+      2025), pre-filled on import lines.
+    - 6-period credit windows.
+  - **Business profile** (VAT settings): segment (RMG direct / deemed / composite …), 100 % export-oriented
+    (Rule 21 note on Mushak 4.3), importer class, deadline category, bond licence with expiry warning, trade-body
+    membership and extra holidays. All changes are audited field by field.
+  - **RMG:**
+    - customer exporter profile (exporter type, bond licence, BGMEA / BKMEA / BGAPMEA no.);
+    - UD / UP, EXP no., currency, FC value and exchange rate on export and deemed-export invoices, with a live
+      checklist of the **five NBR deemed-export conditions** (clarification of 09-10-2025) or the direct-export
+      documents;
+    - the same checklist on the sale detail;
+    - **NBR VAT › Export register** (`/vat/export-compliance`): totals for direct, deemed and *zero-rating at risk*,
+      filters, CSV, PDF and print.
+  - **Tests:** `e2e_r6.py` (31 checks); `api_native.py` +8 (append-only database, sealed rows, chain verifies and
+    survives restarts); contract 526 checks / 178 endpoints; axe 0 violations / 224 runs. All earlier suites pass
+    unchanged, and 6 visual baselines were updated for the new sidebar entry.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
@@ -97,7 +126,7 @@ npm run test:e2e                  # server must be running on a fresh seed
 | `visual.py` | Compares those screens with `tests/visual/baseline/` and fails if more than 20 pixels change. Diffs go to `$SHOT_DIR/diff/`. Accept intended changes with `python visual.py --update` |
 | `e2e.py` | 12 Sprint 1 flows (create, approve, stock guard, bulk approve, palette, shortcuts, URL filters, language switch, preferences) |
 | `e2e_s2.py` | 33 Sprint 2 flows (sign-in, roles, edit, cancel, undo, customers, vendors, ledger, saved views, expired session, i18n completeness) |
-| `contract.py` | API contract: 176 endpoints × (anonymous → 401, role without the permission → 403 naming it, 200 JSON, `Page<T>` shape, CSV content type) + 127 specific 404/409/422 cases — 520 checks. Non-destructive; runs before `e2e_s3.py` (which deactivates `auditor`). `--doc` regenerates `docs/API.md`; CI fails if it is out of date |
+| `contract.py` | API contract: 178 endpoints × (anonymous → 401, role without the permission → 403 naming it, 200 JSON, `Page<T>` shape, CSV content type) + 127 specific 404/409/422 cases — 526 checks. Non-destructive; runs before `e2e_s3.py` (which deactivates `auditor`). `--doc` regenerates `docs/API.md`; CI fails if it is out of date |
 | `e2e_s3.py` | 39 Sprint 3 flows (invite → one-time password → forced change, operator locked out of admin pages, self-edit guard, reset revokes sessions, deactivation blocks sign-in, company validation + read-only for non-admins, tariff search, HS lookup, audit filters/detail/CSV, notifications, Bangla) |
 | `e2e_s4.py` | 32 Sprint 4 flows (units CRUD with in-use guards, transfer form → draft leaves stock alone → approve moves it and keeps the company total, over-stock blocks approval, branch ledger shows transfer in, damage with the 'lost' note rule, finished goods by branch, branch selects on sale/purchase, History tabs + no-access message, Mushak 6.3 branch address, audit links, deferred charts, Bangla) |
 | `e2e_r2.py` | 32 R2 flows (import form: tariff pre-fill, live duty summary, LC-after-BoE rejected, approve → BoE panel, duties stored to 2 dp, stock in; service purchase: no branch, VAT and VDS from the service code, PS- draft; debit note: pre-selected purchase, capped at the remaining quantity, approve reverses stock and input tax, Mushak 6.8 print, blocks cancelling the purchase; opening stock; master-item wizard with the HS requirement, tariff defaults and override reason; Mushak 6.1/6.2 books: closing balance = stock on hand, item-type and date-range checks; operator can draft but not approve; Bangla) |
@@ -106,7 +135,8 @@ npm run test:e2e                  # server must be running on a fresh seed
 | `e2e_kb.py` | 24 knowledge-base checks (help centre with 34 articles in 9 topics and the topic filter; search ranking, no-results and Clear, Bangla search, Bangla/Latin digits; article TOC anchors, related, screens covered, help: and in-app links, prev/next and breadcrumb; Print and PDF open a standalone print document; Share → Copy link; article HTML and Markdown downloads with absolute links; full-manual Markdown and HTML with in-document links, Print full manual; top-bar Help for this page (longest route match), shortcuts, sidebar link and ⌘K; Bangla article, downloads and print font; all 68 article pages, 404 for unknown articles, operator and viewer access; no console errors). Read-only |
 | `e2e_m43.py` | 13 checks for the Mushak 4.3 register and the copyright line (sidebar entry and the (4.3) BOM label, compliance-centre card, ⌘K in English and Bangla with Latin digits; active list and official form, selection in the URL, search, all versions with the superseded note, Print, Open in Bill of materials, Help for this page, Bangla page; copyright in the status footer (English and Bangla labels, web/e-mail/phone links), on the sign-in page, in the phone drawer and at the end of HTML and Markdown exports; no console errors). Read-only |
 | `e2e_pdf.py` | 9 checks for the **PDF** buttons. Each download is parsed and checked (xref offsets, A4 media boxes, page count, JPEG pages, Bangla title) and must contain no blank pages. Covers: Mushak 6.3 in English, Bangla and dark mode (still a light page), no Gotenberg placeholder, the exporter is lazy-loaded; 8 side-sheet forms (6.7, 6.8, 6.6, TR-6, receipt, voucher, 6.4, 4.3) from any tab, named by document number; 9.1, statement, 6.10, 4.3 register and purchase paginated; the 6.1 book in landscape with no blank pages; Print still opens the print dialog. Read-only |
-| `a11y.py` | axe-core WCAG 2.2 AA on 108 pages × light/dark (216 runs; admin pages as `admin`). Fails on any violation |
+| `e2e_r6.py` | 31 R6 checks (return due 15 Oct and Mushak 6.6 due 20 Oct for Sep 2026; business profile card: segment, AT 2 % → 7.5 % for a commercial importer, a company holiday moves the due date live and in the compliance centre, invalid dates rejected, Rule 21 note on 4.3, audited per field, bond licence required for an export-oriented RMG unit, `settings.manage` gating; customer RMG section and expired-bond warning; sale form deemed-export checklist going from 3 missing to complete, FC → taka, direct-export EXP field; UD / FC saved, unsupported currency rejected; sale-detail checklist; export register API, risk filter, sidebar + compliance-centre entry, URL filters, CSV, links, Bangla, phone; audit chain verifies and moves with every event, integrity card for the auditor, operators blocked; no console errors). Creates one draft invoice |
+| `a11y.py` | axe-core WCAG 2.2 AA on 112 pages × light/dark (224 runs; admin pages as `admin`). Fails on any violation |
 | `perf.py` | Cold-cache load of 14 key pages with 4× CPU throttling and a 9 Mbps / 40 ms network: LCP < 2.5 s, CLS < 0.1, initial JS < 400 KB compressed (chunks the server HTML references — the critical path) and total JS < 500 KB (including chunks fetched after first paint, such as the dashboard charts). Writes `/tmp/perf.json` |
 
 Environment variables: `BASE_URL` (default `http://localhost:3000`) and `SHOT_DIR` (where screenshots are written).

@@ -29,12 +29,13 @@ import { CUSTOMS_HOUSES, ORIGIN_COUNTRIES } from "@/lib/r2"
 import type { Purchase } from "@/lib/types"
 import { fmtHs, fmtNum } from "@/lib/format"
 import { calcImportLine, round2 } from "@/lib/vat"
+import { atRateFor, profileOf } from "@/lib/rules"
 
 type In = z.input<typeof importInput>
 type Out = z.output<typeof importInput>
 const RATE_KEYS = ["cdRate", "rdRate", "sdRate", "vatRate", "aitRate", "atRate"] as const
 const RATE_LABEL: Record<(typeof RATE_KEYS)[number], string> = { cdRate: "CD", rdRate: "RD", sdRate: "SD", vatRate: "VAT", aitRate: "AIT", atRate: "AT" }
-const blankLine = (usdRate = 122) => ({ itemId: "", qty: undefined as unknown as number, usd: undefined as unknown as number, usdRate, av: undefined, price: 0, cdRate: 0, rdRate: 0, sdRate: 0, vatRate: 15, aitRate: 5, atRate: 5, rebateable: true, vds: false })
+const blankLine = (usdRate = 122, atRate = 2) => ({ itemId: "", qty: undefined as unknown as number, usd: undefined as unknown as number, usdRate, av: undefined, price: 0, cdRate: 0, rdRate: 0, sdRate: 0, vatRate: 15, aitRate: 5, atRate, rebateable: true, vds: false })
 
 /**
  * Import purchase against a Bill of Entry (legacy "Purchase → Import"). Duty rates pre-fill from the NBR tariff for
@@ -61,6 +62,8 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
   const mainBranch = branches.find((b) => b.category === "factory")?.id ?? branches[0]?.id ?? ""
   const buyables = (itemsPage?.data ?? []).filter((i) => i.group !== "Finished Goods" && i.active)
   const foreign = vendors.filter((v) => v.mode === "Foreign")
+  // R6: advance tax follows the company's importer class (manufacturer 2 % / commercial importer 7.5 %), not the tariff row
+  const { data: vatSettings } = useQuery({ queryKey: ["vat-settings"], queryFn: () => api.vat.settings() })
 
   const form = useForm<In, unknown, Out>({
     resolver: zodResolver(importInput), mode: "onTouched",
@@ -82,6 +85,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
   const w = useWatch({ control })
   const vendor = vendors.find((v) => v.id === w.vendorId)
   const [tariffNote, setTariffNote] = React.useState<Record<number, string>>({})
+  const atRate = atRateFor(profileOf(vatSettings), w.issueDate || TODAY)
 
   const calc = (w.lines ?? []).map((l) => calcImportLine({
     qty: Number(l?.qty) || 0, usd: Number(l?.usd) || 0, usdRate: Number(l?.usdRate) || 0, av: Number(l?.av) || undefined,
@@ -97,7 +101,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
     if (!it) return
     try {
       const tl = await qc.fetchQuery({ queryKey: ["tariff", "hs", it.hsCode], queryFn: () => api.tariff.lookup(it.hsCode), staleTime: 3600_000 })
-      const r = { cdRate: tl.cd, rdRate: tl.rd, sdRate: tl.sd, vatRate: tl.vat, aitRate: tl.ait, atRate: tl.at }
+      const r = { cdRate: tl.cd, rdRate: tl.rd, sdRate: tl.sd, vatRate: tl.vat, aitRate: tl.ait, atRate: tl.at > 0 ? atRate : 0 }
       for (const k of RATE_KEYS) setValue(`lines.${i}.${k}`, r[k], { shouldDirty: true })
       setTariffNote((n) => ({ ...n, [i]: t("fromTariff", { hs: fmtHs(it.hsCode), tti: fmtNum(tl.tti, locale) }) }))
     } catch {
@@ -228,7 +232,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
                   </fieldset>
                 )
               })}
-              <div><Button type="button" variant="outline" size="sm" onClick={() => append(blankLine(Number(getValues("lines.0.usdRate")) || 122))}><Plus /> {ts("addLine")}</Button></div>
+              <div><Button type="button" variant="outline" size="sm" onClick={() => append(blankLine(Number(getValues("lines.0.usdRate")) || 122, atRate))}><Plus /> {ts("addLine")}</Button></div>
             </CardContent>
           </Card>
 

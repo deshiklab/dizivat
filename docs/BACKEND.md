@@ -76,7 +76,7 @@ plan runs exactly one.
 | `company` (single row) + `branches` | company profile printed on Mushak forms |
 | `units` | units of measure; ids from `unit_id_seq` |
 | `tariff_lines` | NBR tariff per fiscal year (`numeric` rates) |
-| `audit_events` | append-only audit trail (indexed by time, Dhaka day, record, record type) |
+| `audit_events` | append-only audit trail (indexed by time, Dhaka day, record, record type). **R6:** every row is sealed with `prev_hash` + `hash` (SHA-256 chain); triggers refuse UPDATE / DELETE / TRUNCATE — see [NBR_ENLISTMENT.md](NBR_ENLISTMENT.md) |
 | `compat_state` | JSONB state of the modules not yet ported |
 | `meta` | seed version, tariff fiscal year |
 

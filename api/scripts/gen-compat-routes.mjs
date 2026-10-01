@@ -9,7 +9,7 @@ const root = join(here, "../../src/app/api/v1")
 /** Routes served by native NestJS modules (api/src/modules). Keep in sync with docs/BACKEND.md. */
 export const NATIVE = [
   "auth/login", "auth/logout", "me", "me/password", "me/preferences", "me/views",
-  "users", "users/[id]", "users/[id]/reset-password", "company", "audit", "tariff", "units", "units/[id]",
+  "users", "users/[id]", "users/[id]/reset-password", "company", "audit", "audit/verify", "tariff", "units", "units/[id]",
 ]
 
 const found = []

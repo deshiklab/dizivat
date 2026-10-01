@@ -9,7 +9,7 @@ import type { Permission } from "@/lib/auth/roles"
  * `release` = the R-milestone from the development plan in which the page ships.
  * `ready` = built (Sprints 1–4 + R2 + R3 + R4) (renders a real page); others render a "Planned for Rx" page.
  */
-export type Release = "S1" | "R1" | "R2" | "R3" | "R4"
+export type Release = "S1" | "R1" | "R2" | "R3" | "R4" | "R6"
 export interface NavItem { key: string; href: string; release: Release; ready?: boolean; legacy?: string; perm?: Permission }
 export interface NavGroup { key: string; icon: LucideIcon; href: string; items: NavItem[]; shortcut?: string }
 
@@ -19,6 +19,7 @@ export const RELEASE_DATES: Record<Release, string> = {
   R2: "2026-12-24",
   R3: "2027-01-21",
   R4: "2027-02-25",
+  R6: "2027-04-29",
 }
 
 export const NAV: NavGroup[] = [
@@ -83,6 +84,7 @@ export const NAV: NavGroup[] = [
       { key: "vds", href: "/vat/vds", release: "R4", ready: true },
       { key: "adjustments", href: "/vat/adjustments", release: "R4", ready: true },
       { key: "mushak610", href: "/vat/mushak-6-10", release: "R4", ready: true },
+      { key: "exportRegister", href: "/vat/export-compliance", release: "R6", ready: true },
       { key: "vatSettings", href: "/vat/settings", release: "R4", ready: true, perm: "settings.manage" },
       { key: "tariff", href: "/vat/tariff", release: "R1", ready: true, legacy: "/en/nbrvat/taxtarrif/" },
     ],

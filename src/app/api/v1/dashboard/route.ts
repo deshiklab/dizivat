@@ -16,7 +16,7 @@ function deadlines(cur: string, prev: string): DashboardData["deadlines"] {
   const ret = (p: string) => db.returns.find((r) => r.period === p)
   const r = ret(cur), rp = ret(prev)
   const c = computeReturn(db, cur, r?.manual)
-  const due = returnDue(cur), duePrev = returnDue(prev)
+  const due = returnDue(cur, db.vatSettings), duePrev = returnDue(prev, db.vatSettings)
   const toIssue = vdsEligible("purchase").filter((e) => periodOf(e.date) === cur && e.remaining > 0.004).length
   const past = (d: string) => TODAY > d
   const st = (done: boolean, d: string) => (done ? "done" : past(d) ? "overdue" : "due") as "done" | "due" | "overdue"
@@ -70,7 +70,7 @@ export const GET = withAuth(null, async () => {
   }
 
   const end = new Date(y, m, 0).getDate()
-  const due = returnDue(cur)
+  const due = returnDue(cur, db.vatSettings)
   const data: DashboardData = {
     period: { label: cur, start: `${cur}-01`, end: `${cur}-${end}`, returnDue: due, daysLeft: Math.round((Date.parse(due) - Date.parse(TODAY)) / 864e5) },
     kpis: {

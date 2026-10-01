@@ -12,6 +12,7 @@ import type {
 import { TODAY } from "../company"
 import { economicCode, periodEnd, periodOf, periodsBetween, returnDue } from "../r4"
 import { round2 } from "../vat"
+import type { VatProfile } from "../types"
 import { computeReturn, EMPTY_MANUAL, type ReturnSource } from "./vat-return"
 
 export const GO_LIVE = "2026-07-01"
@@ -72,6 +73,15 @@ function moneyDoc(kind: MoneyDoc["kind"], i: number, date: string, party: Party,
     process: approved ? "Approved" : "Created", issuedBy: kind === "receipt" ? "Farzana Akter" : OPERATOR,
     createdAt: at(date, 4), history: trail(date, i, kind === "receipt" ? "Farzana Akter" : OPERATOR, approved),
   }
+}
+
+/**
+ * R6: demo business profile — a flexible-packaging maker supplying garment exporters (RMG backward linkage):
+ * deemed exporter under a general bonded warehouse, BGAPMEA member, manufacturer for advance tax.
+ */
+export const SEED_PROFILE: VatProfile = {
+  segment: "rmgDeemed", exportOriented: false, importerType: "manufacturer", filerCategory: "standard",
+  bondLicenseNo: "CUS-BOND/DHK/D-0417/2019", bondLicenseExpiry: "2027-06-30", associationNo: "BGAPMEA-1142", holidays: [],
 }
 
 export function seedR4(d: SeedSrc) {
@@ -210,6 +220,6 @@ export function seedR4(d: SeedSrc) {
 
   const accountingConfig: AccountingConfig = { closedUpTo: "2026-06-30", allowAdvance: true, autoAllocate: true }
   return {
-    moneyAccounts: structuredClone(SEED_ACCOUNTS), moneyDocs, vds, adjustments, treasury, returns, accountingConfig, vatSettings: { zoneCode: ZONE },
+    moneyAccounts: structuredClone(SEED_ACCOUNTS), moneyDocs, vds, adjustments, treasury, returns, accountingConfig, vatSettings: { zoneCode: ZONE, profile: structuredClone(SEED_PROFILE) },
   }
 }

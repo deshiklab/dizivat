@@ -20,6 +20,7 @@ import { fmtDate, fmtDateTime, fmtNum } from "@/lib/format"
 import type { AuditEvent } from "@/lib/types"
 import { ACTION_ICON, ACTION_TONE, AUDIT_ACTIONS, AUDIT_ENTITIES } from "./audit-meta"
 import { AuditSheet } from "./audit-sheet"
+import { IntegrityCard } from "./integrity-card"
 
 const FACETS = ["entity", "action", "actor"] as const
 
@@ -80,6 +81,7 @@ function AuditInner() {
   return (
     <>
       <PageHeader title={t("title")} description={q.data ? t("summary", { count: fmtNum(q.data.total, locale) }) : t("subtitle")} />
+      <IntegrityCard />
       <DataTable<AuditEvent>
         tableId="audit" caption={t("title")} columns={columns} data={q.data?.data} total={q.data?.total ?? 0}
         loading={q.isLoading} fetching={q.isFetching} error={q.error} onRetry={() => q.refetch()}

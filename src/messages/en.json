@@ -51,7 +51,8 @@
     "accountingConfig": "Accounting config",
     "mushak610": "Mushak 6.10",
     "vatSettings": "VAT settings",
-    "mushak43": "Mushak 4.3"
+    "mushak43": "Mushak 4.3",
+    "exportRegister": "Export register"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -3120,8 +3121,11 @@
       "settings": "VAT settings",
       "settingsHint": "Zone and economic codes",
       "tariff": "Tariff",
-      "tariffHint": "HS codes and rates"
-    }
+      "tariffHint": "HS codes and rates",
+      "exports": "Export & deemed-export register",
+      "exportsHint": "LC, UD, EXP and NBR zero-rating conditions"
+    },
+    "vdsIssueBy": "Issue Mushak 6.6 by {date} (3 working days after filing)"
   },
   "m610": {
     "title": "Mushak 6.10",
@@ -3249,5 +3253,141 @@
     "draftWarn": "Draft — not yet approved. Approve it in Bill of materials before filing this form with the VAT office.",
     "pdfHint": "“PDF” downloads the form as an A4 file; “Print” opens the printer dialog.",
     "learnMore": "How price declarations work"
+  },
+  "rmg": {
+    "checklistTitle": "NBR zero-rating conditions",
+    "complete": "Complete",
+    "atRisk": "At risk",
+    "incomplete": "{n, plural, one {# condition missing} other {# conditions missing}} — zero-rating at risk",
+    "met": "Met",
+    "notMet": "Missing",
+    "check": {
+      "actualExporter": "Buyer is the actual exporter",
+      "backToBackLc": "Local back-to-back LC (no. and date)",
+      "foreignCurrency": "Paid in foreign currency (currency and FC value)",
+      "bondedExporter": "Exporter holds a valid bond licence",
+      "inUdUp": "Item listed in the exporter's UD / UP",
+      "exportLc": "Export LC / sales contract (no. and date)",
+      "expForm": "EXP form number",
+      "billOfExport": "Bill of Export (no. and date)",
+      "customsDestination": "Customs house and destination"
+    },
+    "deemedRule": "Deemed exports are zero-rated only when all five conditions of NBR's clarification of 9 October 2025 are met; otherwise VAT at 15% applies.",
+    "directRule": "Keep these documents for every direct export — they support Mushak 9.1 note 1 at audit.",
+    "udNo": "UD / UP no.",
+    "udHint": "The exporter's Utilization Declaration / Permission that lists this item.",
+    "udDate": "UD / UP date",
+    "exporterBond": "Exporter's bond licence",
+    "bondFromCustomer": "Leave blank to use {no} from the customer record.",
+    "bondHint": "Not on the customer record — enter the exporter's bond licence no.",
+    "expNo": "EXP no.",
+    "expHint": "Bangladesh Bank EXP form for the shipment.",
+    "currency": "Invoice currency",
+    "fcValue": "Foreign-currency value",
+    "exchangeRate": "Exchange rate (Tk)",
+    "fcBdt": "= Tk {amount}",
+    "rule21": "Your business profile says you are a 100% export-oriented unit: you need not submit Mushak 4.3 price declarations (VAT & SD Rules, Rule 21). Declarations kept here are for your own records.",
+    "kind": {
+      "all": "All exports",
+      "direct": "Direct export",
+      "deemed": "Deemed export"
+    },
+    "register": {
+      "title": "Export & deemed-export register",
+      "subtitle": "Every zero-rated export invoice with its LC, UD, EXP and Bill of Export — and the NBR conditions it meets.",
+      "filters": "Register filters",
+      "from": "From",
+      "to": "To",
+      "toBeforeFrom": "'To' must be on or after 'From'.",
+      "kind": "Type",
+      "riskOnly": "Incomplete only",
+      "error": "Could not load the register",
+      "totalsDirect": "Direct exports",
+      "totalsDeemed": "Deemed exports",
+      "totalsRisk": "Zero-rating at risk",
+      "invoices": "{count, plural, one {# invoice} other {# invoices}}",
+      "riskHint": "Complete the missing documents before filing the return, or charge VAT.",
+      "table": "Export invoices",
+      "empty": "No export invoices in this range."
+    },
+    "col": {
+      "date": "Date",
+      "invoice": "Invoice (6.3)",
+      "customer": "Customer",
+      "kind": "Type",
+      "lc": "LC / BBLC",
+      "doc": "UD / EXP / B/E",
+      "fc": "FC value",
+      "value": "Value (Tk)",
+      "status": "Conditions"
+    },
+    "party": {
+      "title": "RMG / export profile",
+      "sub": "For garment exporters buying from you against a back-to-back LC — used by the deemed-export checks.",
+      "exporterType": "Exporter type",
+      "type": {
+        "none": "Not an exporter",
+        "direct": "Direct exporter (100% export-oriented garment factory)",
+        "deemed": "Deemed exporter (accessories / packaging)"
+      },
+      "bondLicenseNo": "Bond licence no.",
+      "bondHint": "Customs bonded-warehouse licence — renewed every 2 years.",
+      "bondLicenseExpiry": "Bond licence valid until",
+      "associationNo": "BGMEA / BKMEA / BGAPMEA membership no.",
+      "bondExpired": "The bond licence expired on {date} — deemed exports to this customer will not be zero-rated until it is renewed."
+    },
+    "profile": {
+      "title": "Business profile",
+      "sub": "Used for due dates, advance tax on imports and the RMG (garments) rules.",
+      "edit": "Edit profile",
+      "saved": "Business profile saved",
+      "segmentLabel": "Business segment",
+      "segment": {
+        "rmgDirect": "RMG — direct exporter (garment factory)",
+        "rmgDeemed": "RMG — deemed exporter (accessories / packaging)",
+        "rmgComposite": "RMG — composite (direct and deemed)",
+        "manufacturer": "Manufacturer (local market)",
+        "trader": "Trader / commercial importer",
+        "service": "Service provider"
+      },
+      "importerTypeLabel": "Importer class",
+      "importerType": {
+        "manufacturer": "Manufacturer",
+        "commercial": "Commercial importer"
+      },
+      "atRate": "advance tax {rate}%",
+      "filerCategoryLabel": "Return deadline",
+      "filerCategory": {
+        "standard": "Standard — 15 days after the month",
+        "extended": "Government / bank / insurer — 20 days"
+      },
+      "exportOriented": "100% export-oriented unit",
+      "exportOrientedHint": "Mushak 4.3 not required (Rule 21).",
+      "bondLicenseNo": "Bond licence no.",
+      "bondLicenseExpiry": "Bond licence valid until",
+      "expires": "valid until {date}",
+      "associationNo": "Trade-body membership no.",
+      "holidays": "Extra holidays",
+      "holidaysHint": "One date per line (YYYY-MM-DD) — Eid and other gazetted holidays. Fridays, Saturdays and fixed national days are already counted.",
+      "noHolidays": "None added",
+      "bondExpired": "Your bond licence expired on {date}.",
+      "bondSoon": "Your bond licence expires on {date} — renew it in time.",
+      "nextDue": "Return for {period} is due on {date}"
+    },
+    "integrity": {
+      "title": "Tamper-evident audit chain",
+      "ok": "verified, {count} events intact",
+      "broken": "broken at {ref} ({at})",
+      "error": "could not verify",
+      "reason": {
+        "prevMismatch": "A record before this one was deleted or re-ordered.",
+        "hashMismatch": "This record was altered after it was written.",
+        "missingHash": "This record has no seal."
+      },
+      "hint": "Each event carries the SHA-256 hash of the one before it, so changing or deleting any record breaks the chain. The database also refuses edits and deletes.",
+      "head": "Latest {alg} seal",
+      "checked": "checked {when}",
+      "verify": "Verify now"
+    }
   }
 }

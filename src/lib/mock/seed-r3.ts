@@ -18,7 +18,9 @@ type Bal = { get: (itemId: string) => number; add: (itemId: string, q: number) =
 
 /** A 100 % export-oriented garment factory — buys against back-to-back LCs (deemed export). */
 export const EXTRA_CUSTOMERS: Party[] = [
-  { id: "c10", name: "AURORA KNIT COMPOSITE LTD", bin: "001582734-0302", mobile: "01713-909090", address: "Plot 41, Dhaka EPZ, Savar, Dhaka-1349", kind: "customer", mode: "Local", active: true, creditLimit: 3_000_000 },
+  { id: "c10", name: "AURORA KNIT COMPOSITE LTD", bin: "001582734-0302", mobile: "01713-909090", address: "Plot 41, Dhaka EPZ, Savar, Dhaka-1349", kind: "customer", mode: "Local", active: true, creditLimit: 3_000_000,
+    // R6 (RMG): direct garment exporter with a bonded warehouse — the buyer side of our deemed exports
+    exporterType: "direct", bondLicenseNo: "CUS-BOND/DEPZ/B-2231/2020", bondLicenseExpiry: "2027-12-31", associationNo: "BKMEA-3318" },
 ]
 
 /** Credit terms and VDS status for the seeded customers. */
@@ -33,10 +35,12 @@ export function enrichCustomers(customers: Party[]) {
 }
 
 /** Export invoices get their shipping documents (LC, customs station, Bill of Export). */
+export const SEED_USD_RATE = 122
 export function enrichExports(sales: Sale[], customers: Party[]) {
-  let lc = 210, bill = 5120
-  for (const s of sales) {
-    if (s.mode !== "Foreign") continue
+  let lc = 210, bill = 5120, exp = 4410
+  const foreign = sales.filter((s) => s.mode === "Foreign")
+  const lastId = foreign.filter((s) => s.process !== "Cancelled").at(-1)?.id
+  for (const s of foreign) {
     const c = customers.find((x) => x.id === s.customerId)
     const day = Number(s.issueDate.slice(8, 10))
     lc += 2 + (day % 4); bill += 7 + (day % 9)
@@ -44,6 +48,9 @@ export function enrichExports(sales: Sale[], customers: Party[]) {
       deemed: false, lcNo: `EXP-LC-${s.issueDate.slice(2, 4)}-${pad(lc)}`, lcDate: addDays(s.issueDate, -(25 + (day % 15))),
       customsHouse: day % 5 === 0 ? "101" : "301", country: c?.country ?? "UAE", billNo: `C-${bill}${day % 10}`, billDate: s.issueDate,
       shippingAddress: s.deliveryAddress, cnfFirm: "BAYLINK C&F AGENCY",
+      // R6 (RMG): EXP form and FC proceeds — the latest shipment still waits for its EXP number (shows as "at risk")
+      expNo: s.id === lastId ? undefined : `EXP-0934-${s.issueDate.slice(2, 4)}-${pad((exp += 3 + (day % 5)), 5)}`,
+      currency: "USD", fcValue: Math.round((s.subtotal / SEED_USD_RATE) * 100) / 100, exchangeRate: SEED_USD_RATE,
     }
   }
 }
@@ -118,7 +125,12 @@ export function seedR3Sales(startId: number, sales: Sale[], customers: Party[], 
       vehicle: `Dhaka Metro-Ta 14-${pad(2210 + i * 37)}`, mode: "Local", method: "Bank", vds: false, lines: [line],
       subtotal: t.subtotal, sd: t.sd, vat: t.vat, discount: 0, netTotal: t.netTotal, paid: 0, due: t.netTotal, process,
       issuedBy: "Arif Hossain", designation: "Shift-In-Charge", branchId: main.id, branchName: main.name,
-      export: { deemed: true, lcNo: lc, lcDate: addDays(date, -18), customsHouse: "", country: "", billNo: "", billDate: "", shippingAddress: epz.address },
+      // R6 (RMG): the first supply meets all five NBR conditions; the draft still lacks the exporter's UD (at risk)
+      export: {
+        deemed: true, lcNo: lc, lcDate: addDays(date, -18), customsHouse: "", country: "", billNo: "", billDate: "", shippingAddress: epz.address,
+        udNo: i === 0 ? "BKMEA/UD/2026/08812" : undefined, udDate: i === 0 ? addDays(date, -25) : undefined,
+        currency: "USD", fcValue: Math.round((t.subtotal / SEED_USD_RATE) * 100) / 100, exchangeRate: SEED_USD_RATE,
+      },
       history: history(created, "Arif Hossain", process, i),
     })
     if (process === "Approved") { bal.add(itemId, -qty); it.sold += qty }

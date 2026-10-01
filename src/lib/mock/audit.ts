@@ -1,11 +1,13 @@
 import type { AuditAction, AuditChange, AuditEntity, AuditEvent } from "../types"
 import type { User } from "../auth/roles"
 import { findUserByName } from "./users"
+import { GENESIS_HASH, linkHash, verifyChain, type ChainReport } from "../integrity"
 
 /** Calendar day in Asia/Dhaka (UTC+6, no DST) for an ISO instant. */
 export const dhakaDay = (iso: string) => new Date(new Date(iso).getTime() + 6 * 36e5).toISOString().slice(0, 10)
 
-interface AuditStore { events: AuditEvent[]; seq: number }
+/** `chain[i]` is the stored hash of `events[i]` (R6 tamper-evident trail); kept beside the events so lists are unchanged. */
+interface AuditStore { events: AuditEvent[]; seq: number; chain?: string[] }
 const g = globalThis as unknown as { __dzAudit?: AuditStore }
 export const auditStore: AuditStore = (g.__dzAudit ??= { events: [], seq: 0 })
 
@@ -31,7 +33,21 @@ export function recordAudit(e: AuditInput): AuditEvent {
     changes: e.changes?.length ? e.changes : undefined, note: e.note,
   }
   auditStore.events.push(ev)
+  sealChain()
   return ev
+}
+
+/** Hashes every event not yet in the chain (in order). Called on each append, so hashes are fixed at write time. */
+export function sealChain(store: AuditStore = auditStore) {
+  const chain = (store.chain ??= [])
+  for (let i = chain.length; i < store.events.length; i++) chain.push(linkHash(chain[i - 1] ?? GENESIS_HASH, store.events[i]))
+  return chain
+}
+
+/** Re-computes the chain from the events and compares it with the hashes stored when they were written. */
+export function verifyAudit(store: AuditStore = auditStore): ChainReport {
+  const chain = sealChain(store)
+  return verifyChain(store.events.map((e, i) => ({ ...e, prevHash: chain[i - 1] ?? GENESIS_HASH, hash: chain[i] })))
 }
 
 const show = (v: unknown): string => {

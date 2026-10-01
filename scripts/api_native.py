@@ -165,8 +165,22 @@ def run():
         check(psql(f"select count(*) from audit_events where ref like '%{TAG}%'") != "0", "audit events are rows in audit_events")
         check(int(psql("select count(*) from sessions where revoked_at is not null")) >= 3, "revoked sessions are kept for review")
         check(psql(f"select count(*) from compat_state where data::text ilike '%R5 Persist Test {TAG}%'") == "1", "compat documents are saved in compat_state")
+        # R6: tamper-evident, append-only audit trail (NBR enlistment — protection against tampering)
+        check(psql("select count(*) from audit_events where hash is null or prev_hash is null") == "0", "R6: every audit event is sealed (prev_hash + hash)")
+        def refused(q):
+            r = subprocess.run(["psql", DB_URL, "-At", "-c", q], capture_output=True, text=True)
+            return r.returncode != 0 and "append-only" in r.stderr
+        check(refused("update audit_events set note = 'x' where id = 1"), "R6: the database refuses UPDATE on audit_events")
+        check(refused("delete from audit_events where id = 1"), "R6: the database refuses DELETE on audit_events")
+        check(refused("truncate audit_events"), "R6: the database refuses TRUNCATE on audit_events")
     else:
         skipped("database checks (DATABASE_URL not set)")
+
+    # R6: chain verification endpoint
+    v = arif.get(f"{BASE}/audit/verify")
+    check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
+    check(len(v.json().get("head", "")) == 64 if v.ok else False, "R6: chain head is a SHA-256 hex digest")
+    check(session("kamal").get(f"{BASE}/audit/verify").status_code == 403, "R6: operators cannot run the verification (audit.view)")
 
     if RESTART:
         print("restart: everything survives")
@@ -186,6 +200,8 @@ def run():
         check(requests.post(f"{BASE}/auth/login", json={"username": name, "password": new_pw}).status_code == 200, "changed password survives a restart")
         n = arif.post(f"{BASE}/customers", json={"name": f"R5 After Restart {TAG}", "mode": "Foreign", "country": "Japan", "address": "4-5-6 Shibuya, Tokyo"})
         check(n.status_code == 201 and n.json()["id"] != cid, "new records after a restart get fresh ids")
+        v2 = arif.get(f"{BASE}/audit/verify").json()
+        check(v2.get("ok") is True and v2.get("count", 0) > v.json().get("count", 0), "R6: the chain continues across a restart")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

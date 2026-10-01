@@ -22,6 +22,13 @@ export interface Party {
   creditLimit?: number
   /** R3 (customers): buyer is a VAT-deduction-at-source entity (bank, NGO, listed company …) — VDS pre-ticked on sales */
   vdsWithholder?: boolean
+  /** R6 (RMG): the customer is an exporter — "direct" garment exporter or "deemed" (accessories / packaging) exporter */
+  exporterType?: "direct" | "deemed"
+  /** R6 (RMG): customs bond licence of the exporter (condition for zero-rated deemed exports) */
+  bondLicenseNo?: string
+  bondLicenseExpiry?: string
+  /** R6 (RMG): BGMEA / BKMEA / BGAPMEA membership number */
+  associationNo?: string
 }
 
 /** Party row in master-data lists, with document aggregates. */
@@ -131,7 +138,18 @@ export interface Sale extends DocBase {
 }
 export type SaleCategory = "goods" | "service"
 /** Export header (legacy "New Export"): LC, customs station, destination and the Bill of Export. Deemed export = local supply against a back-to-back LC. */
-export interface ExportInfo { deemed: boolean; lcNo: string; lcDate: string; customsHouse: string; country: string; billNo: string; billDate: string; shippingAddress: string; cnfFirm?: string }
+export type ExportCurrency = "USD" | "EUR" | "GBP" | "BDT"
+export interface ExportInfo {
+  deemed: boolean; lcNo: string; lcDate: string; customsHouse: string; country: string; billNo: string; billDate: string; shippingAddress: string; cnfFirm?: string
+  /** R6 (RMG): Utilization Declaration / Permission of the exporter that lists this supply (deemed export) */
+  udNo?: string; udDate?: string
+  /** R6 (RMG): EXP form number (direct export) */
+  expNo?: string
+  /** R6 (RMG): invoice currency, foreign-currency value and exchange rate (export proceeds / BBLC value) */
+  currency?: ExportCurrency; fcValue?: number; exchangeRate?: number
+  /** R6 (RMG): exporter's bond licence (deemed export; defaults to the customer's) */
+  exporterBond?: string
+}
 
 export interface Purchase extends DocBase {
   invoiceNo: string
@@ -780,7 +798,38 @@ export interface SubFormRow { date: string; ref: string; refId?: string; href?: 
 /** Tax period status for the compliance centre and the period lock. */
 export interface TaxPeriod { period: string; due: string; status: "open" | "draft" | "submitted" | "overdue"; returnId?: string; submittedAt?: string; locked: boolean }
 
-export interface VatSettings { zoneCode: string; updatedAt?: string; updatedBy?: string }
+export interface VatSettings { zoneCode: string; updatedAt?: string; updatedBy?: string; /** R6: business profile (segment, AT class, filing category, bond, holidays) */ profile?: VatProfile }
+
+/** R6: the company's NBR business profile — drives AT, deadlines and the RMG features. */
+export interface VatProfile {
+  segment: "rmgDirect" | "rmgDeemed" | "rmgComposite" | "manufacturer" | "trader" | "service"
+  /** 100 % export-oriented unit (Rule 21: Mushak 4.3 not required) */
+  exportOriented: boolean
+  /** advance tax class at import: manufacturer 2 % / commercial importer 7.5 % (FY 2025-26 onward) */
+  importerType: "manufacturer" | "commercial"
+  /** "extended" = 20-day return deadline (government bodies, banks, insurers, zero-return filers) */
+  filerCategory: "standard" | "extended"
+  bondLicenseNo: string
+  bondLicenseExpiry: string
+  associationNo: string
+  /** extra gazetted holidays (YYYY-MM-DD) besides Fri/Sat and the fixed national days */
+  holidays: string[]
+}
+
+/** R6: one row of the export & deemed-export register. */
+export interface ExportRegisterRow {
+  id: string; date: string; invoiceNo: string; customer: string; bin: string; kind: "direct" | "deemed"; process: Process
+  lcNo: string; lcDate: string; udNo?: string; expNo?: string; billNo?: string; country?: string
+  currency?: string; fcValue?: number; exchangeRate?: number; value: number
+  complete: boolean; missing: string[]
+}
+export interface ExportRegister {
+  from: string; to: string
+  rows: ExportRegisterRow[]
+  totals: { direct: { count: number; value: number }; deemed: { count: number; value: number }; atRisk: { count: number; value: number } }
+}
+/** R6: result of verifying the audit hash chain. */
+export type { ChainReport as AuditIntegrity } from "./integrity"
 
 /** Compliance centre summary for one tax period. */
 export interface ComplianceSummary {
@@ -788,7 +837,8 @@ export interface ComplianceSummary {
   submissionDate?: string; ackNo?: string
   computation: Pick<ReturnComputation, "outputVat" | "inputVat" | "increasing" | "decreasing" | "netVat" | "payableVat" | "payableSd" | "depositedVat" | "shortVat" | "shortSd" | "closingVat" | "openingVat" | "drafts">
   deposits: { count: number; amount: number; pending: number }
-  vds: { toIssue: number; toIssueAmount: number; awaited: number; awaitedAmount: number }
+  /** issueBy (R6): Mushak 6.6 deadline — 3 working days after filing the return (VDS Guidelines 2025) */
+  vds: { toIssue: number; toIssueAmount: number; issueBy?: string; awaited: number; awaitedAmount: number }
   periods: TaxPeriod[]
 }
 export interface M610Row { sl: number; id: string; date: string; no: string; challanNo: string; party: string; address: string; bin: string; value: number; vat: number; total: number }

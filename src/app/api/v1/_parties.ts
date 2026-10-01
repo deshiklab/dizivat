@@ -8,7 +8,7 @@ import { diff, recordAudit } from "@/lib/mock/audit"
 import { TODAY } from "@/lib/company"
 import { customerCredit } from "./_r3"
 
-const PARTY_FIELDS = ["name", "bin", "mode", "mobile", "email", "address", "contactPerson", "active"]
+const PARTY_FIELDS = ["name", "bin", "mode", "mobile", "email", "address", "contactPerson", "active", "exporterType", "bondLicenseNo", "bondLicenseExpiry", "associationNo"]
 
 type Kind = "customer" | "vendor"
 type Ctx = { params: Promise<{ id: string }> }
@@ -48,12 +48,18 @@ function check(k: Kind, d: ReturnType<typeof partyInput.parse>, selfId?: string)
   if (others.some((p) => p.name.trim().toLowerCase() === d.name.toLowerCase())) errors.name = ["duplicate"]
   return Object.keys(errors).length ? problem(422, "Validation failed", errors) : null
 }
-const normalise = (d: ReturnType<typeof partyInput.parse>) => ({
-  ...d,
-  name: d.name.toUpperCase(), // legacy convention: party names in capitals (as printed on Mushak 6.3)
-  bin: d.mode === "Non-registered" && d.bin && !d.bin.startsWith("NID ") ? `NID ${d.bin}` : d.bin,
-  country: d.mode === "Foreign" ? d.country : undefined,
-})
+const normalise = (d: ReturnType<typeof partyInput.parse>) => {
+  const { exporterType, bondLicenseNo, bondLicenseExpiry, associationNo, ...rest } = d
+  return {
+    ...rest,
+    name: d.name.toUpperCase(), // legacy convention: party names in capitals (as printed on Mushak 6.3)
+    bin: d.mode === "Non-registered" && d.bin && !d.bin.startsWith("NID ") ? `NID ${d.bin}` : d.bin,
+    country: d.mode === "Foreign" ? d.country : undefined,
+    // R6 (RMG): exporter details — kept only when given (a cleared field removes the value)
+    exporterType: exporterType || undefined, bondLicenseNo: bondLicenseNo || undefined,
+    bondLicenseExpiry: bondLicenseExpiry || undefined, associationNo: associationNo || undefined,
+  }
+}
 
 export function partyCollection(k: Kind) {
   const GET = withAuth(null, async (req) => {

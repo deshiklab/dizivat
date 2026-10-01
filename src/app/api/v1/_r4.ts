@@ -1,3 +1,4 @@
+import { vdsCertificateDue } from "@/lib/rules"
 /**
  * R4 mock API — Accounting (money accounts, receipts, payments, statements, config) and NBR VAT
  * (treasury deposits / TR-6, VDS / Mushak 6.6, VAT adjustments, Mushak 9.1 returns, compliance centre, period lock).
@@ -657,13 +658,13 @@ export const adjustmentRoutes = lifecycle<VatAdjustment, AdjFields>({
 const findReturn = (period: string) => db.returns.find((r) => r.period === period)
 function returnRow(r: VatReturn): VatReturnRow {
   const c = r.snapshot ?? computeReturn(db, r.period, r.manual)
-  const due = returnDue(r.period)
+  const due = returnDue(r.period, db.vatSettings)
   return { ...r, snapshot: undefined, due, netPayable: c.payableVat, deposited: c.depositedVat, closing: c.closingVat, late: !!r.submissionDate && r.submissionDate > due }
 }
 export function taxPeriods(): TaxPeriod[] {
   return periodsBetween(FIRST_RETURN, CURRENT).map((p) => {
     const r = findReturn(p)
-    const due = returnDue(p)
+    const due = returnDue(p, db.vatSettings)
     const status = r?.status === "submitted" ? "submitted" : r ? "draft" : TODAY > due ? "overdue" : "open"
     return { period: p, due, status, returnId: r?.id, submittedAt: r?.submissionDate, locked: r?.status === "submitted" }
   })
@@ -673,7 +674,7 @@ function returnView(period: string): ReturnView | null {
   if (!r) {
     if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return null
     const computation = computeReturn(db, period)
-    return { id: period, period, type: "original", activities: true, status: "draft", manual: EMPTY_MANUAL, createdAt: "", due: returnDue(period), netPayable: computation.payableVat, deposited: computation.depositedVat, closing: computation.closingVat, late: false, computation, live: true, notStarted: true }
+    return { id: period, period, type: "original", activities: true, status: "draft", manual: EMPTY_MANUAL, createdAt: "", due: returnDue(period, db.vatSettings), netPayable: computation.payableVat, deposited: computation.depositedVat, closing: computation.closingVat, late: false, computation, live: true, notStarted: true }
   }
   const computation = r.snapshot ?? computeReturn(db, period, r.manual)
   return { ...returnRow(r), computation, live: !r.snapshot }
@@ -763,7 +764,7 @@ export const returnDocRoutes = {
       const parts = [c.shortVat > 0 ? `৳${c.shortVat.toLocaleString("en-IN")} VAT under ${economicCode("vat", zone)}` : "", c.shortSd > 0 ? `৳${c.shortSd.toLocaleString("en-IN")} SD under ${economicCode("sd", zone)}` : ""].filter(Boolean)
       return problem(409, `Deposit ${parts.join(" and ")} (TR-6) before submitting — note 58 must cover note 50.`)
     }
-    if (r.type === "original" && r.submissionDate > returnDue(period)) r.type = "late"
+    if (r.type === "original" && r.submissionDate > returnDue(period, db.vatSettings)) r.type = "late"
     r.status = "submitted"
     r.snapshot = c
     r.submittedBy = user.name
@@ -816,16 +817,18 @@ export const complianceRoute = withAuth(null, async (req) => {
   const deposits = db.treasury.filter((t) => t.taxPeriod === period && t.process !== "Cancelled")
   await delay(150)
   return json({
-    period, due: returnDue(period), daysLeft: daysBetween(TODAY, returnDue(period)), status: view.status, notStarted: !findReturn(period), locked: view.status === "submitted",
+    period, due: returnDue(period, db.vatSettings), daysLeft: daysBetween(TODAY, returnDue(period, db.vatSettings)), status: view.status, notStarted: !findReturn(period), locked: view.status === "submitted",
     submissionDate: view.submissionDate, ackNo: view.ackNo,
     computation: { outputVat: c.outputVat, inputVat: c.inputVat, increasing: c.increasing, decreasing: c.decreasing, netVat: c.netVat, payableVat: c.payableVat, payableSd: c.payableSd, depositedVat: c.depositedVat, shortVat: c.shortVat, shortSd: c.shortSd, closingVat: c.closingVat, openingVat: c.openingVat, drafts: c.drafts },
     deposits: { count: deposits.length, amount: round2(deposits.filter((t) => t.process === "Approved").reduce((s, t) => s + t.amount, 0)), pending: deposits.filter((t) => t.process === "Created").length },
-    vds: { toIssue: vdsToIssue.length, toIssueAmount: round2(vdsToIssue.reduce((s, e) => s + e.remaining, 0)), awaited: vdsAwaited.length, awaitedAmount: round2(vdsAwaited.reduce((s, e) => s + e.remaining, 0)) },
+    vds: { toIssue: vdsToIssue.length, toIssueAmount: round2(vdsToIssue.reduce((s, e) => s + e.remaining, 0)), issueBy: vdsCertificateDue(period, db.vatSettings, view.submissionDate), awaited: vdsAwaited.length, awaitedAmount: round2(vdsAwaited.reduce((s, e) => s + e.remaining, 0)) },
     periods: taxPeriods(),
   })
 })
 
 /* ── VAT settings ──────────────────────────────────────────────────────── */
+
+const PROFILE_FIELDS = ["segment", "exportOriented", "importerType", "filerCategory", "bondLicenseNo", "bondLicenseExpiry", "associationNo", "holidays"]
 
 export const vatSettingsRoutes = {
   GET: withAuth(null, async () => json(db.vatSettings)),
@@ -833,8 +836,8 @@ export const vatSettingsRoutes = {
     const parsed = vatSettingsInput.safeParse(await req.json().catch(() => ({})))
     if (!parsed.success) return zodProblem(parsed.error)
     const before = { ...db.vatSettings }
-    db.vatSettings = { zoneCode: parsed.data.zoneCode, updatedAt: new Date().toISOString(), updatedBy: user.name }
-    recordAudit({ actor: user.name, entity: "vatSettings", ref: "VAT settings", action: "updated", changes: diff(before, db.vatSettings, ["zoneCode"]) })
+    db.vatSettings = { zoneCode: parsed.data.zoneCode, profile: parsed.data.profile ?? db.vatSettings.profile, updatedAt: new Date().toISOString(), updatedBy: user.name }
+    recordAudit({ actor: user.name, entity: "vatSettings", ref: "VAT settings", action: "updated", changes: diff(before, db.vatSettings, ["zoneCode", ...PROFILE_FIELDS.map((f) => `profile.${f}`)]) })
     return json(db.vatSettings)
   }),
 }

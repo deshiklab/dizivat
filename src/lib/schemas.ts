@@ -27,6 +27,14 @@ export const exportInput = z.object({
   billDate: z.string().max(10).optional().default(""),
   shippingAddress: z.string().trim().max(250).optional().default(""),
   cnfFirm: z.string().trim().max(120).optional().default(""),
+  /** R6 (RMG): UD/UP, EXP form, currency / FC value / rate, exporter's bond licence — optional, checked by the register */
+  udNo: z.string().trim().max(40).optional(),
+  udDate: z.string().regex(/^(\d{4}-\d{2}-\d{2})?$/, "date").optional(),
+  expNo: z.string().trim().max(40).optional(),
+  currency: z.enum(["USD", "EUR", "GBP", "BDT"]).optional(),
+  fcValue: z.number().min(0, "min0").optional(),
+  exchangeRate: z.number().min(0, "min0").max(1000).optional(),
+  exporterBond: z.string().trim().max(60).optional(),
 }).superRefine((e, ctx) => {
   if (e.deemed) return
   const need = (k: "customsHouse" | "country" | "billNo" | "shippingAddress") => { if (!e[k]) ctx.addIssue({ code: "custom", path: [k], message: "required" }) }
@@ -188,6 +196,11 @@ export const partyInput = z
     contactPerson: z.string().trim().max(80).default(""),
     address: z.string().trim().min(5, "required").max(250),
     active: z.boolean().default(true),
+    /** R6 (RMG): exporter class, bond licence and trade-body membership (customers) */
+    exporterType: z.enum(["direct", "deemed", ""]).optional(),
+    bondLicenseNo: z.string().trim().max(60).optional(),
+    bondLicenseExpiry: z.string().regex(/^(\d{4}-\d{2}-\d{2})?$/, "date").optional(),
+    associationNo: z.string().trim().max(40).optional(),
   })
   .superRefine((v, ctx) => {
     if (v.mode === "Local" && !BIN_RE.test(v.bin)) ctx.addIssue({ code: "custom", path: ["bin"], message: "bin" })
@@ -521,5 +534,20 @@ export const returnInput = z.object({
 })
 export type ReturnInput = z.input<typeof returnInput>
 
-export const vatSettingsInput = z.object({ zoneCode: z.string().regex(/^\d{4}$/, "zoneCode") })
+const isoDay = /^\d{4}-\d{2}-\d{2}$/
+/** R6: NBR business profile (segment, AT class, filing category, bond licence, extra holidays). */
+export const vatProfileInput = z.object({
+  segment: z.enum(["rmgDirect", "rmgDeemed", "rmgComposite", "manufacturer", "trader", "service"]),
+  exportOriented: z.boolean(),
+  importerType: z.enum(["manufacturer", "commercial"]),
+  filerCategory: z.enum(["standard", "extended"]),
+  bondLicenseNo: z.string().trim().max(60).default(""),
+  bondLicenseExpiry: z.string().refine((v) => !v || isoDay.test(v), "date").default(""),
+  associationNo: z.string().trim().max(40).default(""),
+  holidays: z.array(z.string().regex(isoDay, "date")).max(60).default([]),
+}).superRefine((v, ctx) => {
+  if (v.segment.startsWith("rmg") && v.exportOriented && !v.bondLicenseNo) ctx.addIssue({ code: "custom", path: ["bondLicenseNo"], message: "required" })
+})
+export const vatSettingsInput = z.object({ zoneCode: z.string().regex(/^\d{4}$/, "zoneCode"), profile: vatProfileInput.optional() })
+export type VatProfileInput = z.input<typeof vatProfileInput>
 export type VatSettingsInput = z.input<typeof vatSettingsInput>

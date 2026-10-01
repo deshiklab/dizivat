@@ -31,11 +31,15 @@ import { fmtNum } from "@/lib/format"
 import { CUSTOMS_HOUSES } from "@/lib/r2"
 import { EXPORT_COUNTRIES } from "@/lib/r3"
 import { calcLine, sumLines } from "@/lib/vat"
+import { EXPORT_CURRENCIES, exportCompliance, fcToBdt } from "@/lib/rmg"
+import { ExportChecklist } from "@/features/vat/export-checklist"
 
 type In = z.input<typeof saleInput>
 type Out = z.output<typeof saleInput>
 const emptyLine = { itemId: "", qty: undefined as unknown as number, price: undefined as unknown as number, sdRate: 0, vatRate: 15, batchId: "" }
-const blankExport = (deemed: boolean, c?: Party): ExportInfo => ({ deemed, lcNo: "", lcDate: "", customsHouse: "", country: deemed ? "" : c?.country ?? "", billNo: "", billDate: "", shippingAddress: deemed ? "" : c?.address ?? "", cnfFirm: "" })
+const blankExport = (deemed: boolean, c?: Party): ExportInfo => ({ deemed, lcNo: "", lcDate: "", customsHouse: "", country: deemed ? "" : c?.country ?? "", billNo: "", billDate: "", shippingAddress: deemed ? "" : c?.address ?? "", cnfFirm: "", currency: "USD" })
+/** empty number inputs stay undefined (optional FC value / rate) */
+const optNum = { setValueAs: (v: unknown) => (v === "" || v == null || Number.isNaN(Number(v)) ? undefined : Number(v)) }
 
 /**
  * New invoice, or edit of a draft when `initial` is given (only drafts are editable — approved invoices are cancelled instead).
@@ -45,6 +49,7 @@ const blankExport = (deemed: boolean, c?: Party): ExportInfo => ({ deemed, lcNo:
  */
 export function SaleForm({ initial, category = "goods", preset }: { initial?: Sale; category?: SaleCategory; preset?: "export" } = {}) {
   const t = useTranslations("sales")
+  const trm = useTranslations("rmg")
   const tf = useTranslations("form")
   const tc = useTranslations("common")
   const tpm = useTranslations("method")
@@ -103,6 +108,9 @@ export function SaleForm({ initial, category = "goods", preset }: { initial?: Sa
   const openDue = Math.max(0, (credit.data?.due ?? 0) - (initial?.process === "Approved" ? initial.due : 0))
   const overLimit = limit > 0 ? Math.max(0, openDue + due - limit) : 0
   const setExport = (v: ExportInfo | undefined) => setValue("export", v as never, { shouldDirty: true })
+  // R6 (RMG): live NBR zero-rating checklist for the export / deemed export
+  const compliance = exp ? exportCompliance({ export: exp as ExportInfo, issueDate: w.issueDate || TODAY }, customer) : undefined
+  const fcBdt = exp ? fcToBdt(exp as ExportInfo) : 0
   // Zero-rating follows the export flag: VAT 0 while exporting, the product's rate otherwise
   const lastZero = React.useRef(zero)
   React.useEffect(() => {
@@ -279,6 +287,28 @@ export function SaleForm({ initial, category = "goods", preset }: { initial?: Sa
                   <Field id="export.shippingAddress" label={t("export.shippingAddress")} required error={err("export.shippingAddress")} className="md:col-span-2">{(a) => <Textarea rows={2} {...a} {...register("export.shippingAddress")} />}</Field>
                   <Field id="export.cnfFirm" label={t("export.cnfFirm")} error={err("export.cnfFirm")} className="md:col-span-2">{(a) => <Input {...a} {...register("export.cnfFirm")} />}</Field>
                 </>)}
+                {exp.deemed ? (<>
+                  <Field id="export.udNo" label={trm("udNo")} error={err("export.udNo")} hint={trm("udHint")}>{(a) => <Input {...a} {...register("export.udNo")} />}</Field>
+                  <Field id="export.udDate" label={trm("udDate")} error={err("export.udDate")}>{(a) => <Input type="date" max={w.issueDate || TODAY} {...a} {...register("export.udDate")} />}</Field>
+                  <Field id="export.exporterBond" label={trm("exporterBond")} error={err("export.exporterBond")} hint={customer?.bondLicenseNo ? trm("bondFromCustomer", { no: customer.bondLicenseNo }) : trm("bondHint")} className="md:col-span-2">
+                    {(a) => <Input placeholder={customer?.bondLicenseNo ?? ""} {...a} {...register("export.exporterBond")} />}
+                  </Field>
+                </>) : (
+                  <Field id="export.expNo" label={trm("expNo")} error={err("export.expNo")} hint={trm("expHint")}>{(a) => <Input {...a} {...register("export.expNo")} />}</Field>
+                )}
+                <div className="grid gap-4 sm:grid-cols-3 md:col-span-2">
+                  <Field id="export.currency" label={trm("currency")} error={err("export.currency")}>
+                    {(a) => <Controller control={control} name="export.currency" render={({ field }) => (
+                      <Select value={field.value ?? ""} onValueChange={(v) => { field.onChange(v); field.onBlur() }} items={EXPORT_CURRENCIES.map((c) => ({ value: c, label: c }))}>
+                        <SelectTrigger id={a.id} className="w-full" aria-describedby={a["aria-describedby"]} aria-invalid={a["aria-invalid"]}><SelectValue placeholder={t("export.pick")} /></SelectTrigger>
+                        <SelectContent>{EXPORT_CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                      </Select>
+                    )} />}
+                  </Field>
+                  <Field id="export.fcValue" label={trm("fcValue")} error={err("export.fcValue")}>{(a) => <Input type="number" inputMode="decimal" step="0.01" min={0} className="tabular" {...a} {...register("export.fcValue", optNum)} />}</Field>
+                  <Field id="export.exchangeRate" label={trm("exchangeRate")} error={err("export.exchangeRate")} hint={fcBdt ? trm("fcBdt", { amount: fmtNum(fcBdt, locale, 2) }) : undefined}>{(a) => <Input type="number" inputMode="decimal" step="0.01" min={0} className="tabular" {...a} {...register("export.exchangeRate", optNum)} />}</Field>
+                </div>
+                {compliance && <ExportChecklist c={compliance} className="md:col-span-2" />}
                 {typeof err("export") === "string" && <p role="alert" className="text-sm font-medium text-destructive md:col-span-2">{tv.has(err("export")!) ? tv(err("export")!) : err("export")}</p>}
               </CardContent>
             </Card>

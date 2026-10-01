@@ -108,6 +108,9 @@ export const auditEvents = pgTable("audit_events", {
   action: text("action").notNull(),
   changes: jsonb("changes").$type<AuditChange[]>(),
   note: text("note"),
+  /** R6: tamper-evident chain — hash = SHA-256(prev_hash + "\n" + canonical event); see src/lib/integrity.ts */
+  prevHash: text("prev_hash"),
+  hash: text("hash"),
 }, (t) => [
   index("audit_at_idx").on(t.at),
   index("audit_day_idx").on(t.day),

@@ -22,8 +22,12 @@ export function sumLines(lines: Pick<Line, "subtotal" | "sd" | "vat" | "total">[
   return { subtotal: round2(t.subtotal), sd: round2(t.sd), vat: round2(t.vat), gross: round2(t.total), discount: round2(discount || 0), netTotal }
 }
 
-/** Import duty stack used for Foreign purchases (simplified, for mock TTI). */
-export function importTTI(assessable: number, cdRate = 10, rdRate = 3, sdRate = 0, vatRate = 15, aitRate = 5, atRate = 5) {
+/**
+ * Import duty stack used for Foreign purchases (simplified, for mock TTI).
+ * AT defaults to 2 % — the manufacturer rate from 1 July 2025 (Finance Ordinance 2025; commercial importers 7.5 %,
+ * see `atRateFor` in rules.ts).
+ */
+export function importTTI(assessable: number, cdRate = 10, rdRate = 3, sdRate = 0, vatRate = 15, aitRate = 5, atRate = 2) {
   const cd = (assessable * cdRate) / 100
   const rd = (assessable * rdRate) / 100
   const sd = ((assessable + cd + rd) * sdRate) / 100

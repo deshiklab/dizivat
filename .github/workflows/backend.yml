@@ -6,7 +6,7 @@ name: Backend (NestJS + PostgreSQL)
 
 on:
   push:
-    branches: [r5-nestjs]
+    branches: [r5-nestjs, r6-enlistment-rmg]
   pull_request:
     paths: ["api/**", "Dockerfile", "docker/**", "render.yaml", ".github/workflows/backend.yml"]
   workflow_dispatch:
@@ -74,7 +74,7 @@ jobs:
         run: python visual.py
       - { name: E2E — Sprint 1, working-directory: scripts, run: python e2e.py }
       - { name: E2E — Sprint 2, working-directory: scripts, run: python e2e_s2.py }
-      - { name: API contract (176 endpoints), working-directory: scripts, run: python contract.py }
+      - { name: API contract (178 endpoints), working-directory: scripts, run: python contract.py }
       - { name: E2E — Sprint 3, working-directory: scripts, run: python e2e_s3.py }
       - { name: E2E — Sprint 4, working-directory: scripts, run: python e2e_s4.py }
       - { name: E2E — R2, working-directory: scripts, run: python e2e_r2.py }
@@ -83,8 +83,9 @@ jobs:
       - { name: E2E — Knowledge base, working-directory: scripts, run: python e2e_kb.py }
       - { name: E2E — Mushak 4.3 + credit line, working-directory: scripts, run: python e2e_m43.py }
       - { name: E2E — PDF download, working-directory: scripts, run: python e2e_pdf.py }
+      - { name: E2E — R6 enlistment + RMG, working-directory: scripts, run: python e2e_r6.py }
       - { name: Accessibility (axe), working-directory: scripts, run: python a11y.py }
-      - name: Backend — sessions, revocation, lockout, persistence across restarts
+      - name: Backend — sessions, revocation, lockout, persistence across restarts, append-only hash-chained audit
         working-directory: scripts
         run: python api_native.py
       - name: Upload screenshots and logs

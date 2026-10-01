@@ -1,4 +1,6 @@
 type Tone = "success" | "warning" | "info" | "danger" | "neutral"
+import { returnDueDate } from "./rules"
+import type { VatSettings } from "./types"
 import type { AccountKind, AdjustmentKind, MoneyMethod, ReturnPart, VatReturnType, TreasuryHead, TreasuryMode, VdsMode } from "./types"
 
 /* ── Accounting ────────────────────────────────────────────────────────── */
@@ -169,10 +171,12 @@ export const noteDef = (n: number) => RETURN_NOTES.find((x) => x.note === n)
 
 /** "2026-09-14" → "2026-09" */
 export const periodOf = (date: string) => date.slice(0, 7)
-/** Return (and treasury) due date: 15th of the following month. */
-export function returnDue(period: string) {
-  const [y, m] = period.split("-").map(Number)
-  return `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, "0")}-15`
+/**
+ * Return (and treasury) due date: 15 days after the period (20 for the extended filer category), moved to the next
+ * working day over Fri/Sat and public holidays — see `returnDueDate` in rules.ts (R6).
+ */
+export function returnDue(period: string, settings?: Pick<VatSettings, "profile"> | null) {
+  return returnDueDate(period, settings)
 }
 /** Last day of the period. */
 export function periodEnd(period: string) {

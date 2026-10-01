@@ -17,8 +17,10 @@ import { Money, Num } from "@/components/common/money"
 import { EmptyState } from "@/components/common/empty-state"
 import { Link, useRouter } from "@/i18n/navigation"
 import { api, ApiError } from "@/lib/api/client"
-import { fmtDate } from "@/lib/format"
+import { fmtDate, fmtNum } from "@/lib/format"
 import { customsHouseName } from "@/lib/r2"
+import { exportCompliance, fcToBdt } from "@/lib/rmg"
+import { ExportChecklist } from "@/features/vat/export-checklist"
 import { useCan } from "@/components/auth/me-provider"
 import type { Sale } from "@/lib/types"
 import { Mushak63 } from "./mushak-63"
@@ -160,9 +162,19 @@ export function SaleDetail({ id }: { id: string }) {
 function ExportCard({ s }: { s: Sale }) {
   const t = useTranslations("sales")
   const locale = useLocale()
+  const trm = useTranslations("rmg")
   const e = s.export!
+  // R6 (RMG): the buyer's bond licence / exporter type feed the deemed-export conditions
+  const buyer = useQuery({ queryKey: ["customers", "credit", s.customerId], queryFn: () => api.customers.get(s.customerId) })
+  const c = buyer.data || !e.deemed ? exportCompliance(s, buyer.data) : undefined
+  const bdt = fcToBdt(e)
   const rows: [string, string][] = [
     [t("export.lcNo"), `${e.lcNo} · ${fmtDate(e.lcDate, locale)}`],
+    ...(e.deemed ? [
+      [trm("udNo"), e.udNo ? `${e.udNo}${e.udDate ? ` · ${fmtDate(e.udDate, locale)}` : ""}` : "—"],
+      [trm("exporterBond"), e.exporterBond || buyer.data?.bondLicenseNo || "—"],
+    ] as [string, string][] : [[trm("expNo"), e.expNo || "—"]] as [string, string][]),
+    [trm("fcValue"), e.fcValue ? `${e.currency ?? ""} ${fmtNum(e.fcValue, locale, 2)}${e.exchangeRate ? ` @ ${fmtNum(e.exchangeRate, locale, 2)}${bdt ? ` = Tk ${fmtNum(bdt, locale, 2)}` : ""}` : ""}` : "—"],
     ...(!e.deemed ? [
       [t("export.billNo"), `${e.billNo} · ${e.billDate ? fmtDate(e.billDate, locale) : "—"}`], [t("export.customsHouse"), customsHouseName(e.customsHouse)],
       [t("export.country"), e.country], [t("export.shippingAddress"), e.shippingAddress], [t("export.cnfFirm"), e.cnfFirm || "—"],
@@ -171,7 +183,10 @@ function ExportCard({ s }: { s: Sale }) {
   return (
     <Card>
       <CardHeader><CardTitle className="flex items-center gap-2"><Ship className="size-4" aria-hidden /> {e.deemed ? t("export.deemedTitle") : t("export.title")}</CardTitle></CardHeader>
-      <CardContent><dl className="grid gap-2 text-sm">{rows.map(([k, v]) => <div key={k} className="grid gap-0.5"><dt className="text-xs text-muted-foreground">{k}</dt><dd className="break-words">{v}</dd></div>)}</dl></CardContent>
+      <CardContent className="grid gap-3">
+        <dl className="grid gap-2 text-sm">{rows.map(([k, v]) => <div key={k} className="grid gap-0.5"><dt className="text-xs text-muted-foreground">{k}</dt><dd className="break-words">{v}</dd></div>)}</dl>
+        {c && s.process !== "Cancelled" && <ExportChecklist c={c} />}
+      </CardContent>
     </Card>
   )
 }

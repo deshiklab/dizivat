@@ -1,11 +1,11 @@
 # FE-S2-06 / S3 — every push / PR: types, lint rules (S2-08 guards), production build,
 # then browser checks against the built app: console-clean capture, visual regression,
-# end-to-end flows (Sprints 1–4, R2–R4, knowledge base), API contract, axe (WCAG 2.2 AA, light + dark) and performance budgets.
+# end-to-end flows (Sprints 1–4, R2–R4, knowledge base, R6), API contract, axe (WCAG 2.2 AA, light + dark) and performance budgets.
 name: CI
 
 on:
   push:
-    branches: [main, r5-nestjs]
+    branches: [main, r5-nestjs, r6-enlistment-rmg]
   pull_request:
 
 concurrency:
@@ -107,6 +107,9 @@ jobs:
       - name: E2E — PDF download of the statutory forms (6.3, 6.7, 6.8, 6.6, TR-6, 6.4, 4.3, 6.10, 9.1, 6.1 …)
         working-directory: scripts
         run: python e2e_pdf.py
+      - name: E2E — R6 NBR enlistment readiness + RMG (rules engine, business profile, export register, audit chain)
+        working-directory: scripts
+        run: python e2e_r6.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

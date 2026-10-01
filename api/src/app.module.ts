@@ -9,7 +9,7 @@ import { AuthController, MeController, UsersController, UsersService } from "./m
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
 import { SEED_VERSION } from "./boot"
 
-export const VERSION = "0.9.1"
+export const VERSION = "0.10.0"
 const NATIVE_CONTROLLERS = [AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController]
 
 @Global()

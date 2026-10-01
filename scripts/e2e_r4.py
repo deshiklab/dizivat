@@ -284,7 +284,7 @@ async def main():
             await apg.goto(BASE + "/en/vat/settings", wait_until="networkidle")
             await expect(apg.get_by_role("heading", name="VAT settings")).to_be_visible()
             await expect(apg.locator("#zoneCode")).to_have_count(0)
-            await apg.get_by_role("button", name="Edit").click()
+            await apg.get_by_role("button", name="Edit", exact=True).click()
             await apg.locator("#zoneCode").fill("12a"); await apg.get_by_role("button", name=re.compile("Save")).click()
             await expect(apg.locator("#zoneCode")).to_have_attribute("aria-invalid", "true"); ok("VAT settings: explicit edit mode; bad zone code rejected")
             await apg.get_by_role("button", name="Cancel").click()

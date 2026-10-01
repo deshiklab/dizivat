@@ -1,18 +1,21 @@
 "use client"
 
 import * as React from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { Controller, useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import type { z } from "zod"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Globe2, Info, Loader2, Lock } from "lucide-react"
+import { AlertTriangle, Globe2, Info, Loader2, Lock, Shirt } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { TODAY } from "@/lib/company"
+import { fmtDate } from "@/lib/format"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Field } from "@/components/common/field"
@@ -24,7 +27,8 @@ import { HistorySection } from "@/features/audit/record-history"
 type In = z.input<typeof partyInput>
 type Out = z.output<typeof partyInput>
 type Kind = "customer" | "vendor"
-const blank: In = { name: "", mode: "Local", bin: "", country: "", mobile: "", email: "", contactPerson: "", address: "", active: true }
+const blank: In = { name: "", mode: "Local", bin: "", country: "", mobile: "", email: "", contactPerson: "", address: "", active: true, exporterType: "", bondLicenseNo: "", bondLicenseExpiry: "", associationNo: "" }
+const EXPORTER_TYPES = ["", "direct", "deemed"] as const
 
 /**
  * Create / edit a customer or vendor in a side sheet (also used for quick-add from the invoice forms).
@@ -37,6 +41,8 @@ export function PartySheet({ kind, open, onOpenChange, party, onSaved, readOnly 
   const tk = useTranslations(`parties.${kind}`)
   const tm = useTranslations("mode")
   const tc = useTranslations("common")
+  const trm = useTranslations("rmg")
+  const locale = useLocale()
   const mk = (m: string) => m.replace("-r", "R") // "Non-registered" → catalog key "NonRegistered"
   const qc = useQueryClient()
   const form = useForm<In, unknown, Out>({ resolver: zodResolver(partyInput), defaultValues: blank, mode: "onTouched" })
@@ -46,9 +52,13 @@ export function PartySheet({ kind, open, onOpenChange, party, onSaved, readOnly 
     reset(party ? {
       name: party.name, mode: party.mode, bin: party.bin, country: party.country ?? "", mobile: party.mobile, email: party.email ?? "",
       contactPerson: party.contactPerson ?? "", address: party.address, active: party.active !== false,
+      exporterType: (party as Party).exporterType ?? "", bondLicenseNo: (party as Party).bondLicenseNo ?? "",
+      bondLicenseExpiry: (party as Party).bondLicenseExpiry ?? "", associationNo: (party as Party).associationNo ?? "",
     } : blank)
   }, [open, party, reset])
   const mode = useWatch({ control, name: "mode" })
+  const exporterType = useWatch({ control, name: "exporterType" })
+  const bondExpiry = useWatch({ control, name: "bondLicenseExpiry" })
   const hasDocs = !!party && "docs" in party && party.docs > 0
   const client = kind === "customer" ? api.customers : api.vendors
   const save = useMutation({
@@ -113,6 +123,28 @@ export function PartySheet({ kind, open, onOpenChange, party, onSaved, readOnly 
             )}
             {mode === "Non-registered" && (
               <p className="flex items-start gap-2 rounded-md bg-warning-soft p-3 text-xs text-warning sm:col-span-2"><Info className="mt-0.5 size-3.5 shrink-0" aria-hidden /> {t("nonRegNote")}</p>
+            )}
+            {kind === "customer" && mode === "Local" && (
+              <section aria-labelledby="rmg-title" className="grid gap-3 rounded-md border p-3 sm:col-span-2 sm:grid-cols-2">
+                <div className="grid gap-0.5 sm:col-span-2">
+                  <h3 id="rmg-title" className="flex items-center gap-2 text-sm font-medium"><Shirt className="size-4" aria-hidden /> {trm("party.title")}</h3>
+                  <p className="text-xs text-muted-foreground">{trm("party.sub")}</p>
+                </div>
+                <Field id="exporterType" label={trm("party.exporterType")} error={errors.exporterType?.message} className="sm:col-span-2">
+                  {(a) => <Controller control={control} name="exporterType" render={({ field }) => (
+                    <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)} items={EXPORTER_TYPES.map((x) => ({ value: x || "none", label: trm(`party.type.${x || "none"}`) }))}>
+                      <SelectTrigger id={a.id} className="w-full" aria-describedby={a["aria-describedby"]}><SelectValue /></SelectTrigger>
+                      <SelectContent>{EXPORTER_TYPES.map((x) => <SelectItem key={x || "none"} value={x || "none"}>{trm(`party.type.${x || "none"}`)}</SelectItem>)}</SelectContent>
+                    </Select>
+                  )} />}
+                </Field>
+                {!!exporterType && (<>
+                  <Field id="bondLicenseNo" label={trm("party.bondLicenseNo")} error={errors.bondLicenseNo?.message} hint={trm("party.bondHint")}>{(a) => <Input className="tabular" {...a} {...register("bondLicenseNo")} />}</Field>
+                  <Field id="bondLicenseExpiry" label={trm("party.bondLicenseExpiry")} error={errors.bondLicenseExpiry?.message}>{(a) => <Input type="date" {...a} {...register("bondLicenseExpiry")} />}</Field>
+                  <Field id="associationNo" label={trm("party.associationNo")} error={errors.associationNo?.message} className="sm:col-span-2">{(a) => <Input {...a} {...register("associationNo")} />}</Field>
+                  {!!bondExpiry && bondExpiry < TODAY && <p role="status" className="flex items-start gap-2 rounded-md bg-warning-soft p-2 text-xs text-warning sm:col-span-2"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden /> {trm("party.bondExpired", { date: fmtDate(bondExpiry, locale) })}</p>}
+                </>)}
+              </section>
             )}
             <div className="flex items-center justify-between gap-3 rounded-md border p-3 sm:col-span-2">
               <div className="grid gap-0.5">

@@ -8,7 +8,8 @@ import type { AuditEvent, Unit } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
 import { auditEvents, compatState, meta, tariffLines, units, users } from "./db/schema"
-import { markPersisted, rawToEvent } from "./modules/audit"
+import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
+import { GENESIS_HASH } from "@/lib/integrity"
 import { compatSnapshot, markSaved } from "./modules/compat"
 import { toUser } from "./modules/identity"
 import { loadCompany, saveCompany } from "./modules/reference"
@@ -19,7 +20,10 @@ export const SEED_VERSION = "r5.1"
 export async function bootState(log: (m: string) => void) {
   const [state] = await db.select().from(compatState).where(eq(compatState.key, "main"))
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(users)
-  if (state && n) return restore(state.data as { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log)
+  if (state && n) {
+    await sealUnchained(log) // R6: upgrade — chain the events written by R5.1
+    return restore(state.data as { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log)
+  }
   return seed(log)
 }
 
@@ -30,6 +34,8 @@ async function seed(log: (m: string) => void) {
   const events = m.auditStore.events
   const snapshot = compatSnapshot()
   await db.transaction(async (tx) => {
+    // the append-only guard on audit_events lets this transaction (and only it) clear the table
+    await tx.execute(sql`set local dizivat.reseed = 'on'`)
     for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "tariff_lines", "audit_events", "compat_state", "meta"])
       await tx.execute(sql.raw(`delete from ${t}`))
     await tx.insert(users).values(m.userStore.users.map((u, i) => ({
@@ -45,12 +51,15 @@ async function seed(log: (m: string) => void) {
     for (let i = 0; i < m.tariff.length; i += 500)
       await tx.insert(tariffLines).values(m.tariff.slice(i, i + 500).map((t) => ({ fy: m.TARIFF_FY, ...t })))
     await tx.execute(sql`alter sequence audit_events_id_seq restart with 1`)
+    let prev = GENESIS_HASH
     for (let i = 0; i < events.length; i += 500) {
       const chunk = events.slice(i, i + 500)
-      const ids = await tx.insert(auditEvents).values(chunk.map((e) => ({
+      const chained = chainValues(chunk.map((e) => ({
         at: new Date(e.at), day: e.day, actor: e.actor, actorId: e.actorId ?? null, entity: e.entity, entityId: e.entityId ?? null,
         ref: e.ref, action: e.action, changes: e.changes?.length ? e.changes : null, note: e.note ?? null,
-      }))).returning({ id: auditEvents.id })
+      })), prev)
+      prev = chained.head
+      const ids = await tx.insert(auditEvents).values(chained.rows).returning({ id: auditEvents.id })
       ids.forEach((r, j) => { chunk[j].id = `a${r.id}` })
     }
     await tx.insert(compatState).values({ key: "main", data: JSON.parse(snapshot) as unknown })

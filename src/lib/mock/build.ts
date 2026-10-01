@@ -40,7 +40,7 @@ export function buildSaleFields(d: SaleData, cust: Party) {
     subtotal: t.subtotal, sd: t.sd, vat: t.vat, discount: t.discount, netTotal: t.netTotal,
     paid, due: round2(t.netTotal - paid), issuedBy: d.issuedBy, designation: d.designation, narration: d.narration,
     ...(service ? { category: "service" as const } : {}),
-    ...(exp ? { export: { ...exp, cnfFirm: exp.cnfFirm || undefined, shippingAddress: exp.shippingAddress || d.deliveryAddress || cust.address } } : {}),
+    ...(exp ? { export: { ...exp, cnfFirm: exp.cnfFirm || undefined, udNo: exp.udNo || undefined, udDate: exp.udDate || undefined, expNo: exp.expNo || undefined, exporterBond: exp.exporterBond || undefined, shippingAddress: exp.shippingAddress || d.deliveryAddress || cust.address } } : {}),
     ...branchFields(d.branchId),
   } satisfies Partial<Sale>
 }

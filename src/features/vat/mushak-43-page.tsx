@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { ExternalLink, Printer } from "lucide-react"
+import { ExternalLink, Info, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { PdfButton } from "@/components/common/pdf-button"
 import { Input } from "@/components/ui/input"
@@ -19,6 +19,7 @@ import { api } from "@/lib/api/client"
 import { fmtDate, fmtMoney, fmtNum } from "@/lib/format"
 import { Mushak43 } from "@/features/production/mushak-43"
 import type { BomRow, BomStatus } from "@/lib/types"
+import { profileOf } from "@/lib/rules"
 
 const SHOW = ["active", "draft", "all"] as const
 type Show = (typeof SHOW)[number]
@@ -47,6 +48,10 @@ export function Mushak43Page() {
   const selectedId = id && rows.some((r) => r.id === id) ? id : id ?? rows[0]?.id ?? null
   const one = useQuery({ queryKey: ["bom", selectedId], queryFn: () => api.production.boms.get(selectedId!), enabled: !!selectedId })
   const d = one.data
+  // R6: 100 % export-oriented units are not required to submit Mushak 4.3 (Rule 21)
+  const settings = useQuery({ queryKey: ["vat-settings"], queryFn: () => api.vat.settings() })
+  const exportOriented = !!settings.data && profileOf(settings.data).exportOriented
+  const trm = useTranslations("rmg")
 
   return (
     <>
@@ -58,6 +63,7 @@ export function Mushak43Page() {
             {d && <Button onClick={() => window.print()}><Printer /> {t("print")}</Button>}
           </>
         } />
+      {exportOriented && <p role="note" className="no-print mb-4 flex items-start gap-2 rounded-md bg-info-soft p-3 text-sm text-info"><Info className="mt-0.5 size-4 shrink-0" aria-hidden /> {trm("rule21")}</p>}
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <section aria-label={t("listTitle")} className="no-print grid content-start gap-3 rounded-lg border bg-card p-3">
           <div className="grid gap-1.5">

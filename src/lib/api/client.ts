@@ -1,4 +1,4 @@
-import type { ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
 import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import { appPathname, appUrl } from "../base-path"
@@ -114,6 +114,8 @@ export const api = {
   audit: {
     list: (p: ListParams) => req<ListResult<AuditEvent>>(`/audit${qs(p)}`),
     csvUrl: (p: ListParams) => `${BASE}/audit${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    /** R6: verify the tamper-evident SHA-256 chain */
+    verify: () => req<AuditIntegrity>("/audit/verify"),
   },
   notifications: {
     list: () => req<{ items: AppNotification[]; unread: number }>("/notifications"),
@@ -257,6 +259,9 @@ export const api = {
     compliance: (period?: string) => req<ComplianceSummary>(`/vat/compliance${qs({ period })}`),
     settings: () => req<VatSettings>("/vat/settings"),
     saveSettings: (b: VatSettingsInput) => req<VatSettings>("/vat/settings", { method: "PUT", body: JSON.stringify(b) }),
+    /** R6 (RMG): export & deemed-export register */
+    exports: (p: { from: string; to: string; kind?: string; risk?: string }) => req<ExportRegister>(`/vat/exports${qs(p)}`),
+    exportsCsvUrl: (p: { from: string; to: string; kind?: string; risk?: string }) => `${BASE}/vat/exports${qs({ ...p, format: "csv" })}`,
   },
 }
 

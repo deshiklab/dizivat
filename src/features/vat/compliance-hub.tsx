@@ -33,6 +33,7 @@ const REPORTS: { form: string; key: string; href: string }[] = [
   { form: "6.7", key: "m67", href: "/sales/credit-notes" },
   { form: "6.8", key: "m68", href: "/purchases/debit-notes" },
   { form: "6.10", key: "m610", href: "/vat/mushak-6-10" },
+  { form: "EXP", key: "exports", href: "/vat/export-compliance" },
   { form: "9.1", key: "m91", href: "/vat/return-9-1" },
   { form: "TR-6", key: "tr6", href: "/vat/tr-6" },
 ]
@@ -103,6 +104,7 @@ export function ComplianceHub() {
                   <CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheck className="size-4" aria-hidden /> {t("vds")}</CardTitle></CardHeader>
                   <CardContent className="grid gap-1 text-sm">
                     <p>{t("vdsIssue", { n: fmtNum(d.vds.toIssue, locale), count: d.vds.toIssue })} <Money value={d.vds.toIssueAmount} /></p>
+                    {d.vds.toIssue > 0 && d.vds.issueBy && <p className="text-xs text-muted-foreground">{t("vdsIssueBy", { date: fmtDate(d.vds.issueBy, locale) })}</p>}
                     <p>{t("vdsAwaited", { n: fmtNum(d.vds.awaited, locale), count: d.vds.awaited })} <Money value={d.vds.awaitedAmount} /></p>
                     <Link href="/vat/vds" className="text-primary hover:underline">{t("openVds")}</Link>
                   </CardContent>

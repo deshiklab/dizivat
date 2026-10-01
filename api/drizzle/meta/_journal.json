@@ -15,6 +15,20 @@
       "when": 1790795410076,
       "tag": "0001_collation",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790812092624,
+      "tag": "0002_audit_chain",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790812093346,
+      "tag": "0003_audit_append_only",
+      "breakpoints": true
     }
   ]
 }
