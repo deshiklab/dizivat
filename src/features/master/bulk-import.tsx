@@ -107,7 +107,7 @@ function BulkImport() {
                 ))}
               </RadioGroup>
               <div className="flex flex-wrap items-center gap-2">
-                <input ref={fileRef} id="imp-file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" onChange={(e) => onFile(e.target.files?.[0])} />
+                <input ref={fileRef} id="imp-file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" tabIndex={-1} aria-label={t("choose")} onChange={(e) => onFile(e.target.files?.[0])} />
                 <Button onClick={() => fileRef.current?.click()}><Upload /> {t("choose")}</Button>
                 <Button variant="outline" render={<a href={template} download={`dizivat-${entity}-template.csv`} />}><Download /> {t("template")}</Button>
                 <span className="text-xs text-muted-foreground">{t("formats")}</span>

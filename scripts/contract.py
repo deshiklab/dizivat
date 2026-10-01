@@ -12,7 +12,7 @@ LACKS = {"doc.create": "auditor", "doc.edit": "auditor", "doc.delete": "auditor"
 # Who has it (used for the success/shape checks)
 HAS = {"users.manage": "admin", "settings.manage": "admin", "audit.view": "arif"}
 
-E = lambda m, p, perm, desc, page=False, csv=False, public=False: dict(m=m, p=p, perm=perm, desc=desc, page=page, csv=csv, public=public)
+E = lambda m, p, perm, desc, page=False, csv=False, public=False, ctype="application/json": dict(m=m, p=p, perm=perm, desc=desc, page=page, csv=csv, public=public, ctype=ctype)
 ENDPOINTS = [
     E("POST", "/auth/login", None, "Sign in {username, password, remember} → Me + httpOnly cookie. 401 attempts left, 403 disabled, 429 locked", public=True),
     E("POST", "/auth/logout", None, "Sign out (clears cookie)", public=True),
@@ -196,6 +196,30 @@ ENDPOINTS = [
     E("GET", "/audit", "audit.view", "Audit trail — Page<AuditEvent>; filters q/from/to/entity/action/actor/entityId", page=True, csv=True),
     E("GET", "/audit/verify", "audit.view", "R6: verify the tamper-evident SHA-256 audit chain {ok, algorithm, count, head, checkedAt, broken?}"),
     E("GET", "/vat/exports?from=2025-07-01&to=2026-09-25", None, "R6 (RMG): export & deemed-export register {from, to, rows (LC/UD/EXP/FC + NBR conditions met / missing), totals}; ?kind=direct|deemed, ?risk=1", csv=True),
+    # R6.2 — RMG depth + enlistment gaps
+    E("GET", "/vat/exports?proceeds=overdue", None, "R6.2: proceeds filter realised|partial|outstanding|overdue; rows also carry realisedFc, outstandingFc, proceedsDue (shipment + 120 days), proceeds; totals.unrealised / totals.overdue {count, value}", csv=True),
+    E("GET", "/vat/uds?customer=c10", None, "R6.2 (RMG): UD / UP register {rows (lines with used / remaining / pct / uses, usedPct, state, invoices, daysLeft), bonds (bond-licence watch-list), totals}", csv=True),
+    E("POST", "/vat/uds", "doc.create", "Add a UD / UP {kind, no, date, customerId (exporter), masterLcNo, buyer?, expiry, lines [{itemId, qty}], status?, note?} — 422 duplicate no / notExporter / expiryBeforeDate"),
+    E("GET", "/vat/uds/{ud}", None, "One UD with usage"),
+    E("PUT", "/vat/uds/{ud}", "doc.edit", "Update a UD; once invoices use it, number and exporter are locked (422)"),
+    E("DELETE", "/vat/uds/{ud}", "doc.delete", "Delete a UD while unused (409 udInUse)"),
+    E("POST", "/vat/uds/fit", None, "Does a deemed-export invoice fit its UD? {customerId, issueDate, udNo, lines, saleId?} → {ok, udId, problems (notListed / exceeds / expired / closed), lines}, or null when the UD is not in the register"),
+    E("POST", "/sales/{sale}/realisations", "doc.edit", "Record export proceeds (PRC) {date, bank, prcNo, fcAmount, rate, note?} on an approved FC export — 409 notRealisable; 422 over outstanding + 0.5 %, future date, duplicate PRC"),
+    E("DELETE", "/sales/{sale}/realisations?rid=x", "doc.approve", "Remove a PRC entered in error (audited)"),
+    E("GET", "/production/subcontract?from=2026-07-01&to=2026-09-25", None, "R6.2: subcontracting (Mushak 6.4) register {rows (process, issued / received / damaged / pending, days out, status), totals}; ?status, ?days=30 — 422 when to < from", csv=True),
+    E("GET", "/mushak/6.2.1?item=i6&from=2026-07-01&to=2026-09-25", None, "R6.2: Mushak 6.2.1 purchase-sales book of a traded item (purchases and sales side by side)", csv=True),
+    E("POST", "/import", "master.edit", "R6.2 bulk import {entity: items|customers|vendors, dryRun, rows (≤ 2,000, canonical field names)} → {total, valid, created, duplicates, issues [{row, field, message}]}; all-or-nothing; 201 when records were created"),
+    E("GET", "/backups", "settings.manage", "R6.2: backup status {timezone, schedule [02:00, 14:00], retention 30, storage, today, next, last, rows}"),
+    E("POST", "/backups", "settings.manage", "Take a backup now (201)"),
+    E("GET", "/backups/{backup}", "settings.manage", "Download a backup (application/gzip, `X-Backup-SHA256`); audited", ctype="application/gzip"),
+    E("POST", "/backups/{backup}/verify", "settings.manage", "Re-hash a stored backup {id, ok, sha256, size, checkedAt}"),
+]
+
+# Free-text notes written under the endpoint table by --doc
+NOTES = [
+    "**R6.2 — VAT officer:** `POST/PUT /users` accept `role: \"vatOfficer\"` with `accessUntil` (YYYY-MM-DD, today … +90 days;",
+    "422 required / accessPast / accessTooLong). After that date `POST /auth/login` answers `403 expired` and existing",
+    "sessions get 401. Every officer request is logged in the audit trail (entity `access`, action `viewed`).",
 ]
 
 sessions = {}
@@ -236,6 +260,10 @@ def fixtures():
 
 def run():
     fx = fixtures()
+    # R6.2 fixtures: a UD and a stored backup (one is taken if none exists yet — harmless)
+    fx["ud"] = S("arif").get(BASE + "/vat/uds").json()["rows"][0]["id"]
+    adm = S("admin"); rows = adm.get(BASE + "/backups").json().get("rows") or []
+    fx["backup"] = rows[0]["id"] if rows else adm.post(BASE + "/backups", json={}).json()["id"]
     for e in ENDPOINTS:
         path = e["p"].format(**fx); url = BASE + path; m = e["m"]
         # 401 for anonymous
@@ -249,7 +277,7 @@ def run():
         # shape for readable endpoints
         if m == "GET":
             r = S(HAS.get(e["perm"], "arif")).get(url)
-            check(r.status_code == 200 and r.headers["content-type"].startswith("application/json"), f"GET {path} → {r.status_code}")
+            check(r.status_code == 200 and r.headers["content-type"].startswith(e["ctype"]), f"GET {path} → {r.status_code} {r.headers.get('content-type')}")
             if e["page"] and r.ok:
                 d = r.json()
                 check(all(k in d for k in ("data", "total", "page", "size", "facets")) and isinstance(d["data"], list), f"GET {path} is not a Page")
@@ -421,9 +449,11 @@ def write_doc():
         extra = " · CSV" if e["csv"] else ""
         desc = e['desc'].replace('|', chr(92) + '|')  # escape pipes inside table cells
         lines.append(f"| {e['m']} | `{e['p'].replace('{', ':').replace('}', '')}` | {perm} | {desc}{extra} |")
-    lines += ["", "## Roles", "", "| Permission | admin | approver | operator | viewer |", "|---|---|---|---|---|"]
+    lines += [""] + NOTES
+    lines += ["", "## Roles", "", "| Permission | admin | approver | operator | viewer | vatOfficer |", "|---|---|---|---|---|---|"]
     roles = {"admin": set(LACKS), "approver": set(LACKS) - {"users.manage", "settings.manage"},
-             "operator": {"doc.create", "doc.edit", "doc.delete", "export"}, "viewer": {"audit.view", "export"}}
+             "operator": {"doc.create", "doc.edit", "doc.delete", "export"}, "viewer": {"audit.view", "export"},
+             "vatOfficer": {"audit.view", "export"}}
     for p_ in LACKS: lines.append(f"| `{p_}` | " + " | ".join("✓" if p_ in roles[r] else "—" for r in roles) + " |")
     open(out, "w").write("\n".join(lines) + "\n"); print("wrote", os.path.normpath(out))
 
