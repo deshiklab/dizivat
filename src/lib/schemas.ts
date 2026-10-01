@@ -220,18 +220,24 @@ const reqMobile = z.string().trim().min(1, "required").refine((v) => MOBILE_RE.t
 const reqEmail = z.string().trim().min(1, "required").max(120).refine((v) => EMAIL_RE.test(v), "email")
 
 /** Admin: create (invite) or edit a user. Username is immutable after creation. */
-export const userInput = z.object({
+const userBase = z.object({
   username: z.string().trim().toLowerCase().min(1, "required").regex(/^[a-z][a-z0-9._-]{2,29}$/, "username"),
   name: z.string().trim().min(2, "required").max(80),
   designation: z.string().trim().min(2, "required").max(60),
   email: reqEmail,
   mobile: optMobile,
   department: z.string().trim().max(60),
-  role: z.enum(["admin", "approver", "operator", "viewer"]),
+  role: z.enum(["admin", "approver", "operator", "viewer", "vatOfficer"]),
   active: z.boolean(),
+  /** R6.2: VAT officer — last day of access (the API also checks it lies within OFFICER_MAX_DAYS of today) */
+  accessUntil: z.string().regex(/^(\d{4}-\d{2}-\d{2})?$/, "date").optional().default(""),
 })
+const officerRule = (v: { role: string; accessUntil?: string }, ctx: z.RefinementCtx) => {
+  if (v.role === "vatOfficer" && !v.accessUntil) ctx.addIssue({ code: "custom", path: ["accessUntil"], message: "required" })
+}
+export const userInput = userBase.superRefine(officerRule)
 export type UserInput = z.input<typeof userInput>
-export const userUpdate = userInput.omit({ username: true })
+export const userUpdate = userBase.omit({ username: true }).superRefine(officerRule)
 
 /** Password policy: 8–64 chars with at least one letter and one digit. */
 export const newPassword = z.string().min(8, "pwLength").max(64, "pwLength")
@@ -379,6 +385,8 @@ export const batchInput = z.object({
   vendorId: z.string().max(40).optional().default(""),
   address: z.string().trim().max(250).optional().default(""),
   remark: z.string().trim().max(300).optional().default(""),
+  /** R6.2 (RMG): contractual batches — the process the contractor performs */
+  jobProcess: z.enum(["manufacture", "printing", "embroidery", "washing", "dyeing", "lamination", "other"]).optional(),
   issuedBy: z.string().min(2, "required"),
   designation: z.string().min(2, "required"),
   lines: z.array(z.object({
@@ -551,3 +559,43 @@ export const vatProfileInput = z.object({
 export const vatSettingsInput = z.object({ zoneCode: z.string().regex(/^\d{4}$/, "zoneCode"), profile: vatProfileInput.optional() })
 export type VatProfileInput = z.input<typeof vatProfileInput>
 export type VatSettingsInput = z.input<typeof vatSettingsInput>
+
+/* ── R6.2 ─────────────────────────────────────────────────────────────────── */
+
+/** UD / UP of an exporter customer: the inputs (our items) and quantities it may buy from us under the order. */
+export const udInput = z.object({
+  kind: z.enum(["UD", "UP"]),
+  no: z.string().trim().min(3, "required").max(40),
+  date: isoDate,
+  customerId: z.string().min(1, "required"),
+  masterLcNo: z.string().trim().min(3, "required").max(40),
+  buyer: z.string().trim().max(80).optional().default(""),
+  expiry: isoDate,
+  note: z.string().trim().max(300).optional().default(""),
+  status: z.enum(["active", "closed"]).optional().default("active"),
+  lines: z.array(z.object({ itemId: z.string().min(1, "required"), qty: z.number({ error: "required" }).positive("positive") })).min(1, "atLeastOneLine"),
+}).superRefine((v, ctx) => {
+  if (v.expiry < v.date) ctx.addIssue({ code: "custom", path: ["expiry"], message: "expiryBeforeDate" })
+  const seen = new Set<string>()
+  v.lines.forEach((l, i) => { if (seen.has(l.itemId)) ctx.addIssue({ code: "custom", path: ["lines", i, "itemId"], message: "duplicate" }); seen.add(l.itemId) })
+})
+export type UdInput = z.input<typeof udInput>
+
+/** Export proceeds realised through the bank (PRC). */
+export const realisationInput = z.object({
+  date: isoDate,
+  bank: z.string().trim().min(2, "required").max(80),
+  prcNo: z.string().trim().min(2, "required").max(40),
+  fcAmount: z.number({ error: "required" }).positive("positive"),
+  rate: z.number({ error: "required" }).positive("positive").max(1000),
+  note: z.string().trim().max(200).optional().default(""),
+})
+export type RealisationInput = z.input<typeof realisationInput>
+
+/** Bulk import: one call validates (dryRun) or creates every row; rows are the already-parsed spreadsheet records. */
+export const bulkImportInput = z.object({
+  entity: z.enum(["items", "customers", "vendors"]),
+  dryRun: z.boolean().default(true),
+  rows: z.array(z.record(z.string(), z.unknown())).min(1, "atLeastOneRow").max(2000, "tooManyRows"),
+})
+export type BulkImportInput = z.input<typeof bulkImportInput>

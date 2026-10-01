@@ -10,28 +10,30 @@ import { mushak610 } from "../../_r4"
 type Ctx = { params: Promise<{ form: string }> }
 const ISO = /^\d{4}-\d{2}-\d{2}$/
 
-/** GET /mushak/6.1|6.2?item=&from=&to= (&format=csv). 6.1 = inputs (not finished goods), 6.2 = finished goods. */
+/** GET /mushak/6.1|6.2|6.2.1?item=&from=&to= (&format=csv). 6.1 = inputs (not finished goods), 6.2 = finished goods. */
 export const GET = withAuth<Ctx>(null, async (req, { params }) => {
   const { form } = await params
   const sp = new URL(req.url).searchParams
   if (form === "6.10") return m610(sp)
-  if (form !== "6.1" && form !== "6.2") return problem(404, form === "9.1" ? "Mushak 9.1 lives under /vat/returns/{period}" : `Mushak ${form} is not available`)
+  const f = form === "6.2.1" ? "6.2" : form
+  if (form !== "6.1" && form !== "6.2" && form !== "6.2.1") return problem(404, form === "9.1" ? "Mushak 9.1 lives under /vat/returns/{period}" : `Mushak ${form} is not available`)
   const it = db.items.find((i) => i.id === sp.get("item"))
   const from = sp.get("from") || "2026-07-01", to = sp.get("to") || TODAY
   const errors: Record<string, string[]> = {}
   if (!it) errors.item = ["required"]
-  else if ((form === "6.2") !== (it.group === "Finished Goods")) errors.item = [form === "6.2" ? "finishedGoodsOnly" : "inputsOnly"]
+  // 6.2.1 (R6.2) — purchase-sales book of traded goods: any item that is bought and sold
+  else if (form !== "6.2.1" && (form === "6.2") !== (it.group === "Finished Goods")) errors.item = [form === "6.2" ? "finishedGoodsOnly" : "inputsOnly"]
   if (!ISO.test(from)) errors.from = ["required"]
   if (!ISO.test(to)) errors.to = ["required"]
   if (!errors.from && !errors.to && from > to) errors.to = ["toBeforeFrom"]
   if (Object.keys(errors).length || !it) return problem(422, "Validation failed", errors)
-  const b = buildBook(form, it, from, to)
+  const b = { ...buildBook(f as "6.1" | "6.2", it, from, to), form: form as MushakBook["form"] }
   if (sp.get("format") === "csv") {
     return csvResponse(toCSV(b.rows, [
       { key: "sl", label: "SL" }, { key: "date", label: "Date" }, { key: "openQty", label: "Opening qty" }, { key: "openValue", label: "Opening value" },
-      { key: "ref", label: form === "6.1" ? "Challan / BoE / Ref" : "Invoice / Ref" }, { key: "refDate", label: "Ref date" },
-      { key: "party", label: form === "6.1" ? "Seller" : "Buyer" }, { key: "partyAddress", label: "Address" }, { key: "partyBin", label: "BIN/NID" }, { key: "description", label: "Description" },
-      { key: "inQty", label: form === "6.1" ? "Purchased qty" : "Produced qty" }, { key: "inValue", label: "Value (excl. SD & VAT)" }, { key: "sd", label: "SD" }, { key: "vat", label: "VAT" },
+      { key: "ref", label: form === "6.1" ? "Challan / BoE / Ref" : form === "6.2.1" ? "Challan / Invoice / Ref" : "Invoice / Ref" }, { key: "refDate", label: "Ref date" },
+      { key: "party", label: form === "6.1" ? "Seller" : form === "6.2.1" ? "Seller / Buyer" : "Buyer" }, { key: "partyAddress", label: "Address" }, { key: "partyBin", label: "BIN/NID" }, { key: "description", label: "Description" },
+      { key: "inQty", label: form === "6.1" || form === "6.2.1" ? "Purchased qty" : "Produced qty" }, { key: "inValue", label: "Value (excl. SD & VAT)" }, { key: "sd", label: "SD" }, { key: "vat", label: "VAT" },
       { key: "outQty", label: form === "6.1" ? "Used / out qty" : "Sold / out qty" }, { key: "outValue", label: "Out value" }, { key: "closeQty", label: "Closing qty" }, { key: "closeValue", label: "Closing value" },
     ]), `mushak-${form}-${it.sku}-${from}-${to}.csv`)
   }

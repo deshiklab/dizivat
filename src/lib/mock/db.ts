@@ -1,4 +1,4 @@
-import type { AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { UdRecord, AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -7,6 +7,7 @@ import { seedStockDocs, seedUnits } from "./seed-stock"
 import { EXTRA_VENDORS, enrichImports, seedDebitNotes, seedMasterItems, seedOpening, seedServicePurchases } from "./seed-r2"
 import { EXTRA_CUSTOMERS, enrichCustomers, enrichExports, seedBoms, seedCreditNotes, seedProduction, seedR3Sales } from "./seed-r3"
 import { seedR4 } from "./seed-r4"
+import { seedRealisations, seedUds } from "./seed-r6"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -17,7 +18,7 @@ interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -25,6 +26,8 @@ interface DB {
   /** R4 */
   moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]; adjustments: VatAdjustment[]; returns: VatReturn[]
   accountingConfig: AccountingConfig; vatSettings: VatSettings
+  /** R6.2 (RMG): exporters' UD / UP records */
+  uds: UdRecord[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -88,6 +91,8 @@ function init(): DB {
   // R3: service sales + deemed exports, credit notes, 4.3 declarations, work orders and batches (factory stock)
   const balMain = { get: (id: string) => bal.get(key(id, main)) ?? 0, add: (id: string, q: number) => bal.set(key(id, main), (bal.get(key(id, main)) ?? 0) + q) }
   d.sales.push(...seedR3Sales(d.sales.length + 1, d.sales, d.customers, d.items, { id: main, name: mainName }, balMain))
+  seedRealisations(d.sales)
+  const uds = seedUds(d.customers, d.items)
   const creditNotes = seedCreditNotes(d.sales, d.items, balMain)
   const boms = seedBoms(d.items)
   const { workOrders, batches } = seedProduction(d.items, boms, d.vendors, { id: main, name: mainName }, balMain)
@@ -106,23 +111,25 @@ function init(): DB {
     ...r4.adjustments.map((x) => ({ entity: "adjustment" as const, id: x.id, ref: x.no, history: x.history })),
     ...r4.treasury.map((x) => ({ entity: "treasury" as const, id: x.id, ref: x.no, history: x.history })),
     ...r4.returns.map((x) => ({ entity: "vatReturn" as const, id: x.period, ref: `9.1 · ${x.period.slice(5)}-${x.period.slice(0, 4)}`, history: x.history })),
+    ...uds.map((x) => ({ entity: "ud" as const, id: x.id, ref: `${x.no} · ${x.customerName}`, history: x.history })),
   ]
   seedAudit(d.sales, d.purchases, [...transfers, ...damages], r2Docs)
   return {
     ...d, trash: [], units: seedUnits(), transfers, damages, debitNotes, openings, masterItems,
     creditNotes, boms, workOrders, batches, productionConfig: { procedure: "directStock", consumption: "standard" },
     ...r4,
+    uds,
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
       account: r4.moneyAccounts.length, receipt: r4.moneyDocs.filter((x) => x.kind === "receipt").length, payment: r4.moneyDocs.filter((x) => x.kind === "payment").length,
-      treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length,
+      treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length,
     },
   }
 }
 
 /** Seeds the global audit log from document histories, recent sign-ins and a few admin events. */
-type R2Doc = { entity: "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "account" | "receipt" | "payment" | "vds" | "adjustment" | "treasury" | "vatReturn"; id: string; ref: string; history?: HistoryEntry[] }
+type R2Doc = { entity: "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "account" | "receipt" | "payment" | "vds" | "adjustment" | "treasury" | "vatReturn" | "ud"; id: string; ref: string; history?: HistoryEntry[] }
 function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], r2Docs: R2Doc[]) {
   if (auditStore.events.length) return
   const raw: Parameters<typeof recordAudit>[0][] = []
@@ -156,6 +163,9 @@ function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], 
 // NB: init() runs at module load — helpers it calls must be hoisted `function` declarations, not `const` arrows (TDZ).
 const g = globalThis as unknown as { __dzDb?: DB }
 export const db: DB = (g.__dzDb ??= init())
+// R6.2: state saved by an earlier release (the PostgreSQL compat snapshot) has no UD register yet
+db.uds ??= []
+db.seq.ud ??= db.uds.length
 
 export const withStock = (i: Item): ItemWithStock => ({
   ...i,

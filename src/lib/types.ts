@@ -149,7 +149,12 @@ export interface ExportInfo {
   currency?: ExportCurrency; fcValue?: number; exchangeRate?: number
   /** R6 (RMG): exporter's bond licence (deemed export; defaults to the customer's) */
   exporterBond?: string
+  /** R6.2 (RMG): export proceeds realised through the bank (PRC), direct exports and deemed exports alike */
+  realisations?: Realisation[]
 }
+
+/** R6.2: one bank realisation of export proceeds — Proceeds Realisation Certificate (PRC). */
+export interface Realisation { id: string; date: string; bank: string; prcNo: string; fcAmount: number; rate: number; bdt: number; note?: string; by: string; at: string }
 
 export interface Purchase extends DocBase {
   invoiceNo: string
@@ -246,10 +251,14 @@ export interface ItemLedger {
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
 export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings"
+  /** R6.2 */
+  | "ud" | "backup" | "access" | "import"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
   | "signedIn" | "signedOut" | "signInFailed" | "submitted"
+  /** R6.2: VAT-officer page access, export proceeds, backups, bulk import */
+  | "viewed" | "realised" | "backedUp" | "downloaded" | "imported"
 export interface AuditChange { field: string; from: string; to: string }
 export interface AuditEvent {
   id: string
@@ -428,7 +437,8 @@ export interface BookRow {
   summary?: boolean
 }
 export interface MushakBook {
-  form: "6.1" | "6.2"
+  /** 6.2.1 (R6.2) = purchase-sales book: purchases and sales of the same item side by side */
+  form: "6.1" | "6.2" | "6.2.1"
   item: ItemWithStock
   from: string; to: string
   company: { name: string; address: string; bin: string }
@@ -566,6 +576,8 @@ export interface Batch {
   process: Process
   /** contractual: finished goods received back from the contractor */
   receivedAt?: string
+  /** R6.2 (RMG): what the contractor does — full manufacture or a single process (printing, washing …) */
+  jobProcess?: SubconProcess
   branchId: string; branchName: string
   createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
 }
@@ -822,11 +834,16 @@ export interface ExportRegisterRow {
   lcNo: string; lcDate: string; udNo?: string; expNo?: string; billNo?: string; country?: string
   currency?: string; fcValue?: number; exchangeRate?: number; value: number
   complete: boolean; missing: string[]
+  /** R6.2: export proceeds — realised FC, still outstanding, due date (shipment + 120 days) and state */
+  realisedFc: number; outstandingFc: number; proceedsDue?: string; proceeds: ProceedsState
 }
+export type ProceedsState = "realised" | "partial" | "outstanding" | "overdue" | "na"
 export interface ExportRegister {
   from: string; to: string
   rows: ExportRegisterRow[]
-  totals: { direct: { count: number; value: number }; deemed: { count: number; value: number }; atRisk: { count: number; value: number } }
+  totals: { direct: { count: number; value: number }; deemed: { count: number; value: number }; atRisk: { count: number; value: number }
+    /** R6.2: invoices with proceeds still to realise / past the 120-day limit, valued in BDT at the invoice rate */
+    unrealised: { count: number; value: number }; overdue: { count: number; value: number } }
 }
 /** R6: result of verifying the audit hash chain. */
 export type { ChainReport as AuditIntegrity } from "./integrity"
@@ -849,3 +866,52 @@ export interface Mushak610 {
   totals: Record<"purchases" | "sales", { value: number; vat: number; total: number }>
 }
 export interface SubForm { period: string; note: number; rows: SubFormRow[]; total: { value: number; sd: number; vat: number } }
+
+/* ── R6.2 — RMG (UD / bond, proceeds, subcontracting) and NBR enlistment (backups, import) ─────────── */
+
+/** Utilization Declaration (BGMEA / BKMEA) or Utilization Permission (customs) of an exporter customer: the inputs
+ *  it may procure duty/VAT-free for one export order. Deemed exports must fit inside an active UD's quantities. */
+export interface UdLine { itemId: string; name: string; hsCode: string; uom: string; qty: number }
+export interface UdRecord {
+  id: string; no: string; date: string; kind: "UD" | "UP"
+  customerId: string; customerName: string; customerBin: string
+  /** export LC / sales contract of the garment order and the foreign buyer */
+  masterLcNo: string; buyer?: string; expiry: string
+  lines: UdLine[]
+  status: "active" | "closed"
+  note?: string
+  createdBy: string; createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+export interface UdUse { saleId: string; invoiceNo: string; date: string; qty: number; process: Process }
+export type UdLineUsage = UdLine & { used: number; remaining: number; pct: number; uses: UdUse[] }
+export type UdState = "ok" | "warn" | "exhausted" | "over" | "expired" | "closed"
+export type UdRow = Omit<UdRecord, "lines"> & { lines: UdLineUsage[]; usedPct: number; state: UdState; invoices: number; daysLeft: number }
+/** Bond licence watch-list: the company's own licence and every exporter customer's. */
+export interface BondRow { kind: "own" | "customer"; partyId?: string; name: string; licenceNo: string; expiry: string; daysLeft: number | null; state: "valid" | "expiring" | "expired" | "missing" }
+export interface UdRegister { rows: UdRow[]; bonds: BondRow[]; totals: { active: number; warn: number; over: number; expired: number } }
+
+export type SubconProcess = "manufacture" | "printing" | "embroidery" | "washing" | "dyeing" | "lamination" | "other"
+/** One contractual batch in the subcontracting (Mushak 6.4) register. */
+export interface SubconRow {
+  id: string; no: string; issueDate: string; receiveDate?: string; vendorId?: string; vendorName: string; vendorBin: string
+  process: SubconProcess; state: Process; materialValue: number; value: number
+  issued: number; received: number; damaged: number; pending: number; days: number
+  status: "atContractor" | "partial" | "returned" | "overdue" | "draft" | "cancelled"
+}
+export interface SubconRegister { from: string; to: string; overdueDays: number; rows: SubconRow[]; totals: { atContractor: number; pendingValue: number; overdue: number; returned: number } }
+
+/** Database backup (GO 16/Mushak/2019: at least two backups of the transaction data every day). */
+export interface BackupRow {
+  id: string; at: string; kind: "scheduled" | "manual"; slot: string; by: string
+  /** bytes of the compressed snapshot and its SHA-256 */
+  size: number; sha256: string; tables: Record<string, number>
+}
+export interface BackupStatus {
+  timezone: string; schedule: string[]; retention: number; storage: "postgres" | "memory"
+  today: number; next: string; last?: BackupRow; rows: BackupRow[]
+}
+export interface BackupVerify { id: string; ok: boolean; sha256: string; size: number; checkedAt: string }
+
+export type ImportEntity = "items" | "customers" | "vendors"
+export interface ImportIssue { row: number; field: string; message: string }
+export interface ImportResult { entity: ImportEntity; dryRun: boolean; total: number; valid: number; created: number; duplicates: number; issues: ImportIssue[] }

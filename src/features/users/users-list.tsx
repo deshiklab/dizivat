@@ -25,7 +25,7 @@ import { TempPasswordDialog } from "./temp-password-dialog"
 import { RolesMatrix } from "./roles-matrix"
 
 const FACETS = ["role", "status"] as const
-const roleTone = { admin: "danger", approver: "info", operator: "neutral", viewer: "warning" } as const
+const roleTone = { admin: "danger", approver: "info", operator: "neutral", viewer: "warning", vatOfficer: "success" } as const
 
 export function UsersPage() {
   return <RequirePerm perm="users.manage" back="/"><UsersInner /></RequirePerm>

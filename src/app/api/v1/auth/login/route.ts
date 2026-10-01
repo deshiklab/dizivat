@@ -3,6 +3,7 @@ import { issueSession, meFor } from "@/lib/auth/session-user"
 import { passwordOf, userStore, users } from "@/lib/mock/users"
 import { recordAudit } from "@/lib/mock/audit"
 import { delay } from "@/lib/mock/query"
+import { accessExpired } from "@/lib/auth/roles"
 import { json, problem } from "../../_lib"
 
 const body = z.object({ username: z.string().trim().min(1, "required"), password: z.string().min(1, "required"), remember: z.boolean().optional() })
@@ -33,6 +34,11 @@ export async function POST(req: Request) {
   delete userStore.failures[key]
   // Checked after the password so a disabled account is not revealed to someone guessing
   if (!user.active) return problem(403, "disabled")
+  // R6.2: a VAT officer's access period has ended
+  if (accessExpired(user)) {
+    recordAudit({ actor: user, entity: "session", entityId: user.id, ref: user.username, action: "signInFailed", note: `Access period ended ${user.accessUntil ?? ""}`.trim() })
+    return problem(403, "expired")
+  }
   user.lastSignInAt = new Date().toISOString()
   recordAudit({ actor: user, entity: "session", entityId: user.id, ref: user.username, action: "signedIn" })
   const res = json(meFor(user))

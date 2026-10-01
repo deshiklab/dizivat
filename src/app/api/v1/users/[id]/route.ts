@@ -1,4 +1,5 @@
 import { userUpdate } from "@/lib/schemas"
+import { accessUntilError } from "@/lib/auth/roles"
 import { diff, recordAudit } from "@/lib/mock/audit"
 import { findUser, initialsOf, userStore, users } from "@/lib/mock/users"
 import { json, problem, withAuth, zodProblem } from "../../_lib"
@@ -23,6 +24,11 @@ export const PUT = withAuth<Ctx>("users.manage", async (req, { params }, actor) 
   if (!parsed.success) return zodProblem(parsed.error)
   const d = parsed.data
   if (users.some((x) => x.id !== u.id && x.email.toLowerCase() === d.email.toLowerCase())) return problem(422, "Validation failed", { email: ["duplicate"] })
+  // R6.2: an officer's access date is validated when it changes (an unchanged past date can stay while deactivating)
+  if (d.role === "vatOfficer" && (d.accessUntil !== u.accessUntil || u.role !== "vatOfficer")) {
+    const ae = accessUntilError(d.role, d.accessUntil)
+    if (ae) return problem(422, "Validation failed", { accessUntil: [ae] })
+  } else if (d.role === "vatOfficer" && !d.accessUntil) return problem(422, "Validation failed", { accessUntil: ["required"] })
   const roleChanged = d.role !== u.role, statusChanged = d.active !== u.active
   if (u.id === actor.id && roleChanged) return problem(422, "Validation failed", { role: ["self"] })
   if (u.id === actor.id && !d.active) return problem(422, "Validation failed", { active: ["self"] })
@@ -31,10 +37,13 @@ export const PUT = withAuth<Ctx>("users.manage", async (req, { params }, actor) 
     return problem(422, "Validation failed", { [d.active ? "role" : "active"]: ["lastAdmin"] })
   }
   const before = { ...u }
-  Object.assign(u, d, { initials: initialsOf(d.name) })
+  const { accessUntil, ...rest } = d
+  Object.assign(u, rest, { initials: initialsOf(d.name) })
+  if (d.role === "vatOfficer") u.accessUntil = accessUntil
+  else delete u.accessUntil
   if (statusChanged && !u.active) userStore.revokedBefore[u.id] = Math.floor(Date.now() / 1000)
   const action = statusChanged ? (u.active ? "activated" : "deactivated") : roleChanged ? "roleChanged" : "updated"
   recordAudit({ actor, entity: "user", entityId: u.id, ref: u.username, action,
-    changes: diff(before, u, ["name", "designation", "email", "mobile", "department", "role", "active"]) })
+    changes: diff(before, u, ["name", "designation", "email", "mobile", "department", "role", "active", "accessUntil"]) })
   return json(u)
 })

@@ -1,5 +1,6 @@
 import type { User } from "@/lib/auth/roles"
 import { userInput } from "@/lib/schemas"
+import { accessUntilError } from "@/lib/auth/roles"
 import { recordAudit } from "@/lib/mock/audit"
 import { csvResponse, delay, runQuery, toCSV } from "@/lib/mock/query"
 import { initialsOf, tempPassword, userStore, users } from "@/lib/mock/users"
@@ -36,13 +37,16 @@ export const POST = withAuth("users.manage", async (req, _ctx, actor) => {
   const d = parsed.data
   if (users.some((u) => u.username === d.username)) return problem(422, "Validation failed", { username: ["duplicate"] })
   if (users.some((u) => u.email.toLowerCase() === d.email.toLowerCase())) return problem(422, "Validation failed", { email: ["duplicate"] })
+  const ae = accessUntilError(d.role, d.accessUntil)
+  if (ae) return problem(422, "Validation failed", { accessUntil: [ae] })
+  const { accessUntil, ...rest } = d
   const user: User = {
-    id: `u${users.length + 1}-${Date.now().toString(36)}`, ...d, initials: initialsOf(d.name),
+    id: `u${users.length + 1}-${Date.now().toString(36)}`, ...rest, ...(d.role === "vatOfficer" ? { accessUntil } : {}), initials: initialsOf(d.name),
     createdAt: new Date().toISOString(), mustChangePassword: true,
   }
   const pw = tempPassword()
   users.push(user)
   userStore.passwords[user.id] = pw
-  recordAudit({ actor, entity: "user", entityId: user.id, ref: user.username, action: "invited", note: `Role: ${user.role}` })
+  recordAudit({ actor, entity: "user", entityId: user.id, ref: user.username, action: "invited", note: `Role: ${user.role}${user.accessUntil ? ` · access until ${user.accessUntil}` : ""}` })
   return json({ user, tempPassword: pw }, { status: 201 })
 })

@@ -1,6 +1,9 @@
 import type { AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
 import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
+import type { BackupRow, BackupStatus, BackupVerify, ImportEntity, ImportResult, Sale as R62Sale, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
+import type { RealisationInput, UdInput } from "../schemas"
+import type { UdFit } from "../rmg"
 import { appPathname, appUrl } from "../base-path"
 
 /**
@@ -212,10 +215,13 @@ export const api = {
     config: () => req<ProductionConfig>("/production/config"),
     saveConfig: (b: ProductionConfigInput) => req<ProductionConfig>("/production/config", { method: "PUT", body: JSON.stringify(b) }),
     lots: (item: string, exclude?: string) => req<Lot[]>(`/production/lots${qs({ item, exclude })}`),
+    /** R6.2 (RMG): subcontracting register (contractual batches, Mushak 6.4) */
+    subcontract: (p: { from: string; to: string; status?: string; days?: number }) => req<SubconRegister>(`/production/subcontract${qs(p)}`),
+    subcontractCsvUrl: (p: { from: string; to: string; status?: string; days?: number }) => `${BASE}/production/subcontract${qs({ ...p, format: "csv" })}`,
   },
   mushak: {
-    book: (form: "6.1" | "6.2", p: { item: string; from: string; to: string }) => req<MushakBook>(`/mushak/${form}${qs(p)}`),
-    csvUrl: (form: "6.1" | "6.2", p: { item: string; from: string; to: string }) => `${BASE}/mushak/${form}${qs({ ...p, format: "csv" })}`,
+    book: (form: "6.1" | "6.2" | "6.2.1", p: { item: string; from: string; to: string }) => req<MushakBook>(`/mushak/${form}${qs(p)}`),
+    csvUrl: (form: "6.1" | "6.2" | "6.2.1", p: { item: string; from: string; to: string }) => `${BASE}/mushak/${form}${qs({ ...p, format: "csv" })}`,
     m610: (p: { from: string; to: string }) => req<Mushak610>(`/mushak/6.10${qs(p)}`),
     m610CsvUrl: (p: { from: string; to: string }) => `${BASE}/mushak/6.10${qs({ ...p, format: "csv" })}`,
   },
@@ -260,8 +266,31 @@ export const api = {
     settings: () => req<VatSettings>("/vat/settings"),
     saveSettings: (b: VatSettingsInput) => req<VatSettings>("/vat/settings", { method: "PUT", body: JSON.stringify(b) }),
     /** R6 (RMG): export & deemed-export register */
-    exports: (p: { from: string; to: string; kind?: string; risk?: string }) => req<ExportRegister>(`/vat/exports${qs(p)}`),
-    exportsCsvUrl: (p: { from: string; to: string; kind?: string; risk?: string }) => `${BASE}/vat/exports${qs({ ...p, format: "csv" })}`,
+    exports: (p: { from: string; to: string; kind?: string; risk?: string; proceeds?: string }) => req<ExportRegister>(`/vat/exports${qs(p)}`),
+    exportsCsvUrl: (p: { from: string; to: string; kind?: string; risk?: string; proceeds?: string }) => `${BASE}/vat/exports${qs({ ...p, format: "csv" })}`,
+    /** R6.2 (RMG): UD / UP register and bond licence watch-list */
+    uds: {
+      register: (customer?: string) => req<UdRegister>(`/vat/uds${qs({ customer })}`),
+      csvUrl: () => `${BASE}/vat/uds?format=csv`,
+      get: (id: string) => req<UdRow>(`/vat/uds/${id}`),
+      create: (b: UdInput) => req<UdRecord>("/vat/uds", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: UdInput) => req<UdRow>(`/vat/uds/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true }>(`/vat/uds/${id}`, { method: "DELETE" }),
+      fit: (b: { saleId?: string; customerId: string; issueDate: string; udNo?: string; lines: { itemId: string; qty: number }[] }) => req<UdFit | null>("/vat/uds/fit", { method: "POST", body: JSON.stringify(b) }),
+    },
+    /** R6.2 (RMG): export proceeds realised (PRC) */
+    realise: (saleId: string, b: RealisationInput) => req<R62Sale>(`/sales/${saleId}/realisations`, { method: "POST", body: JSON.stringify(b) }),
+    unrealise: (saleId: string, rid: string) => req<R62Sale>(`/sales/${saleId}/realisations${qs({ rid })}`, { method: "DELETE" }),
+  },
+  /* ── R6.2 (NBR enlistment) ── */
+  backups: {
+    status: () => req<BackupStatus>("/backups"),
+    create: () => req<BackupRow>("/backups", { method: "POST" }),
+    verify: (id: string) => req<BackupVerify>(`/backups/${id}/verify`, { method: "POST" }),
+    downloadUrl: (id: string) => `${BASE}/backups/${id}`,
+  },
+  import: {
+    run: (b: { entity: ImportEntity; dryRun: boolean; rows: Record<string, unknown>[] }) => req<ImportResult>("/import", { method: "POST", body: JSON.stringify(b) }),
   },
 }
 

@@ -4,7 +4,7 @@
  */
 import { companySummary } from "../mock/company"
 import { findUser, userStore } from "../mock/users"
-import { ROLE_PERMS, type Me, type User } from "./roles"
+import { accessExpired, ROLE_PERMS, type Me, type User } from "./roles"
 import { SESSION_COOKIE, SESSION_TTL_LONG, SESSION_TTL_SHORT, signSession, verifySession, type SessionPayload } from "./session"
 import { readCookie, setCookie, type CookieOptions } from "./cookies"
 
@@ -13,7 +13,7 @@ export async function userFromToken(token: string | undefined | null): Promise<U
   const s = await verifySession(token)
   if (!s) return null
   const u = findUser(s.uid)
-  if (!u || !u.active) return null
+  if (!u || !u.active || accessExpired(u)) return null
   const revoked = userStore.revokedBefore[u.id]
   if (revoked && (s.iat ?? 0) < revoked) return null
   return u

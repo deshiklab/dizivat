@@ -306,7 +306,7 @@ export function seedProduction(items: Item[], boms: Bom[], vendors: Party[], mai
     const batch: Batch = {
       id: `pb${i + 1}`, no: p.no, mode: p.mode, issueDate: p.date, receiveDate: p.receive ?? (p.mode === "opening" ? p.date : undefined),
       vendorId: vendor?.id, vendorName: vendor?.name, vendorBin: vendor?.bin, vendorAddress: vendor?.address, address: vendor ? `${vendor.name}, ${vendor.address}` : undefined,
-      remark: p.remark || undefined, issuedBy: "Arif Hossain", designation: "Shift-In-Charge", issueTime: "09:00", lines, consumption,
+      remark: p.remark || undefined, jobProcess: p.mode === "contractual" ? (p.no === "PB-09260001" ? "lamination" : "printing") : undefined, issuedBy: "Arif Hossain", designation: "Shift-In-Charge", issueTime: "09:00", lines, consumption,
       totalIssue: round2(lines.reduce((a, l) => a + l.issueQty, 0)), totalReceive: round2(lines.reduce((a, l) => a + l.receiveQty, 0)), totalDamage: round2(lines.reduce((a, l) => a + l.damageQty, 0)),
       materialValue: round2(consumption.reduce((a, c) => a + c.value, 0)), value: round2(lines.reduce((a, l) => a + l.value, 0)),
       process, receivedAt: p.received && process === "Approved" ? at(p.received, "16:00") : undefined, branchId: main.id, branchName: main.name, createdAt: created,
