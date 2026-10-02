@@ -85,11 +85,14 @@ plan runs exactly one.
   checks, the stored shape and the id format therefore cannot drift between the PostgreSQL API, the Next.js mock and
   the GitHub Pages demo — all three run the same code.
 - **The database enforces the duplicates too**: partial unique indexes on `(kind, lower(btrim(name)))` and
-  `(kind, regexp_replace(bin, '^NID ', ''))`, both excluding the trash. A race that slips past the application check
-  is a 422 (the unique violation is translated), never a duplicate row.
+  `(kind, regexp_replace(bin, '^NID ', ''))`, both excluding the trash. A collision that slips past the application
+  check is a 422, never a duplicate row — `uniqueViolation()` (`api/src/common/http.ts`) reads the PostgreSQL code
+  from the driver error drizzle wraps it in, so every module translates it the same way.
 - **Deleting is a `deleted_at` stamp.** The record stays in PostgreSQL — master data an NBR audit can ask about never
   leaves relational storage — and the undo trash is rebuilt from the table at boot. Only parties without documents
-  can be deleted at all (409 `in-use:N` otherwise), exactly as before.
+  can be deleted at all (409 `in-use:N` otherwise), exactly as before. The undo answers 200 with the party, as the
+  mock did: a POST, but nothing is created. Because the indexes ignore the trash, a deleted party's name and BIN are
+  free again — so an undo can collide with whatever took them, and answers that same 422 with the record left deleted.
 - **Upgrading an existing database.** On the first boot after the migration, `boot.ts` moves the customers and
   vendors it finds inside `compat_state` (and the deleted ones in its undo buffer) into `parties`, then rewrites the
   snapshot without them — the items and master items below take the same path, in the same transaction. No re-seed: a customer installation keeps its data, and `SEED_VERSION` is unchanged.
@@ -113,7 +116,8 @@ drift.
   an item's `remain` — and the stock valuation the register totals — travels with its row. Items are never deleted:
   an unused SKU is deactivated, because its ledger must stay readable.
 - **Unique by the database too**: `lower(sku)` on `items`, `lower(name)` on `master_items` — the checks the handlers
-  run, with the unique violation translated to the same 422 (`{sku:["duplicate"]}`, `{name:["duplicate"]}`).
+  run, with the unique violation translated to the same 422 (`{sku:["duplicate"]}`, `{name:["duplicate"]}`) on create,
+  update and rename alike.
 - **A master item's rename carries its SKUs along** in the same transaction (they reference it by name, as the legacy
   data does), and the mirror's copies move with them.
 - **Ids stay the mock's**: `i<n>-<base36>` from the number of items, `m<n>` from the highest number the table has ever

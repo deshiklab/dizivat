@@ -219,7 +219,8 @@ def run():
               "R5.2: …and master items in master_items")
         check(psql(f"select count(*) from items where master_item = 'R5 Master Renamed {TAG}'") == "1", "R5.2: the rename carried the SKU along in the table")
         check(psql(f"select opening = 40 from items where id = '{iid}'") == "t", "R5.2: a compat document that moved a counter reached the table")
-        check(psql(f"select count(*) from items where sku = 'R5IMP-{TAG}'") == "1", "R5.2: …and the compat bulk import was adopted into it")
+        # the R6.2 importer uppercases every SKU it reads (`str(r.sku).toUpperCase()`), so the row carries the tag in capitals
+        check(psql(f"select count(*) from items where sku = 'R5IMP-{TAG.upper()}'") == "1", "R5.2: …and the compat bulk import was adopted into it")
         check(psql("select count(*) from compat_state where data->'db' ? 'items' or data->'db' ? 'masterItems'") == "0",
               "R5.2: the snapshot carries no item collection at all")
         check(int(psql("select count(*) from items")) >= 22 and int(psql("select count(*) from master_items")) >= 19,
@@ -254,6 +255,18 @@ def run():
     check(arif.post(f"{BASE}/vendors/{gid}/restore").status_code == 404, "restoring something not in the trash is a 404")
     d2 = arif.delete(f"{BASE}/vendors/{gid}")
     check(d2.status_code == 200, "deleted again — left deleted for the restart check")
+    # the unique indexes ignore the trash, so a deleted party's name is free again — and an undo that then collides
+    # answers with the form's 422 (the driver error unwrapped), not a 500, leaving the record deleted
+    ca = arif.post(f"{BASE}/vendors", json={"name": f"R5 CLASH {TAG}", "mode": "Foreign", "country": "China", "address": "Shenzhen, China"}).json()
+    arif.delete(f"{BASE}/vendors/{ca['id']}")
+    cb = arif.post(f"{BASE}/vendors", json={"name": f"r5 clash {TAG}", "mode": "Foreign", "country": "China", "address": "Chittagong"})
+    check(cb.status_code == 201, f"R5.2: a deleted party's name is free again ({cb.status_code})")
+    cc = arif.post(f"{BASE}/vendors/{ca['id']}/restore")
+    check(cc.status_code == 422 and cc.json().get("errors", {}).get("name") == ["duplicate"],
+          f"R5.2: an undo whose name was taken again is a 422, not a 500 ({cc.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from parties where id = '{ca['id']}' and deleted_at is not null") == "1",
+              "R5.2: …and the refused undo leaves the record in the trash")
     check(arif.delete(f"{BASE}/customers/c1").status_code == 409, "a customer with invoices cannot be deleted (409 in-use:N)")
     check(arif.post(f"{BASE}/customers", json={"name": "SUNRISE FASHION RETAIL LTD", "mode": "Local", "bin": "004817362-0105", "address": "Dhaka, Bangladesh"}).status_code == 422,
           "a duplicate name/BIN is refused (422) — the rules the mock handlers use")

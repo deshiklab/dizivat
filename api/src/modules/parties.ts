@@ -23,7 +23,7 @@ import { partyInput } from "@/lib/schemas"
 import type { Party } from "@/lib/types"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { WriteBack, type Delta } from "../common/writeback"
-import { jsonBody, parse, Problem, searchParams, sendCsv } from "../common/http"
+import { jsonBody, parse, Problem, searchParams, sendCsv, uniqueViolation } from "../common/http"
 import { lockState } from "../common/state-guard"
 import { db, type Tx } from "../db/client"
 import { parties } from "../db/schema"
@@ -112,11 +112,10 @@ export class PartiesService {
 
   /** A duplicate the application checks missed (two requests at once) is a 422, not a 500. */
   private static conflict(e: unknown): never {
-    const c = (e as { code?: string; constraint_name?: string; constraint?: string })
-    const name = String(c.constraint_name ?? c.constraint ?? "")
-    if (c.code === "23505" && name.includes("name")) throw new Problem(422, "Validation failed", { name: ["duplicate"] })
-    if (c.code === "23505") throw new Problem(422, "Validation failed", { bin: ["duplicate"] })
-    throw e as Error
+    const index = uniqueViolation(e)
+    if (index === null) throw e as Error
+    if (index.includes("name")) throw new Problem(422, "Validation failed", { name: ["duplicate"] })
+    throw new Problem(422, "Validation failed", { bin: ["duplicate"] })
   }
 
   async create(kind: PartyKind, p: Party) {
@@ -168,10 +167,17 @@ export class PartiesService {
   /** Clears the stamp. The row keeps its `ord`: the mock pushed a restored party to the end of its array, but the
    *  register sorts by name — unique per kind — so the order the user sees is the same either way. */
   async restore(kind: PartyKind, id: string) {
-    const [row] = await db.transaction(async (tx) => {
-      await lockState(tx)
-      return tx.update(parties).set({ deletedAt: null }).where(eq(parties.id, id)).returning()
-    })
+    let row: PartyDb
+    try {
+      ;[row] = await db.transaction(async (tx) => {
+        await lockState(tx)
+        return tx.update(parties).set({ deletedAt: null }).where(eq(parties.id, id)).returning()
+      })
+    } catch (e) {
+      // An undo can collide with a party created after the delete — the unique indexes ignore the trash, so the name
+      // or BIN may be taken by now. The record stays deleted and the caller gets the same 422 the form gets.
+      PartiesService.conflict(e)
+    }
     const p = toParty(row)
     const i = mirror.trash().findIndex((t) => t.kind === kind && t.doc.id === id)
     if (i >= 0) mirror.trash().splice(i, 1)
@@ -270,7 +276,8 @@ abstract class PartyControllerBase {
     if (!row) throw new Problem(404, `${compat().partyLabel(kind)} not found in trash`)
     const p = await this.svc.restore(kind, id)
     await this.audit.record({ actor: req.dz!.user, entity: kind, entityId: p.id, ref: p.name, action: "restored" })
-    res.json(p)
+    // 200, not the 201 Nest gives every @Post: an undo puts an existing record back, it does not create one
+    res.status(200).json(p)
   }
 }
 

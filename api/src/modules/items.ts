@@ -21,7 +21,7 @@ import { runQuery, toCSV } from "@/lib/mock/query"
 import { itemInput, masterItemInput } from "@/lib/schemas"
 import type { HistoryEntry, Item, MasterItem } from "@/lib/types"
 import { Authed, type AuthedRequest } from "../common/auth"
-import { jsonBody, parse, Problem, searchParams, sendCsv } from "../common/http"
+import { jsonBody, parse, Problem, searchParams, sendCsv, uniqueViolation } from "../common/http"
 import { lockState } from "../common/state-guard"
 import { WriteBack, type Delta } from "../common/writeback"
 import { db, type Tx } from "../db/client"
@@ -211,12 +211,17 @@ export class ItemsService {
   /** Stores the new master item with its first history entry; `at` is the timestamp the audit event must share. */
   async createMaster(fields: Partial<MasterItem>, by: string, note?: string): Promise<{ master: MasterItem; at: string }> {
     const at = new Date().toISOString()
-    const [row] = await db.transaction(async (tx) => {
-      await lockState(tx)
-      const m = { ...fields, id: await nextMasterId(tx), createdAt: at, history: [] } as MasterItem
-      stampHistory(m, by, "created", at, note)
-      return tx.insert(masterItems).values(masterValues(m)).returning()
-    })
+    let row: MasterDb
+    try {
+      ;[row] = await db.transaction(async (tx) => {
+        await lockState(tx)
+        const m = { ...fields, id: await nextMasterId(tx), createdAt: at, history: [] } as MasterItem
+        stampHistory(m, by, "created", at, note)
+        return tx.insert(masterItems).values(masterValues(m)).returning()
+      })
+    } catch (e) {
+      ItemsService.nameConflict(e)
+    }
     const master = toMaster(row)
     mirror.putMasterItem(master)
     markMasters([master])
@@ -247,16 +252,19 @@ export class ItemsService {
     } catch (e) {
       if (before) mirror.putMasterItem(before)
       masterWb.mark(before ? [before] : [])
-      const c = e as { code?: string }
-      if (c.code === "23505") throw new Problem(422, "Validation failed", { name: ["duplicate"] })
-      throw e as Error
+      ItemsService.nameConflict(e)
     }
+  }
+
+  /** A duplicate master-item name the application check missed (two requests at once) is a 422, not a 500. */
+  private static nameConflict(e: unknown): never {
+    if (uniqueViolation(e) !== null) throw new Problem(422, "Validation failed", { name: ["duplicate"] })
+    throw e as Error
   }
 
   /** A duplicate SKU the application check missed (two requests at once) is a 422, not a 500. */
   private static skuConflict(e: unknown): never {
-    const c = e as { code?: string }
-    if (c.code === "23505") throw new Problem(422, "Validation failed", { sku: ["duplicate"] })
+    if (uniqueViolation(e) !== null) throw new Problem(422, "Validation failed", { sku: ["duplicate"] })
     throw e as Error
   }
 }
