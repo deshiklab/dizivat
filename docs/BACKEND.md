@@ -14,9 +14,9 @@ backend**, including 520 contract checks, every end-to-end suite, axe, and all 3
 
 ## R5.1 — what runs where
 
-The API is built in slices. R5.1 moves **identity, security and reference data** into real tables. The other
-business modules keep their exact mock behaviour inside the API, and their data is saved to PostgreSQL so nothing
-is lost on restart or redeploy.
+The API is built in slices. R5.1 moves **identity, security and reference data** into real tables, R5.2 the first
+business records (**customers and vendors**). The other modules keep their exact mock behaviour inside the API, and
+their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
 
 | Area | Endpoints | R5.1 |
 | --- | --- | --- |
@@ -28,8 +28,9 @@ is lost on restart or redeploy.
 | NBR tariff | `tariff` | **native** — `tariff_lines` (per fiscal year) |
 | Audit trail | `audit` | **native** — `audit_events` (append-only) |
 | Backups (R6.2) | `backups`, `backups/{id}`, `backups/{id}/verify` | **native** — `backups` (gzip snapshot + SHA-256), scheduler 02:00 / 14:00 Dhaka with catch-up |
+| Customers & vendors (R5.2) | `customers`, `customers/{id}`, `customers/{id}/restore`, and the same three for `vendors` | **native** — `parties` (one table, `kind` tells them apart) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: sales, purchases, parties, items, stock, production, accounting, VAT returns, notifications, dashboard, search… | 70 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: sales, purchases, items, stock, production, accounting, VAT returns, notifications, dashboard, search… | 92 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -59,12 +60,42 @@ is lost on restart or redeploy.
    - Nest authenticates the request from the `sessions` table and runs the mock handler with that user (`api/src/compat/session-user.shim.ts`).
    - When the handler changes state, the JSONB snapshot and any new audit events are saved in one transaction.
    - A process-wide lock serialises compat requests.
-3. **Write-through**
-   - Native modules own users, company and units in PostgreSQL.
-   - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table.
+3. **Write-through** (both directions)
+   - Native modules own users, company, units and (R5.2) the parties in PostgreSQL.
+   - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table, and an invoice quotes a customer the `parties` table holds.
+   - The other way round: when a compat handler writes a record a native module owns — the R6.2 bulk import creates customers and vendors — the request's persist step compares the in-memory rows with what was last saved and adopts the difference into the table.
 
 **Single instance by design** until R5.5 removes the compat layer: run one API process per database. Render's free
 plan runs exactly one.
+
+## R5.2 — customers and vendors on their own table
+
+`api/src/modules/parties.ts` serves the six party endpoints from the **`parties`** table. The contract
+(`docs/API.md`) is unchanged: same responses, same 422/404/409 codes, same audit events.
+
+- **One table, two kinds.** `kind` is `customer` or `vendor`; `ord` (a serial) keeps each kind's insertion order, so
+  sorted lists tie-break exactly as the in-memory arrays did.
+- **The rules are shared, not copied.** `api/src/compat/entry.ts` re-exports the mock handlers' own functions
+  (`partyRow`, `partyErrors`, `normaliseParty`, `buildParty`, `newPartyId`, `partySpec`, `partyCsvColumns`,
+  `PARTY_FIELDS`) and the native module calls them through `compat()`. Aggregates, the duplicate and `modeLocked`
+  checks, the stored shape and the id format therefore cannot drift between the PostgreSQL API, the Next.js mock and
+  the GitHub Pages demo — all three run the same code.
+- **The database enforces the duplicates too**: partial unique indexes on `(kind, lower(btrim(name)))` and
+  `(kind, regexp_replace(bin, '^NID ', ''))`, both excluding the trash. A race that slips past the application check
+  is a 422 (the unique violation is translated), never a duplicate row.
+- **Deleting is a `deleted_at` stamp.** The record stays in PostgreSQL — master data an NBR audit can ask about never
+  leaves relational storage — and the undo trash is rebuilt from the table at boot. Only parties without documents
+  can be deleted at all (409 `in-use:N` otherwise), exactly as before.
+- **Upgrading an existing database.** On the first boot after the migration, `boot.ts` moves the customers and
+  vendors it finds inside `compat_state` (and the deleted ones in its undo buffer) into `parties`, then rewrites the
+  snapshot without them. No re-seed: a customer installation keeps its data, and `SEED_VERSION` is unchanged.
+  Restoring a pre-R5.2 backup into a fresh database adopts them the same way.
+- **The list is not in SQL yet.** `runQuery` (the shared in-memory engine) still builds the register, because its
+  aggregates, facets and totals come from *documents* — turnover and amount due per party — and those live in
+  `compat_state` until R5.3. Units work the same way. When documents get their tables, this becomes a SQL join with
+  `sqlList`.
+- **Writes go through the state guard**, so during a deploy overlap an instance whose data set was replaced by
+  another's re-seed refuses a party write (503) instead of resurrecting stale rows.
 
 ## Tables
 
@@ -79,7 +110,8 @@ plan runs exactly one.
 | `tariff_lines` | NBR tariff per fiscal year (`numeric` rates) |
 | `audit_events` | append-only audit trail (indexed by time, Dhaka day, record, record type). **R6:** every row is sealed with `prev_hash` + `hash` (SHA-256 chain); triggers refuse UPDATE / DELETE / TRUNCATE — see [NBR_ENLISTMENT.md](NBR_ENLISTMENT.md) |
 | `backups` | **R6.2:** scheduled / manual snapshots (`bytea` gzip JSON, SHA-256, row counts); last 30 kept; one scheduled row per slot (partial unique index) |
-| `compat_state` | JSONB state of the modules not yet ported |
+| `parties` | **R5.2:** customers and vendors (`kind`), exporter details, seeded credit terms; `deleted_at` is the undo trash; unique per kind on name and BIN |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors or units since R5.2) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -196,9 +228,10 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 
 | Slice | Moves to its own tables |
 | --- | --- |
-| R5.2 | customers, vendors, items, master items, stock ledger, branches' stock |
+| R5.2 | **customers, vendors — done (`parties`)**; items, master items. The stock ledger and branches' stock are *derived* from documents (there is no stored movement table), so they become relational with the documents in R5.3 |
 | R5.3 | sales (6.3), purchases incl. imports/services, credit & debit notes (6.7/6.8), transfers, damage |
 | R5.4 | production: BOM/4.3 versions, work orders, batches (6.4), production config |
 | R5.5 | accounting (accounts, receipts/payments, allocations), VAT: 9.1 returns, period lock, treasury/TR-6, VDS/6.6, adjustments — then `compat_state` and the lock are removed and the API can scale out |
 
-Money columns will be `numeric(18,2)`, with row-level period-lock checks in the database, plus server-side PDF (R4 used print CSS) and the NBR tariff import.
+Money columns will be `numeric(18,2)` (as `parties.credit_limit` and `tariff_lines` already are), with row-level
+period-lock checks in the database, plus server-side PDF (R4 used print CSS) and the NBR tariff import.

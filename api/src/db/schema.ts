@@ -1,6 +1,7 @@
 /**
- * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables;
- * the business documents still live in `compat_state` until R5.2–R5.5 give each module its own tables.
+ * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables, R5.2 the
+ * parties (customers and vendors); the business documents still live in `compat_state` until R5.3–R5.5 give each
+ * module its own tables.
  * Migrations are generated with `npm run db:generate` into ./drizzle and applied at boot.
  */
 import { sql } from "drizzle-orm"
@@ -146,6 +147,48 @@ export const tariffLines = pgTable("tariff_lines", {
   at: numeric("at", { precision: 7, scale: 2, mode: "number" }).notNull(),
   tti: numeric("tti", { precision: 9, scale: 2, mode: "number" }).notNull(),
 }, (t) => [primaryKey({ columns: [t.fy, t.hsCode] })])
+
+/**
+ * R5.2 — customers and vendors: the first business records out of the compat layer. One table, `kind` tells them
+ * apart; documents (still in `compat_state` until R5.3) reference them by id.
+ * A deleted party keeps its row (`deleted_at`) — that is the 10-second undo trash — so master data never leaves
+ * relational storage, and the uniqueness rules the API checks are also enforced here.
+ */
+export const parties = pgTable("parties", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["customer", "vendor"] }).notNull(),
+  /** party names in capitals, as printed on Mushak 6.3 */
+  name: text("name").notNull(),
+  /** BIN (Local), NID (Non-registered) or foreign reference; "" when unknown */
+  bin: text("bin").notNull().default(""),
+  mode: text("mode").notNull(),
+  mobile: text("mobile").notNull().default(""),
+  address: text("address").notNull(),
+  country: text("country"),
+  email: text("email"),
+  contactPerson: text("contact_person"),
+  /** optional in the contract: NULL means active (only `false` is ever stored) */
+  active: boolean("active"),
+  /** R3 (customers): credit limit in BDT and VDS-withholder flag — seeded, not editable through the API */
+  creditLimit: numeric("credit_limit", { precision: 18, scale: 2, mode: "number" }),
+  vdsWithholder: boolean("vds_withholder"),
+  /** R6 (RMG): exporter class, customs bond licence and trade-body membership */
+  exporterType: text("exporter_type"),
+  bondLicenseNo: text("bond_license_no"),
+  bondLicenseExpiry: date("bond_license_expiry", { mode: "string" }),
+  associationNo: text("association_no"),
+  /** in the undo trash: DELETE sets it, restore clears it */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  index("parties_live_kind_idx").on(t.kind).where(sql`${t.deletedAt} is null`),
+  // the duplicate rules of partyErrors(), enforced by the database (per kind, NID prefix ignored, trash excluded)
+  uniqueIndex("parties_live_name_key").on(t.kind, sql`lower(btrim(${t.name}))`).where(sql`${t.deletedAt} is null`),
+  uniqueIndex("parties_live_bin_key").on(t.kind, sql`regexp_replace(${t.bin}, '^NID ', '')`).where(sql`${t.bin} <> '' and ${t.deletedAt} is null`),
+  check("parties_kind_check", sql`${t.kind} in ('customer','vendor')`),
+  check("parties_exporter_check", sql`${t.exporterType} is null or ${t.exporterType} in ('direct','deemed')`),
+])
 
 /**
  * Modules not yet migrated (sales, purchases, stock, production, accounting, VAT returns…) keep their exact

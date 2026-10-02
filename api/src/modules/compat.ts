@@ -14,19 +14,23 @@ import { lockState } from "../common/state-guard"
 import { compatCtx } from "../compat/session-user.shim"
 import { db } from "../db/client"
 import { compatState } from "../db/schema"
-import { compat, G } from "../state"
+import { compat, G, type TrashEntry } from "../state"
 import { AuditService } from "./audit"
 import { UsersService } from "./identity"
+import { applyPartyDelta, commitPartyDelta, deltaEmpty, partyDelta } from "./parties"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
 interface Route { pattern: RegExp; names: string[]; statics: number; mod: Record<string, unknown> }
 
 const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "content-length", "expect", "te", "trailer", "proxy-connection"])
 
-/** The JSONB document saved for the unported modules (units live in their own table). */
+/** The JSONB document saved for the unported modules (units and parties live in their own tables). */
 export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { units, ...rest } = G.__dzDb!
+  const { units, customers, vendors, ...rest } = G.__dzDb!
+  // R5.2: a deleted party is a `parties.deleted_at` row, so the undo buffer keeps documents only
+  const kept = rest as { trash?: TrashEntry[] }
+  kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor")
   return JSON.stringify({ db: rest, notifRead: G.__dzUsers!.notifRead })
 }
 
@@ -98,19 +102,23 @@ export class CompatService {
     res.end(Buffer.from(await out.arrayBuffer()))
   }
 
-  /** Inside the lock: saves the snapshot if it changed, together with any audit events the handler recorded. */
+  /** Inside the lock: saves the snapshot if it changed, together with any audit events the handler recorded
+   *  and any party the handler created (R5.2: the bulk import still writes through the in-memory world). */
   async persist() {
     const json = compatSnapshot()
     const hash = createHash("sha1").update(json).digest("hex")
-    if (hash === lastSaved && !this.audit.hasPending()) return
+    const delta = partyDelta()
+    if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(delta)) return
     await db.transaction(async (tx) => {
       await lockState(tx) // cross-process: never overwrite a newer instance's re-seed with this process's state
       await this.audit.forwardPending(tx)
+      await applyPartyDelta(tx, delta)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
           .onConflictDoUpdate({ target: compatState.key, set: { data: JSON.parse(json) as unknown, updatedAt: new Date() } })
       }
     })
+    commitPartyDelta(delta) // committed: these shapes are the new baseline (a rolled-back transaction retries them)
     lastSaved = hash
   }
 }

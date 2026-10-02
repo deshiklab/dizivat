@@ -18,6 +18,7 @@ import type {
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
 import { badUnit } from "@/lib/mock/units"
+import { newPartyId } from "./_parties"
 
 /* ── UD / UP register ─────────────────────────────────────────────────────── */
 
@@ -175,7 +176,7 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
       toCreate.push(() => {
         const { exporterType, bondLicenseNo, bondLicenseExpiry, associationNo, ...rest } = d
         const p: Party = {
-          ...rest, name, id: `${k[0]}${coll.length + db.trash.length + 1}-${Date.now().toString(36)}${i}`, kind: k,
+          ...rest, name, id: newPartyId(k, String(i)), kind: k,
           bin: d.mode === "Non-registered" && d.bin && !d.bin.startsWith("NID ") ? `NID ${d.bin}` : d.bin,
           country: d.mode === "Foreign" ? d.country : undefined,
           exporterType: exporterType || undefined, bondLicenseNo: bondLicenseNo || undefined, bondLicenseExpiry: bondLicenseExpiry || undefined, associationNo: associationNo || undefined,

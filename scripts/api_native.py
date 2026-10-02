@@ -148,8 +148,16 @@ def run():
     print("writes land in PostgreSQL")
     arif = session("arif")
     cust = arif.post(f"{BASE}/customers", json={"name": f"R5 Persist Test {TAG}", "mode": "Foreign", "country": "Japan", "address": "1-2-3 Marunouchi, Tokyo"})
-    check(cust.status_code == 201, f"compat: customer created ({cust.status_code})")
+    check(cust.status_code == 201, f"native (R5.2): customer created ({cust.status_code})")
     cid = cust.json().get("id")
+    # a second customer is deleted and restored below: since R5.2 a delete is a `deleted_at` stamp, so the record
+    # stays in PostgreSQL (and stays deleted across a restart) instead of living in the in-memory undo buffer
+    gone = arif.post(f"{BASE}/vendors", json={"name": f"R5 Deleted Vendor {TAG}", "mode": "Foreign", "country": "China", "address": "Shenzhen, China"})
+    gid = gone.json().get("id")
+    ud_body = {"kind": "UD", "no": f"BKMEA/UD/2026/R5{TAG}".upper(), "date": "2026-09-20", "customerId": "c10",
+               "masterLcNo": f"EXP-LC-R5-{TAG}", "buyer": "E2E BUYER", "expiry": "2027-03-31", "lines": [{"itemId": "i21", "qty": 1000}]}
+    ud = arif.post(f"{BASE}/vat/uds", json=ud_body)
+    check(ud.status_code == 201, f"compat: UD created for the snapshot check ({ud.status_code})")
     unit = arif.post(f"{BASE}/units", json={"code": f"R5{TAG[:3]}", "name": "R5 test unit", "decimals": 1, "active": True})
     check(unit.status_code == 201 and unit.json()["id"].startswith("un"), "native: unit created")
     arif.put(f"{BASE}/me/preferences", json={"density": "compact", "accent": "violet"})
@@ -164,7 +172,16 @@ def run():
         check(PW not in psql("select string_agg(password_hash, '') from users"), "no password stored in clear")
         check(psql(f"select count(*) from audit_events where ref like '%{TAG}%'") != "0", "audit events are rows in audit_events")
         check(int(psql("select count(*) from sessions where revoked_at is not null")) >= 3, "revoked sessions are kept for review")
-        check(psql(f"select count(*) from compat_state where data::text ilike '%R5 Persist Test {TAG}%'") == "1", "compat documents are saved in compat_state")
+        check(psql(f"select count(*) from parties where name ilike '%R5 Persist Test {TAG}%'") == "1", "R5.2: customers are rows in the parties table")
+        check(psql(f"select count(*) from compat_state where data::text ilike '%R5 Persist Test {TAG}%'") == "0", "R5.2: …and no longer inside the compat snapshot")
+        check(psql("select count(*) from compat_state where data->'db' ? 'customers' or data->'db' ? 'vendors'") == "0", "R5.2: the snapshot carries no party collection at all")
+        check(psql(f"select count(*) from compat_state where data::text ilike '%R5{TAG}%'") == "1", "compat documents are still saved in compat_state")
+        check(int(psql("select count(*) from parties where kind = 'customer'")) >= 10 and int(psql("select count(*) from parties where kind = 'vendor'")) >= 14,
+              "R5.2: the demo customers and vendors were seeded into the table")
+        dup = subprocess.run(["psql", DB_URL, "-At", "-c", "insert into parties (id, ord, kind, name, bin, mode, mobile, address) "
+                              f"select 'dup{TAG}', 999999, kind, name, bin, mode, mobile, address from parties where kind = 'customer' and deleted_at is null limit 1"],
+                             capture_output=True, text=True)
+        check(dup.returncode != 0, "R5.2: the database refuses a duplicate party name (unique index), not just the API")
         # R6: tamper-evident, append-only audit trail (NBR enlistment — protection against tampering)
         check(psql("select count(*) from audit_events where hash is null or prev_hash is null") == "0", "R6: every audit event is sealed (prev_hash + hash)")
         def refused(q):
@@ -175,6 +192,22 @@ def run():
         check(refused("truncate audit_events"), "R6: the database refuses TRUNCATE on audit_events")
     else:
         skipped("database checks (DATABASE_URL not set)")
+
+    print("R5.2: deleting a party is a deleted_at stamp, undo restores it")
+    d = arif.delete(f"{BASE}/vendors/{gid}")
+    check(d.status_code == 200 and d.json().get("ok") is True, "an unused vendor is deleted (undo offered)")
+    check(arif.get(f"{BASE}/vendors/{gid}").status_code == 404, "…and is gone from the API")
+    check(not any(v["id"] == gid for v in arif.get(f"{BASE}/vendors").json()), "…and from the picker")
+    if DB_URL:
+        check(psql(f"select count(*) from parties where id = '{gid}' and deleted_at is not null") == "1", "R5.2: the row is kept with deleted_at (master data never leaves the table)")
+    r = arif.post(f"{BASE}/vendors/{gid}/restore")
+    check(r.status_code == 200 and r.json().get("id") == gid, "restore puts it back (undo)")
+    check(arif.post(f"{BASE}/vendors/{gid}/restore").status_code == 404, "restoring something not in the trash is a 404")
+    d2 = arif.delete(f"{BASE}/vendors/{gid}")
+    check(d2.status_code == 200, "deleted again — left deleted for the restart check")
+    check(arif.delete(f"{BASE}/customers/c1").status_code == 409, "a customer with invoices cannot be deleted (409 in-use:N)")
+    check(arif.post(f"{BASE}/customers", json={"name": "SUNRISE FASHION RETAIL LTD", "mode": "Local", "bin": "004817362-0105", "address": "Dhaka, Bangladesh"}).status_code == 422,
+          "a duplicate name/BIN is refused (422) — the rules the mock handlers use")
 
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
@@ -320,7 +353,9 @@ def run():
         check(True, f"API restarted ({secs:.1f} s)")
         check(arif.get(f"{BASE}/me").status_code == 200, "sessions survive a restart (no re-login)")
         check(a.get(f"{BASE}/me").status_code == 200 and b.get(f"{BASE}/me").status_code == 401, "revocations survive a restart")
-        check(arif.get(f"{BASE}/customers/{cid}").status_code == 200, "compat: customer still there")
+        check(arif.get(f"{BASE}/customers/{cid}").status_code == 200, "R5.2: customer still there (read from the parties table)")
+        check(arif.get(f"{BASE}/vendors/{gid}").status_code == 404, "R5.2: a deleted party stays deleted across a restart")
+        check(any(u["no"] == ud_body["no"] for u in arif.get(f"{BASE}/vat/uds").json().get("rows", [])), "compat: the UD still there")
         check(any(x["code"] == f"R5{TAG[:3]}" for x in arif.get(f"{BASE}/units").json()["data"]), "native: unit still there")
         me = arif.get(f"{BASE}/me").json()
         check(me["preferences"].get("density") == "compact" and me["preferences"].get("accent") == "violet", "preferences still there")
@@ -332,6 +367,8 @@ def run():
         check(requests.post(f"{BASE}/auth/login", json={"username": name, "password": new_pw}).status_code == 200, "changed password survives a restart")
         n = arif.post(f"{BASE}/customers", json={"name": f"R5 After Restart {TAG}", "mode": "Foreign", "country": "Japan", "address": "4-5-6 Shibuya, Tokyo"})
         check(n.status_code == 201 and n.json()["id"] != cid, "new records after a restart get fresh ids")
+        if DB_URL:
+            check(psql(f"select count(*) from parties where id = '{gid}' and deleted_at is not null") == "1", "R5.2: the trash is rebuilt from the table, not from the snapshot")
         check(arif.get(f"{BASE}/vat/bond").json().get("totals") == bond.get("totals"), "R6.4: bond register unchanged after a restart")
         u_after = arif.get(f"{BASE}/vat/bond-uds/{ud_id}").json() if ud_id else {}
         c_after = arif.get(f"{BASE}/vat/drawback-claims/{claim_id}").json() if claim_id else {}
@@ -357,7 +394,10 @@ def run():
         psql("update meta set value = '2099-01-01T00:00:00.000Z' where key = 'seeded_at'")
         try:
             w = arif.post(f"{BASE}/customers", json={"name": f"R6 Stale Write {TAG}", "mode": "Foreign", "country": "Japan", "address": "1-2-3 Ginza, Tokyo"})
-            check(w.status_code == 503, f"stale instance refuses a compat write after a re-seed elsewhere (HTTP {w.status_code})")
+            check(w.status_code == 503, f"stale instance refuses a native party write after a re-seed elsewhere (HTTP {w.status_code})")
+            check(psql(f"select count(*) from parties where name like '%R6 Stale Write {TAG}%'") == "0", "R5.2: the refused party never reached the parties table")
+            wu = arif.post(f"{BASE}/vat/uds", json={**ud_body, "no": f"BKMEA/UD/2026/SW{TAG}".upper(), "masterLcNo": f"EXP-LC-SW-{TAG}"})
+            check(wu.status_code == 503, f"stale instance refuses a compat write after a re-seed elsewhere (HTTP {wu.status_code})")
             check(psql(f"select count(*) from compat_state where data::text like '%R6 Stale Write {TAG}%'") == "0", "stale snapshot not written over the re-seeded data")
             r = requests.post(f"{BASE}/auth/login", json={"username": "farzana", "password": PW})
             check(r.status_code == 503, f"stale instance refuses to append to the audit chain (HTTP {r.status_code})")
@@ -368,8 +408,10 @@ def run():
         v3 = arif.get(f"{BASE}/audit/verify").json()
         cl = arif.get(f"{BASE}/customers", params={"q": f"R6 Stale Write {TAG}"}).json()
         cl = cl.get("data", []) if isinstance(cl, dict) else cl
-        check(v3.get("ok") is True and not any(f"R6 Stale Write {TAG}" in (c.get("name") or "") for c in cl),
-              "after a restart: chain intact, refused write absent")
+        uds_after = arif.get(f"{BASE}/vat/uds").json().get("rows", [])
+        check(v3.get("ok") is True and not any(f"R6 Stale Write {TAG}" in (c.get("name") or "") for c in cl)
+              and not any(f"SW{TAG}".upper() in (u.get("no") or "") for u in uds_after),
+              "after a restart: chain intact, both refused writes absent")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

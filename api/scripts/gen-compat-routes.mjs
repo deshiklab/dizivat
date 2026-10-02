@@ -11,6 +11,8 @@ export const NATIVE = [
   "auth/login", "auth/logout", "me", "me/password", "me/preferences", "me/views",
   "users", "users/[id]", "users/[id]/reset-password", "company", "audit", "audit/verify", "tariff", "units", "units/[id]",
   "backups", "backups/[id]", "backups/[id]/verify",
+  // R5.2: customers and vendors live in the `parties` table
+  "customers", "customers/[id]", "customers/[id]/restore", "vendors", "vendors/[id]", "vendors/[id]/restore",
 ]
 
 const found = []
