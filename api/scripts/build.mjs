@@ -1,7 +1,8 @@
-// Two bundles:
+// Three bundles:
 //  dist/main.js   — the NestJS app (node_modules stay external)
 //  dist/compat.js — the not-yet-ported mock route handlers from ../src, fully bundled; required at boot
 //                   only after the saved state has been restored into the globals they read.
+//  dist/restore.js — R6.3 backup restore + restore drill (see docs/BACKUP_RESTORE.md)
 import { build } from "esbuild"
 import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
@@ -22,4 +23,6 @@ await build({ ...common, entryPoints: [join(api, "src/main.ts")], outfile: join(
   external: ["./compat.js"] })
 await build({ ...common, entryPoints: [join(api, "src/compat/entry.ts")], outfile: join(api, "dist/compat.js"),
   nodePaths: [join(api, "node_modules")] })
-console.log("built dist/main.js + dist/compat.js")
+// R6.3: backup restore / restore drill (node dist/restore.js --source … --target …); starts dist/main.js for --boot
+await build({ ...common, entryPoints: [join(api, "src/restore.ts")], outfile: join(api, "dist/restore.js"), packages: "external" })
+console.log("built dist/main.js + dist/compat.js + dist/restore.js")

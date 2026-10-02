@@ -27,56 +27,58 @@ const pad = (n: number, w = 4) => String(n).padStart(w, "0")
 const bin = () => `${pad(int(1000, 9999), 4)}${pad(int(10000, 99999), 5)}-${pad(int(101, 999), 4)}`
 
 // ── Parties (fictitious businesses; BIN/NID formats as in the legacy system) ──
+// Local buyers: retail chains, wholesalers and other garment makers (15 % VAT); foreign buyers: apparel importers.
 export const customers: Party[] = [
-  { id: "c1", name: "SUNRISE PRINT & PACK LTD", bin: "000731906-0203", mobile: "01711-402233", address: "Plot 12, Tejgaon I/A, Dhaka-1208", kind: "customer", mode: "Local" },
-  { id: "c2", name: "NATIONAL MEDICARE LIMITED", bin: "000268417-0101", mobile: "01819-223344", address: "Tejgaon I/A, Dhaka-1208", kind: "customer", mode: "Local" },
-  { id: "c3", name: "RIVERVIEW PHARMA LTD", bin: bin(), mobile: "01713-556677", address: "Kashimpur, Gazipur-1750", kind: "customer", mode: "Local" },
-  { id: "c4", name: "GREENLEAF HEALTHCARE LTD", bin: bin(), mobile: "01912-889900", address: "Tongi I/A, Gazipur-1710", kind: "customer", mode: "Local" },
-  { id: "c5", name: "BAYSIDE FOODS & BEVERAGE LTD", bin: bin(), mobile: "01730-112211", address: "Rupganj, Narayanganj-1460", kind: "customer", mode: "Local" },
-  { id: "c6", name: "LOTUS CONSUMER PRODUCTS LTD", bin: bin(), mobile: "01755-667788", address: "Meghnaghat, Sonargaon, Narayanganj", kind: "customer", mode: "Local" },
-  { id: "c7", name: "SHAPLA AGRO CHEMICALS LTD", bin: bin(), mobile: "01670-445566", address: "Tongi, Gazipur-1710", kind: "customer", mode: "Local" },
-  { id: "c8", name: "DESERT ROSE MEDICAL TRADING LLC", bin: "EXP-AE-2024-118", mobile: "+971-4-3345566", address: "Al Quoz Industrial Area 3, Dubai, UAE", kind: "customer", mode: "Foreign", country: "UAE" },
-  { id: "c9", name: "LANKA CAREPACK (PVT) LTD", bin: "EXP-LK-2025-031", mobile: "+94-11-2233445", address: "Ekala Industrial Estate, Ja-Ela, Sri Lanka", kind: "customer", mode: "Foreign", country: "Sri Lanka" },
+  { id: "c1", name: "SUNRISE FASHION RETAIL LTD", bin: "000731906-0203", mobile: "01711-402233", address: "Plot 12, Tejgaon I/A, Dhaka-1208", kind: "customer", mode: "Local" },
+  { id: "c2", name: "NAKSHI LIFESTYLE LIMITED", bin: "000268417-0101", mobile: "01819-223344", address: "Road 27, Dhanmondi, Dhaka-1209", kind: "customer", mode: "Local" },
+  { id: "c3", name: "RIVERVIEW APPAREL SOURCING LTD", bin: bin(), mobile: "01713-556677", address: "Kashimpur, Gazipur-1750", kind: "customer", mode: "Local" },
+  { id: "c4", name: "GREENLEAF GARMENTS LTD", bin: bin(), mobile: "01912-889900", address: "Tongi I/A, Gazipur-1710", kind: "customer", mode: "Local" },
+  { id: "c5", name: "BAYSIDE MEGA MART LTD", bin: bin(), mobile: "01730-112211", address: "Rupganj, Narayanganj-1460", kind: "customer", mode: "Local" },
+  { id: "c6", name: "LOTUS FAMILY STORES LTD", bin: bin(), mobile: "01755-667788", address: "Chashara, Narayanganj-1400", kind: "customer", mode: "Local" },
+  { id: "c7", name: "SHAPLA KIDS WEAR LTD", bin: bin(), mobile: "01670-445566", address: "Tongi, Gazipur-1710", kind: "customer", mode: "Local" },
+  { id: "c8", name: "DESERT ROSE TEXTILE TRADING LLC", bin: "EXP-AE-2024-118", mobile: "+971-4-3345566", address: "Al Quoz Industrial Area 3, Dubai, UAE", kind: "customer", mode: "Foreign", country: "UAE" },
+  { id: "c9", name: "BRANDT & VOGEL TEXTIL GMBH", bin: "EXP-DE-2025-031", mobile: "+49-40-3344-5566", address: "Wandsbeker Zollstrasse 87, Hamburg, Germany", kind: "customer", mode: "Foreign", country: "Germany" },
 ]
 
+// Suppliers: spinning mills and fabric mills abroad (back-to-back LC imports), local yarn / dyes houses, small packing vendors.
 export const vendors: Party[] = [
-  { id: "v1", name: "KORYO FILM MATERIALS CO LTD", bin: "IMP-KR-KFM", mobile: "+82-2-3456-7890", address: "Seoul, Republic of Korea", kind: "vendor", mode: "Foreign", country: "Korea" },
-  { id: "v2", name: "ZHENGZHOU BRIGHTFOIL MATERIALS CO LTD", bin: "IMP-CN-ZBF", mobile: "+86-371-6655-4433", address: "Zhengzhou, Henan, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v3", name: "XIAMEN SEABREEZE FILMS CO LTD", bin: "IMP-CN-XSF", mobile: "+86-592-6881-234", address: "Xiamen, Fujian, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v4", name: "NANTONG EVERGREEN POLYMER CO. LTD", bin: "IMP-CN-NEP", mobile: "+86-513-8511-0099", address: "Nantong, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v5", name: "SUZHOU JADELINE MATERIALS CO. LTD", bin: "IMP-CN-SJM", mobile: "+86-512-6587-1122", address: "Suzhou, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
-  { id: "v6", name: "BENGAL SOLVENT CHEMICALS LTD", bin: "002590318-0302", mobile: "01711-908070", address: "Tongi, Gazipur-1710", kind: "vendor", mode: "Local" },
-  { id: "v7", name: "MEGHNA POLY INDUSTRIES LTD", bin: bin(), mobile: "01819-303030", address: "Sonargaon, Narayanganj", kind: "vendor", mode: "Local" },
+  { id: "v1", name: "DONGHAE TEXTILE MATERIALS CO LTD", bin: "IMP-KR-DTM", mobile: "+82-2-3456-7890", address: "Seoul, Republic of Korea", kind: "vendor", mode: "Foreign", country: "Korea" },
+  { id: "v2", name: "ZHENGZHOU BRIGHTSPIN YARN CO LTD", bin: "IMP-CN-ZBY", mobile: "+86-371-6655-4433", address: "Zhengzhou, Henan, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v3", name: "XIAMEN SEABREEZE DENIM CO LTD", bin: "IMP-CN-XSD", mobile: "+86-592-6881-234", address: "Xiamen, Fujian, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v4", name: "NANTONG EVERGREEN FIBRE CO. LTD", bin: "IMP-CN-NEF", mobile: "+86-513-8511-0099", address: "Nantong, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v5", name: "SUZHOU JADELINE TEXTILES CO. LTD", bin: "IMP-CN-SJT", mobile: "+86-512-6587-1122", address: "Suzhou, Jiangsu, China", kind: "vendor", mode: "Foreign", country: "China" },
+  { id: "v6", name: "BENGAL DYES & CHEMICALS LTD", bin: "002590318-0302", mobile: "01711-908070", address: "Tongi, Gazipur-1710", kind: "vendor", mode: "Local" },
+  { id: "v7", name: "MEGHNA SPINNING & PROCESSING LTD", bin: bin(), mobile: "01819-303030", address: "Sonargaon, Narayanganj", kind: "vendor", mode: "Local" },
   { id: "v8", name: "M/S K R TRADING", bin: "NID 1994261234567", mobile: "01552-340011", address: "Nawabpur Road, Dhaka-1100", kind: "vendor", mode: "Non-registered" },
-  { id: "v9", name: "M/S NIRAPAD CARTON HOUSE", bin: "NID 1987263456789", mobile: "01677-121314", address: "Kaliakair, Gazipur-1750", kind: "vendor", mode: "Non-registered" },
+  { id: "v9", name: "M/S NIRAPAD CARTON HOUSE", bin: "NID 1987263456789", mobile: "01677-121314", address: "Konabari, Gazipur-1346", kind: "vendor", mode: "Non-registered" },
 ]
 
-// ── Items (typical flexible-packaging materials with their HS codes) ──
+// ── Items (knit + woven composite: yarn, fabric, dyes, trims and the garments/fabric it sells, with HS codes) ──
 type Seed = [string, Item["group"], string, string, Item["unit"], number, number, number]
 // name, group, hs, master, unit, purchasePrice, salePrice(0=not sold), opening
 const itemSeeds: Seed[] = [
-  ["LLDPE Granules", "Raw Material", "39021000", "Polyethylene", "Kg", 182, 0, 4200],
-  ["VC-VA Terpolymer Resin", "Raw Material", "39043000", "Vinyl Resin", "Kg", 465, 0, 850],
-  ["PU Resins", "Raw Material", "39095000", "Polyurethane", "Kg", 540, 0, 620],
-  ["PVC Rigid Film 250µ", "Raw Material", "39204910", "PVC Film", "Kg", 238, 0, 5200],
-  ["BOPA Film 15µ", "Raw Material", "39209290", "BOPA Film", "Kg", 412, 0, 1800],
-  ["Aluminium Foil 20µ", "Raw Material", "76071110", "Aluminium Foil", "Kg", 610, 0, 2400],
-  ["Aluminium Foil 25µ", "Raw Material", "76071110", "Aluminium Foil", "Kg", 598, 0, 1950],
-  ["Aluminium Foil 30µ", "Raw Material", "76071110", "Aluminium Foil", "Kg", 590, 0, 1600],
-  ["Aluminium Foil 47µ", "Raw Material", "76071110", "Aluminium Foil", "Kg", 575, 0, 900],
-  ["Heat Seal Lacquer", "Consumable", "32089090", "Lacquer", "Kg", 720, 0, 380],
-  ["Printing Ink (Gravure)", "Consumable", "32151900", "Ink", "Kg", 890, 0, 260],
-  ["Ethyl Acetate Solvent", "Consumable", "29153100", "Solvent", "Kg", 168, 0, 1400],
-  ["Printing Cylinder", "Consumable", "84425010", "Cylinder", "Pcs", 38500, 0, 24],
+  ["CVC Yarn 30/1 (60/40)", "Raw Material", "52062300", "CVC Yarn", "Kg", 395, 0, 12000],
+  ["Polyester Filament Yarn 150D", "Raw Material", "54023300", "Polyester Yarn", "Kg", 240, 0, 6000],
+  ["Elastane Yarn 40D", "Raw Material", "54024400", "Elastane Yarn", "Kg", 720, 0, 1800],
+  ["Cotton Poplin Fabric 110 cm (pocketing)", "Raw Material", "52083200", "Woven Fabric", "Meter", 165, 0, 24000],
+  ["Denim Fabric 12 oz", "Raw Material", "52094200", "Denim Fabric", "Meter", 310, 0, 18000],
+  ["Cotton Yarn 26/1 Combed", "Raw Material", "52052300", "Cotton Yarn", "Kg", 345, 0, 2400],
+  ["Cotton Yarn 28/1 Combed", "Raw Material", "52052300", "Cotton Yarn", "Kg", 360, 0, 9000],
+  ["Cotton Yarn 30/1 Combed", "Raw Material", "52052300", "Cotton Yarn", "Kg", 385, 0, 12000],
+  ["Cotton Yarn 30/1 Compact", "Raw Material", "52052300", "Cotton Yarn", "Kg", 410, 0, 14000],
+  ["Reactive Dyes (assorted)", "Consumable", "32041600", "Dyes", "Kg", 850, 0, 900],
+  ["Plastisol Printing Ink", "Consumable", "32151900", "Ink", "Kg", 1150, 0, 260],
+  ["Sewing Thread 40/2 Spun Polyester", "Consumable", "55081000", "Sewing Thread", "Kg", 980, 0, 1400],
+  ["Circular Knitting Needles (set)", "Consumable", "84485100", "Knitting Needles", "Pcs", 38500, 0, 24],
   ["Export Carton 5-ply", "Packing Materials", "48191000", "Carton", "Pcs", 62, 0, 3200],
   ["Gum Tape 2\"", "Packing Materials", "39191000", "Tape", "Roll", 95, 0, 700],
-  ["Paper Core 3\"", "Packing Materials", "48229000", "Core", "Pcs", 38, 0, 2600],
-  ["Printed Blister Foil (Alu 20µ)", "Finished Goods", "76072090", "Blister Foil", "Kg", 0, 1180, 1250],
-  ["Cold Form Alu-Alu Laminate", "Finished Goods", "76072090", "Alu-Alu", "Kg", 0, 1620, 640],
-  ["PVC/PVDC Blister Film", "Finished Goods", "39204990", "Blister Film", "Kg", 0, 486, 2100],
-  ["Strip Pack Laminate (Paper/Poly/Foil)", "Finished Goods", "76072090", "Strip Laminate", "Kg", 0, 845, 980],
-  ["Printed Laminated Pouch", "Finished Goods", "39232990", "Pouch", "Pcs", 0, 4.6, 185000],
-  ["Sachet Roll Stock (PET/Alu/PE)", "Finished Goods", "39219090", "Roll Stock", "Kg", 0, 732, 1500],
+  ["Polybag LDPE (garment)", "Packing Materials", "39232100", "Polybag", "Pcs", 2.8, 0, 2600],
+  ["Men's Basic T-Shirt", "Finished Goods", "61091000", "T-Shirt", "Pcs", 0, 360, 18000],
+  ["Men's Polo Shirt (pique)", "Finished Goods", "61051000", "Polo Shirt", "Pcs", 0, 610, 9000],
+  ["Hooded Sweatshirt (fleece)", "Finished Goods", "61102000", "Sweatshirt", "Pcs", 0, 880, 6000],
+  ["Dyed Knit Fabric — Rib 1x1 (5% elastane)", "Finished Goods", "60041000", "Rib Fabric", "Kg", 0, 610, 1200],
+  ["Dyed Knit Fabric — Single Jersey", "Finished Goods", "60062200", "Jersey Fabric", "Kg", 0, 520, 24000],
+  ["Men's 5-Pocket Denim Jeans", "Finished Goods", "62034200", "Denim Jeans", "Pcs", 0, 1150, 5000],
 ]
 
 export const items: Item[] = itemSeeds.map(([name, group, hs, master, unit, pp, sp, opening], i) => ({
@@ -84,7 +86,7 @@ export const items: Item[] = itemSeeds.map(([name, group, hs, master, unit, pp, 
   hsCode: hs,
   group,
   masterItem: master,
-  brand: group === "Finished Goods" ? "RFP" : pick(["Generic", "Imported", "Local"]),
+  brand: group === "Finished Goods" ? "KAC" : pick(["Generic", "Imported", "Local"]),
   name,
   unit,
   sku: `${group === "Finished Goods" ? "FG" : group === "Raw Material" ? "RM" : group === "Consumable" ? "CN" : "PM"}-${pad(i + 1, 3)}`,
@@ -135,7 +137,7 @@ for (const day of monthsBack()) {
     const n = int(1, 3)
     const chosen = shuffle(fg).slice(0, n)
     const lines = chosen.map((it) => {
-      const qty = it.unit === "Pcs" ? int(20, 160) * 1000 : int(80, 1400)
+      const qty = it.unit === "Pcs" ? int(20, 160) * (foreign ? 100 : 10) : int(80, 1400) // garments: export 2,000–16,000 pcs, local stock-lots 200–1,600; fabric: kg
       const price = round2(it.salePrice * between(0.95, 1.06))
       const l = makeLine(it, qty, price)
       if (foreign) { l.vatRate = 0; l.vat = 0; l.total = l.subtotal + l.sd } // exports are zero-rated
@@ -172,7 +174,7 @@ for (const day of monthsBack()) {
   // Purchases: ~0.2/day → ≈ 75 bills
   if (rnd() < 0.2) {
     const v = rnd() < 0.45 ? pick(vendors.slice(0, 5)) : rnd() < 0.65 ? pick(vendors.slice(5, 7)) : pick(vendors.slice(7))
-    const pool = v.mode === "Foreign" ? buyables.filter((i) => i.group === "Raw Material") : v.mode === "Local" ? buyables.filter((i) => i.group !== "Packing Materials") : buyables.filter((i) => i.group === "Packing Materials" || i.name.includes("Solvent"))
+    const pool = v.mode === "Foreign" ? buyables.filter((i) => i.group === "Raw Material") : v.mode === "Local" ? buyables.filter((i) => i.group !== "Packing Materials") : buyables.filter((i) => i.group === "Packing Materials" || i.name.startsWith("Sewing Thread"))
     const n = int(1, 3)
     const chosen = shuffle(pool).slice(0, n)
     let tti = 0

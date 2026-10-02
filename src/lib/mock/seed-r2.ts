@@ -20,7 +20,7 @@ export const EXTRA_VENDORS: Party[] = [
   { id: "v10", name: "PRIME HAUL TRANSPORT AGENCY", bin: "002745118-0402", mobile: "01711-402233", address: "Station Road, Tongi, Gazipur-1710", kind: "vendor", mode: "Local", active: true },
   { id: "v11", name: "SHIELDLINE SECURITY SERVICES LTD", bin: "003118926-0101", mobile: "01819-556677", address: "Mohakhali C/A, Dhaka-1212", kind: "vendor", mode: "Local", active: true },
   { id: "v12", name: "BAYLINK C&F AGENCY", bin: "001973462-0203", mobile: "01913-778899", address: "Agrabad C/A, Chattogram-4100", kind: "vendor", mode: "Local", active: true },
-  { id: "v13", name: "MD. HABIBUR RAHMAN (MACHINE MECHANIC)", bin: "NID 1990263311442", mobile: "01745-221100", address: "Kaliakair Bazar, Gazipur-1750", kind: "vendor", mode: "Non-registered", active: true },
+  { id: "v13", name: "MD. HABIBUR RAHMAN (KNITTING MACHINE MECHANIC)", bin: "NID 1990263311442", mobile: "01745-221100", address: "Konabari Bazar, Gazipur-1346", kind: "vendor", mode: "Non-registered", active: true },
   { id: "v14", name: "NETCORE IT SOLUTIONS", bin: "004209871-0103", mobile: "01670-334455", address: "Mirpur DOHS, Dhaka-1216", kind: "vendor", mode: "Local", active: true },
 ]
 
@@ -71,9 +71,9 @@ export function seedMasterItems(items: Item[]): MasterItem[] {
       description: t?.description, rates, active: true, createdAt: "2025-06-24T04:30:00.000Z",
       history: [{ at: "2025-06-24T04:30:00.000Z", by: "System Administrator", action: "created" }],
     }
-    if (m.name === "Cylinder") {
+    if (m.name === "Knitting Needles") {
       m.rates = { ...rates, cd: 1 }
-      m.overrideReason = "Concessionary CD for printing-industry capital items (illustrative)."
+      m.overrideReason = "Concessionary CD on knitting-machine spares for export-oriented textile units (illustrative)."
       m.history!.push({ at: "2026-02-10T05:15:00.000Z", by: "Farzana Akter", action: "edited", note: "CD 5% → 1% (override)" })
       m.updatedAt = "2026-02-10T05:15:00.000Z"
     }
@@ -108,8 +108,8 @@ export function seedOpening(items: Item[], main: { id: string; name: string }, s
     })
   }
   const fg = items.filter((i) => i.group === "Finished Goods")
-  if (fg[0]) draft(fg[0], 120, "21", "Stock found at the Mirpur store during the September count — not yet on the books.")
-  if (fg[2]) draft(fg[2], 85.5, "23", "Mirpur store count variance (to be verified by accounts).")
+  if (fg[0]) draft(fg[0], 120, "21", "Stock found at the Ashulia store during the September count — not yet on the books.")
+  if (fg[2]) draft(fg[2], 85, "23", "Ashulia store count variance (to be verified by accounts).")
   return out
 }
 
@@ -166,11 +166,11 @@ export function seedServicePurchases(startId: number, main: { id: string; name: 
  */
 export function seedDebitNotes(purchases: Purchase[], available: (itemId: string) => number): DebitNote[] {
   const plan: { reason: DebitReason; pct: number; process: DebitNote["process"]; note: string }[] = [
-    { reason: "quality", pct: 0.06, process: "Approved", note: "Gauge variation beyond ±5% — rejected by QC (report QC-26-114)." },
-    { reason: "damaged", pct: 0.04, process: "Approved", note: "Rolls crushed in transit; vendor agreed to credit." },
+    { reason: "quality", pct: 0.06, process: "Approved", note: "Yarn count variation beyond ±3% (Ne) — rejected by QC (report QC-26-114)." },
+    { reason: "damaged", pct: 0.04, process: "Approved", note: "Cones crushed and wet in transit; vendor agreed to credit." },
     { reason: "excess", pct: 0.05, process: "Approved", note: "Delivered more than the PO quantity." },
     { reason: "wrongItem", pct: 0.08, process: "Cancelled", note: "Raised against the wrong challan — replaced." },
-    { reason: "quality", pct: 0.05, process: "Created", note: "Coating weight below spec; awaiting vendor confirmation." },
+    { reason: "quality", pct: 0.05, process: "Created", note: "Shade and GSM below the approved lab dip; awaiting vendor confirmation." },
   ]
   const candidates = purchases
     .filter((p) => p.process === "Approved" && (p.category ?? "goods") === "goods" && p.issueDate >= "2026-05-01")

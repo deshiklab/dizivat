@@ -13,7 +13,7 @@ import { bondRows, daysBetween, udRow, UD_WARN_PCT } from "@/lib/rmg"
 import { itemInput, partyInput, type UdInput } from "@/lib/schemas"
 import type {
   BackupRow, BackupStatus, Batch, ImportEntity, ImportIssue, ImportResult, Item, Party, SubconProcess, SubconRegister, SubconRow,
-  UdLine, UdRegister,
+  UdLine, UdRegister, RestoreDrill,
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
@@ -43,7 +43,7 @@ export function udRegister(today: string, customerId?: string): UdRegister {
 export { UD_WARN_PCT }
 
 /** Business rules for create / update: the customer must be an exporter, items must exist, numbers unique per customer. */
-export function udCheck(d: UdInput & { lines: { itemId: string; qty: number }[] }, selfId?: string): { errors?: Record<string, string[]>; customer?: Party; lines?: UdLine[] } {
+export function udCheck(d: UdInput & { lines: { itemId: string; qty: number; value?: number }[] }, selfId?: string): { errors?: Record<string, string[]>; customer?: Party; lines?: UdLine[] } {
   const errors: Record<string, string[]> = {}
   const customer = db.customers.find((c) => c.id === d.customerId)
   if (!customer) errors.customerId = ["unknown"]
@@ -54,7 +54,7 @@ export function udCheck(d: UdInput & { lines: { itemId: string; qty: number }[] 
   d.lines.forEach((l, i) => {
     const it = db.items.find((x) => x.id === l.itemId)
     if (!it) { errors[`lines.${i}.itemId`] = ["unknown"]; return }
-    lines.push({ itemId: it.id, name: it.name, hsCode: it.hsCode, uom: it.unit, qty: l.qty })
+    lines.push({ itemId: it.id, name: it.name, hsCode: it.hsCode, uom: it.unit, qty: l.qty, ...(l.value != null && Number.isFinite(l.value) ? { value: Math.round(l.value * 100) / 100 } : {}) })
   })
   return Object.keys(errors).length ? { errors } : { customer, lines }
 }
@@ -246,7 +246,17 @@ export function backupStatus(): BackupStatus {
     timezone: "Asia/Dhaka", schedule: [...BACKUP_SLOTS], retention: BACKUP_KEEP, storage: "memory",
     today: rows.filter((r) => dhakaDayOf(r.at) === today).length,
     next: nextSlot(), last: rows[0], rows,
+    drill: MOCK_DRILL,
   }
+}
+/**
+ * R6.3: the PostgreSQL build records each restore drill (api/dist/restore.js --record); the in-memory mock shows
+ * the shape of a passed drill so the Settings → Backups card can be reviewed without a database.
+ */
+const MOCK_DRILL: RestoreDrill = {
+  at: "2026-09-21T03:12:40.000Z", ok: true, backupId: "bk58", backupAt: "2026-09-20T20:00:00.000Z",
+  sha256: "4f1c9a7be2d0583e6a91c4d7f0b2e8a35c6d9e1f0a7b4c2d8e5f3a6b9c0d1e2f", target: "127.0.0.1:5432/dizivat_restore_drill", ms: 21_480,
+  tables: 9, rows: 3_412, documents: 1_386, auditChain: "ok", boot: "ok", mismatches: [], by: "CI restore drill (GitHub Actions)",
 }
 export const backupData = (id: string) => bstore.rows.find((r) => r.id === id)
 export async function verifyBackup(id: string) {

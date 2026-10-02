@@ -125,7 +125,7 @@ export function computeReturn(src: ReturnSource, period: string, manual: ReturnM
   set(65, amt(58) - (amt(50) + amt(67)))
   set(66, amt(59) - (amt(51) + amt(68)))
 
-  for (const k of [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 29, 30, 31, 32, 39, 38, 58, 59, 60, 61, 62, 63, 64]) {
+  for (const k of [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 29, 30, 31, 32, 39, 38, 40, 58, 59, 60, 61, 62, 63, 64]) {
     const x = n.get(k)!
     if (x.count) x.drill = true
   }
@@ -188,6 +188,12 @@ export function subForm(src: ReturnSource, period: string, note: number): SubFor
   } else if (note === 27 || note === 32 || note === 38) {
     for (const a of approved(src.adjustments).filter((x) => x.taxPeriod === period && x.note === note))
       rows.push({ date: a.issueDate, ref: a.no, refId: a.id, href: `/vat/adjustments?view=${a.id}`, value: 0, vat: a.amount, note: a.description })
+  } else if (note === 40) {
+    // R6.3: SD paid on inputs of goods exported within six months — one row per claim, linked to purchase and export
+    for (const a of approved(src.adjustments).filter((x) => x.taxPeriod === period && x.note === 40)) {
+      const x = a.sdExport
+      rows.push({ date: a.issueDate, ref: a.no, refId: a.id, href: `/vat/adjustments?view=${a.id}`, party: x?.vendorName, value: 0, vat: a.amount, note: x ? `${x.purchaseNo} · ${x.itemName} ${x.qty} ${x.uom} → ${x.saleNo}` : a.description })
+    }
   } else if (note >= 58 && note <= 64) {
     for (const d of approved(src.treasury).filter((x) => x.taxPeriod === period && HEAD_NOTE[x.head] === note))
       rows.push({ date: d.challanDate, ref: d.challanNo, refId: d.id, href: `/vat/tr-6?view=${d.id}`, party: d.bank, value: 0, vat: d.amount, note: `${d.no} · ${d.head}` })

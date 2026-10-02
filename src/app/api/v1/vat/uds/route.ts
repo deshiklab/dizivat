@@ -37,7 +37,7 @@ export const POST = withAuth("doc.create", async (req, _ctx, user) => {
   const ud: UdRecord = {
     id: `ud${++db.seq.ud}-${Date.now().toString(36)}`, no: d.no.trim().toUpperCase(), kind: d.kind, date: d.date, expiry: d.expiry,
     customerId: c.customer!.id, customerName: c.customer!.name, customerBin: c.customer!.bin, masterLcNo: d.masterLcNo, buyer: d.buyer || undefined,
-    lines: c.lines!, status: d.status, note: d.note || undefined, createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
+    lines: c.lines!, status: d.status, note: d.note || undefined, masterLcValue: d.masterLcValue, currency: d.currency, createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
   }
   db.uds.push(ud)
   recordAudit({ actor: user, entity: "ud", entityId: ud.id, ref: `${ud.no} · ${ud.customerName}`, action: "created" })

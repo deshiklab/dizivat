@@ -20,6 +20,7 @@ import type {
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
+import { sdEligible, sdExportLink } from "@/lib/sd-export"
 import { deny, json, problem, withAuth, zodProblem } from "./_lib"
 
 type Ctx = { params: Promise<{ id: string }> }
@@ -614,6 +615,12 @@ export const vdsRoutes = lifecycle<VdsEntry, VdsFields>({
   csvName: "vds",
   facetLabels: () => ({ party: Object.fromEntries([...db.customers, ...db.vendors].map((p) => [p.id, p.name])) }),
 })
+/** R6.3: SD-paid purchase lines and the six-month export window (`exclude` = the claim being edited). */
+export const sdEligibleRoute = withAuth(null, async (req) => {
+  const sp = new URL(req.url).searchParams
+  await delay(60)
+  return json(sdEligible({ purchases: db.purchases, sales: db.sales, adjustments: db.adjustments }, TODAY, sp.get("exclude") ?? undefined))
+})
 export const vdsEligibleRoute = withAuth(null, async (req) => {
   const sp = new URL(req.url).searchParams
   const mode = sp.get("mode") === "sales" ? "sales" : "purchase"
@@ -633,15 +640,29 @@ export const adjustmentRoutes = lifecycle<VatAdjustment, AdjFields>({
     if (a.issueDate > TODAY) return { error: invalid({ issueDate: ["future"] }) }
     if (a.taxPeriod > CURRENT || a.taxPeriod < FIRST_RETURN) return { error: invalid({ taxPeriod: ["outOfRange"] }) }
     const lock = lockedField(`${a.taxPeriod}-01`, "taxPeriod"); if (lock) return { error: lock }
+    // R6.3: SD on inputs of exported goods — linked, window-checked, amount computed from the purchase line
+    let amount = round2(a.amount), sdExport: VatAdjustment["sdExport"]
+    if (a.kind === "sdExport") {
+      const r = sdExportLink(a, { purchases: db.purchases, sales: db.sales, adjustments: db.adjustments }, self?.id)
+      if ("errors" in r) return { error: invalid(r.errors) }
+      amount = r.amount; sdExport = r.link
+    }
     return {
       process: a.process, date: a.issueDate,
-      fields: { kind: a.kind, note: ADJUSTMENT_NOTE[a.kind], issueDate: a.issueDate, taxPeriod: a.taxPeriod, amount: round2(a.amount), description: a.description, reference: a.reference || undefined, issuedBy: self?.issuedBy ?? "" },
+      fields: { kind: a.kind, note: ADJUSTMENT_NOTE[a.kind], issueDate: a.issueDate, taxPeriod: a.taxPeriod, amount, description: a.description, reference: a.reference || undefined, sdExport, issuedBy: self?.issuedBy ?? "" },
     }
   },
   locked: (d) => lockedConflict(`${d.taxPeriod}-01`, d.no),
+  // R6.3: re-check an SD claim on approval — another claim may have used the quantity since the draft was saved
+  approve: (d) => {
+    if (d.kind !== "sdExport" || !d.sdExport) return null
+    const x = d.sdExport
+    const r = sdExportLink({ purchaseId: x.purchaseId, itemId: x.itemId, qty: x.qty, saleId: x.saleId, issueDate: d.issueDate, taxPeriod: d.taxPeriod }, { purchases: db.purchases, sales: db.sales, adjustments: db.adjustments }, d.id)
+    return "errors" in r ? invalid(r.errors) : null
+  },
   diffFields: ["kind", "issueDate", "taxPeriod", "amount", "description", "reference"],
   spec: {
-    search: (a) => `${a.no} ${a.description} ${a.reference ?? ""}`,
+    search: (a) => `${a.no} ${a.description} ${a.reference ?? ""} ${a.sdExport ? `${a.sdExport.purchaseNo} ${a.sdExport.saleNo} ${a.sdExport.itemName}` : ""}`,
     dateField: "issueDate",
     facets: { process: (a) => a.process, kind: (a) => a.kind, period: (a) => a.taxPeriod },
     totals: ["amount"],

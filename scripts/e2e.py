@@ -17,10 +17,10 @@ async def main():
         await pg.screenshot(path=f"{OUT}/15_sale_validation.png")
         # 2 fill
         await pg.locator("#customerId").click(); await pg.get_by_placeholder("Search name or BIN…").fill("sunrise"); await pg.get_by_role("option").first.click()
-        await pg.get_by_role("combobox", name="Product 1").click(); await pg.get_by_role("option", name=re.compile("Printed Blister")).click()
+        await pg.get_by_role("combobox", name="Product 1").click(); await pg.get_by_role("option", name=re.compile("Basic T-Shirt")).click()
         await pg.get_by_label("Qty 1").fill("500")
         await pg.get_by_role("button", name="Add line").click()
-        await pg.get_by_role("combobox", name="Product 2").click(); await pg.get_by_role("option", name=re.compile("Sachet Roll")).click()
+        await pg.get_by_role("combobox", name="Product 2").click(); await pg.get_by_role("option", name=re.compile("Denim Jeans")).click()
         await pg.get_by_label("Qty 2").fill("1200")
         await pg.locator("#vehicle").fill("Dhaka Metro-Ta 11-4455")
         await pg.wait_for_timeout(300)
@@ -32,7 +32,7 @@ async def main():
         # 2b over-stock is rejected by the server with a line-level message
         await pg.goto(BASE+"/en/sales/new", wait_until="networkidle")
         await pg.locator("#customerId").click(); await pg.get_by_placeholder("Search name or BIN…").fill("orion"); await pg.get_by_role("option").first.click()
-        await pg.get_by_role("combobox", name="Product 1").click(); await pg.get_by_role("option", name=re.compile("Printed Blister")).click()
+        await pg.get_by_role("combobox", name="Product 1").click(); await pg.get_by_role("option", name=re.compile("Basic T-Shirt")).click()
         await pg.get_by_label("Qty 1").fill("9999999")
         await pg.get_by_role("button", name="Save & approve").click()
         await expect(pg.get_by_text(re.compile("Line 1: Exceeds available stock")).first).to_be_visible(timeout=8000)

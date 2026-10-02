@@ -14,6 +14,7 @@ import { economicCode, periodEnd, periodOf, periodsBetween, returnDue } from "..
 import { round2 } from "../vat"
 import type { VatProfile } from "../types"
 import { computeReturn, EMPTY_MANUAL, type ReturnSource } from "./vat-return"
+import { seedSdClaims } from "./seed-r63"
 
 export const GO_LIVE = "2026-07-01"
 export const FIRST_RETURN = "2025-07"
@@ -21,7 +22,7 @@ export const LAST_FILED = "2026-08"
 const ZONE = "0015"
 const OPERATOR = "Md. Kamal Uddin"
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
-const ADDRESS = "Plot 14, Hi-Tech Park Road, Kaliakair, Gazipur - 1750"
+const ADDRESS = "Plot 22-25, BSCIC Road, Konabari, Gazipur - 1346"
 
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10)
 const minDate = (a: string, b: string) => (a < b ? a : b)
@@ -44,11 +45,11 @@ const challanNo = (date: string, n: number) => {
 }
 
 export const SEED_ACCOUNTS: MoneyAccount[] = [
-  { id: "ac1", kind: "bank", provider: "DUTCH-BANGLA BANK PLC.", accountNo: "1071100045872", owner: "RUPSHA FLEXIPACK LTD", branch: "Kaliakair", bankType: "current", serviceCharge: 0, openingBalance: 35_000_000, openingDate: GO_LIVE, address: "Kaliakair Bazar, Gazipur", active: true, createdAt: at("2026-06-28", 5) },
-  { id: "ac2", kind: "bank", provider: "BRAC BANK PLC.", accountNo: "1501203658741001", owner: "RUPSHA FLEXIPACK LTD", branch: "Gazipur Chowrasta", bankType: "current", serviceCharge: 0, openingBalance: 12_000_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-28", 5) },
-  { id: "ac3", kind: "bank", provider: "SONALI BANK PLC.", accountNo: "4433401009876", owner: "RUPSHA FLEXIPACK LTD", branch: "Kaliakair", bankType: "savings", serviceCharge: 0, openingBalance: 2_500_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-28", 5) },
-  { id: "ac4", kind: "mobile", provider: "bKash", accountNo: "01711-555012", owner: "RUPSHA FLEXIPACK LTD", authorised: OPERATOR, walletType: "merchant", serviceCharge: 1.5, openingBalance: 150_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-29", 5) },
-  { id: "ac5", kind: "mobile", provider: "Nagad", accountNo: "01819-440233", owner: "RUPSHA FLEXIPACK LTD", authorised: "Farzana Akter", walletType: "merchant", serviceCharge: 1, openingBalance: 80_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-29", 5) },
+  { id: "ac1", kind: "bank", provider: "DUTCH-BANGLA BANK PLC.", accountNo: "1071100045872", owner: "KANCHANJHARA APPAREL COMPOSITE LTD", branch: "Konabari", bankType: "current", serviceCharge: 0, openingBalance: 35_000_000, openingDate: GO_LIVE, address: "Konabari Bazar, Gazipur", active: true, createdAt: at("2026-06-28", 5) },
+  { id: "ac2", kind: "bank", provider: "BRAC BANK PLC.", accountNo: "1501203658741001", owner: "KANCHANJHARA APPAREL COMPOSITE LTD", branch: "Gazipur Chowrasta", bankType: "current", serviceCharge: 0, openingBalance: 12_000_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-28", 5) },
+  { id: "ac3", kind: "bank", provider: "SONALI BANK PLC.", accountNo: "4433401009876", owner: "KANCHANJHARA APPAREL COMPOSITE LTD", branch: "Konabari", bankType: "savings", serviceCharge: 0, openingBalance: 2_500_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-28", 5) },
+  { id: "ac4", kind: "mobile", provider: "bKash", accountNo: "01711-555012", owner: "KANCHANJHARA APPAREL COMPOSITE LTD", authorised: OPERATOR, walletType: "merchant", serviceCharge: 1.5, openingBalance: 150_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-29", 5) },
+  { id: "ac5", kind: "mobile", provider: "Nagad", accountNo: "01819-440233", owner: "KANCHANJHARA APPAREL COMPOSITE LTD", authorised: "Farzana Akter", walletType: "merchant", serviceCharge: 1, openingBalance: 80_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-29", 5) },
   { id: "ac6", kind: "cash", provider: "Cash in hand — Factory", accountNo: "CASH-01", owner: "Accounts department", serviceCharge: 0, openingBalance: 4_000_000, openingDate: GO_LIVE, active: true, createdAt: at("2026-06-29", 5) },
 ]
 
@@ -76,12 +77,13 @@ function moneyDoc(kind: MoneyDoc["kind"], i: number, date: string, party: Party,
 }
 
 /**
- * R6: demo business profile — a flexible-packaging maker supplying garment exporters (RMG backward linkage):
- * deemed exporter under a general bonded warehouse, BGAPMEA member, manufacturer for advance tax.
+ * R6.3: demo business profile — a knit + woven composite garment maker: exports garments directly (EXP / bonded
+ * fabric) and also sells dyed knit fabric to other exporters against their UDs (deemed export), so it is not 100 %
+ * export-oriented. Own bond licence, BKMEA member, manufacturer for advance tax.
  */
 export const SEED_PROFILE: VatProfile = {
-  segment: "rmgDeemed", exportOriented: false, importerType: "manufacturer", filerCategory: "standard",
-  bondLicenseNo: "CUS-BOND/DHK/D-0417/2019", bondLicenseExpiry: "2027-06-30", associationNo: "BGAPMEA-1142", holidays: [],
+  segment: "rmgComposite", exportOriented: false, importerType: "manufacturer", filerCategory: "standard",
+  bondLicenseNo: "CUS-BOND/DHK/G-1186/2021", bondLicenseExpiry: "2027-06-30", associationNo: "BKMEA-2864", holidays: [],
 }
 
 export function seedR4(d: SeedSrc) {
@@ -102,7 +104,7 @@ export function seedR4(d: SeedSrc) {
     moneyDocs.push(moneyDoc("receipt", ++r, "2026-09-24", cust, "cheque", part, [{ docId: dueSale.id, docNo: dueSale.invoiceNo, docDate: dueSale.issueDate, docTotal: dueSale.netTotal, amount: part }], used, { approved: false, note: "Part payment — balance promised by 10 Oct." }))
   }
   const adv = d.customers.find((c) => c.mode === "Local" && c.id !== dueSale?.customerId) ?? d.customers[0]
-  moneyDocs.push(moneyDoc("receipt", ++r, "2026-09-22", adv, "bankTransfer", 500_000, [], used, { note: "Advance against purchase order PO-2026-118 (laminated pouches)." }))
+  moneyDocs.push(moneyDoc("receipt", ++r, "2026-09-22", adv, "bankTransfer", 500_000, [], used, { note: "Advance against purchase order PO-2026-118 (polo shirts, Puja collection)." }))
 
   const livePur = d.purchases.filter((p) => p.process === "Approved" && p.issueDate >= GO_LIVE && p.paid > 0).sort((a, b) => a.issueDate.localeCompare(b.issueDate))
   livePur.forEach((p, i) => {
@@ -152,9 +154,9 @@ export function seedR4(d: SeedSrc) {
   }
 
   const adjustments: VatAdjustment[] = [
-    ["2026-02-26", "otherIncrease", 27, 18_450, "Input tax credit reversed on laminate film issued as free samples (not a taxable supply), per section 46.", "Store memo SM-0226-07"],
+    ["2026-02-26", "otherIncrease", 27, 18_450, "Input tax credit reversed on fabric issued for free buyer samples (not a taxable supply), per section 46.", "Store memo SM-0226-07"],
     ["2026-05-28", "otherDecrease", 32, 9_870, "Input tax on the Apr-2026 bill of entry C-41877 not claimed in time for 04-2026; claimed within the 4 tax periods allowed.", "BoE C-41877"],
-    ["2026-08-27", "otherIncrease", 27, 6_200, "VAT on scrap sales (off-cuts) recorded outside the sales register — added on the consultant's review.", "Consultant note 08/2026"],
+    ["2026-08-27", "otherIncrease", 27, 6_200, "VAT on jhut (cutting waste) sales recorded outside the sales register — added on the consultant's review.", "Consultant note 08/2026"],
   ].map(([date, kind, note, amount, description, reference], i) => ({
     id: `va${i + 1}`, no: monthNo("VA", date as string, used), kind: kind as VatAdjustment["kind"], note: note as VatAdjustment["note"], issueDate: date as string, taxPeriod: periodOf(date as string),
     amount: amount as number, description: description as string, reference: reference as string, process: "Approved" as const, issuedBy: "Farzana Akter", createdAt: at(date as string, 5), history: trail(date as string, i, "Farzana Akter"),
@@ -164,6 +166,8 @@ export function seedR4(d: SeedSrc) {
     description: "Input tax on canteen supplies claimed in error on purchase P-0926 — to be reversed this period.", reference: "Internal review 23/09", process: "Created",
     issuedBy: "Farzana Akter", createdAt: at("2026-09-23", 5), history: trail("2026-09-23", 0, "Farzana Akter", false),
   })
+  // R6.3: SD on exported inputs — claims in the open period (note 40)
+  adjustments.push(...seedSdClaims(d.purchases, d.sales, adjustments, (date) => monthNo("VA", date, used)))
 
   // Returns + treasury deposits, month by month
   const treasury: TreasuryDeposit[] = []
@@ -175,7 +179,7 @@ export function seedR4(d: SeedSrc) {
     const id = `tc${treasury.length + 1}`
     const t: TreasuryDeposit = {
       id, no: monthNo("TC", date, used), head, code: economicCode(head, ZONE), taxPeriod: period, challanNo: challanNo(date, ch), challanDate: date, mode: date >= GO_LIVE ? "online" : ch % 3 ? "cheque" : "online",
-      bank: "SONALI BANK PLC.", bankBranch: "Kaliakair", district: "Gazipur", ...(date >= GO_LIVE ? { accountId: "ac1" } : {}), amount,
+      bank: "SONALI BANK PLC.", bankBranch: "Konabari", district: "Gazipur", ...(date >= GO_LIVE ? { accountId: "ac1" } : {}), amount,
       depositor: "Farzana Akter", designation: "Accounts Executive", address: ADDRESS,
       description: `${head === "vds" ? "VAT deducted at source" : head === "sd" ? "Supplementary duty" : head === "penalty" ? "Penalty for late return" : "VAT"} for tax period ${period.slice(5)}-${period.slice(0, 4)}`,
       process: "Approved", createdAt: at(date, 4), history: trail(date, ch, "Farzana Akter"),

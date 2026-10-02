@@ -1,4 +1,4 @@
-# NBR VAT-software enlistment — readiness (R6 / R6.2)
+# NBR VAT-software enlistment — readiness (R6 / R6.2 / R6.3)
 
 DiziVAT is being prepared for enlistment as **NBR-approved VAT software** under General Order 16/Mushak/2019. Taxpayers with
 an annual turnover above Tk 5 crore must keep their VAT records in enlisted software. The non-compliance penalty is
@@ -8,7 +8,7 @@ This page maps the enlistment requirements to what the software does, and lists 
 document for the application, **not** legal advice. Check every rule against the current Act, rules, SROs and
 general orders before you file.
 
-Branch `r6-enlistment-rmg`, version **0.11.0** (R6.2). The git tag `v0.9.1` marks the state before R6; `v0.10.0` is R6.1.
+Branch `r6-enlistment-rmg`, version **0.12.0** (R6.3). The git tag `v0.9.1` marks the state before R6; `v0.10.0` is R6.1, `v0.11.0` R6.2.
 
 ## 1. Requirements → status
 
@@ -19,7 +19,7 @@ Branch `r6-enlistment-rmg`, version **0.11.0** (R6.2). The git tag `v0.9.1` mark
 | 3 | Statutory forms | 4.3, 6.1, 6.2, **6.2.1** (purchase-sales book of traded goods), 6.3 (local / export / service), 6.4 (contractual batches + subcontracting register), **6.5** (transfer challan print), 6.6, 6.7, 6.8, 6.10, 9.1, TR-6 | ✅ R6.2 (9.3 / 9.4 not in scope) |
 | 4 | **Tamper protection** — records must not be altered or deleted unnoticed | Audit trail is **append-only in the database** (triggers) and **hash-chained** (SHA-256); integrity check in the UI and the API (§2) | ✅ R6.1 |
 | 5 | **VAT officials must have access for audit** | **VAT officer** role: read-only, audit trail and exports, **time-boxed** (access-until date, max 90 days, enforced at sign-in and on every request) and **every read logged** in the audit trail (§5) | ✅ R6.2 |
-| 6 | **At least two backups of transaction data a day** | **Two scheduled backups a day** (02:00 and 14:00 Asia/Dhaka) plus on demand: gzip JSON snapshot of every table with its SHA-256, last 30 kept, verify and download in *Master data › Backups* (§6). Neon point-in-time recovery on top | ✅ R6.2 |
+| 6 | **At least two backups of transaction data a day** | **Two scheduled backups a day** (02:00 and 14:00 Asia/Dhaka) plus on demand: gzip JSON snapshot of every table with its SHA-256, last 30 kept, verify and download in *Master data › Backups* (§6). A **restore drill** proves a backup restores into a fresh database (§8). Neon point-in-time recovery on top | ✅ R6.2 / R6.3 |
 | 7 | Manual records during outages, entered later | Back-dated entry within open periods; period lock after the return is submitted | ✅ |
 | 8 | Integration with the taxpayer's ERP / books | Typed REST API (`docs/API.md`) and CSV exports on every register; **bulk import** of items, customers and vendors from CSV / Excel with a dry run (§7). Transaction import is planned | ✅ masters · 🟡 transactions |
 | 9 | User access control | Roles (admin, approver, operator, viewer/auditor, VAT officer) with per-permission checks in the API; sessions revoked on password change, reset or deactivation; lockout | ✅ |
@@ -132,9 +132,26 @@ after a clean validation and is all-or-nothing. Records already on file (same SK
 inside the file are errors. An **RMG starter catalogue** (31 garment inputs, trims, packaging and garments with HS codes)
 can be loaded instead of a file. Each created record and the import itself are audited.
 
-## 8. Next
+## 8. Restore drill (R6.3)
+
+`api/dist/restore.js` restores a backup — a row of the `backups` table or a downloaded `.json.gz` — into an **empty**
+database (it refuses a non-empty one), checks the SHA-256, loads every table in one transaction, compares row counts
+and every document collection, verifies the audit hash chain end to end and, with `--boot`, starts the API on the copy,
+signs in and lists the sales invoices. `--record` stores the result in the source database: *Master data › Backups*
+shows **Last restore drill** (`GET /api/v1/backups` → `drill`). CI runs a full drill on every push (in
+`api_native.py`). Procedure, targets (RPO ≤ 12 h, RTO ≤ 1 h) and the checklist: [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+
+## 9. Interest and penalty calculator (R6.3)
+
+The compliance centre has an **Interest & penalty** card for the selected period: §127 interest at 1 % a month (a
+started month counts) on unpaid VAT (9.1 note 41) and SD (note 42), capped at 24 months, and the late-return penalty
+(note 43, Tk 10,000 by default — the officer sets the amount). Due dates follow the return due date (15th / 20th, moved
+past weekends and holidays). Every input can be changed for a what-if; buttons open the return or a TR-6 for the
+interest or penalty. An **exposure** list shows each period that owes interest or a penalty today. Rates live in the
+effective-dated rules table. API: `GET /api/v1/vat/penalty`.
+
+## 10. Next
 
 1. Transaction import (sales, purchases) and an e-VAT filing export once NBR publishes the format.
-2. Restore drill from a backup file into a fresh database (documented procedure + script).
-3. Late-filing penalty and §127 interest calculator on the compliance centre.
-4. 9.3 / 9.4 (late and corrected returns) if NBR requires them for enlistment.
+2. 9.3 / 9.4 (late and corrected returns) if NBR requires them for enlistment.
+3. Off-site copy of the backups (object storage) and a scheduled monthly drill on the live service.

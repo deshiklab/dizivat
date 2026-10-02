@@ -21,7 +21,7 @@ import { fmtDate, fmtNum } from "@/lib/format"
 import { customsHouseName } from "@/lib/r2"
 import { exportCompliance, fcToBdt } from "@/lib/rmg"
 import { ExportChecklist } from "@/features/vat/export-checklist"
-import { useCan } from "@/components/auth/me-provider"
+import { useCan, useCompany } from "@/components/auth/me-provider"
 import type { Sale } from "@/lib/types"
 import { Mushak63 } from "./mushak-63"
 import { RecordHistory } from "@/features/audit/record-history"
@@ -33,6 +33,7 @@ import { PeriodLockNote } from "@/features/r4/period-lock"
 export function SaleDetail({ id }: { id: string }) {
   const t = useTranslations("sales")
   const can = useCan()
+  const company = useCompany()
   const tr4 = useTranslations("r4link")
   const tc = useTranslations("common")
   const tpm = useTranslations("method")
@@ -56,7 +57,7 @@ export function SaleDetail({ id }: { id: string }) {
   }
   const url = typeof window !== "undefined" ? window.location.href.split("?")[0] : ""
   const share = () => { navigator.clipboard?.writeText(url); toast.success(tt("linkCopied")) }
-  const mail = `mailto:?subject=${encodeURIComponent(`Mushak 6.3 – ${s.invoiceNo} – RUPSHA FLEXIPACK LTD`)}&body=${encodeURIComponent(`${s.customerName}\n${t("col.netTotal")}: BDT ${s.netTotal}\n${url}`)}`
+  const mail = `mailto:?subject=${encodeURIComponent(`Mushak 6.3 – ${s.invoiceNo} – ${company.name}`)}&body=${encodeURIComponent(`${s.customerName}\n${t("col.netTotal")}: BDT ${s.netTotal}\n${url}`)}`
 
   return (
     <>

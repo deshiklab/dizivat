@@ -4,6 +4,7 @@ import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
 import { company } from "./company"
 import { seedStockDocs, seedUnits } from "./seed-stock"
+import { seedSdImports } from "./seed-r63"
 import { EXTRA_VENDORS, enrichImports, seedDebitNotes, seedMasterItems, seedOpening, seedServicePurchases } from "./seed-r2"
 import { EXTRA_CUSTOMERS, enrichCustomers, enrichExports, seedBoms, seedCreditNotes, seedProduction, seedR3Sales } from "./seed-r3"
 import { seedR4 } from "./seed-r4"
@@ -96,6 +97,8 @@ function init(): DB {
   const creditNotes = seedCreditNotes(d.sales, d.items, balMain)
   const boms = seedBoms(d.items)
   const { workOrders, batches } = seedProduction(d.items, boms, d.vendors, { id: main, name: mainName }, balMain)
+  // R6.3: SD-paid packing imports (9.1 note 40 — SD on inputs of exported goods)
+  seedSdImports(d.purchases, d.vendors, d.items, { id: main, name: mainName })
   const r4 = seedR4({ sales: d.sales, purchases: d.purchases, creditNotes, debitNotes, customers: d.customers, vendors: d.vendors })
   const r2Docs = [
     ...debitNotes.map((x) => ({ entity: "debitNote" as const, id: x.id, ref: x.no, history: x.history })),
@@ -154,7 +157,7 @@ function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], 
     { at: "2026-09-22T02:58:00.000Z", actor: "Md. Kamal Uddin", entity: "session", entityId: "u3", ref: "kamal", action: "signInFailed", note: "Wrong password" },
     { at: "2026-01-12T04:05:00.000Z", actor: "System Administrator", entity: "user", entityId: "u4", ref: "auditor", action: "invited", note: "Role: viewer" },
     { at: "2026-03-31T05:10:00.000Z", actor: "System Administrator", entity: "user", entityId: "u6", ref: "jewel", action: "deactivated", note: "Left the company" },
-    { at: "2026-07-01T04:00:00.000Z", actor: "System Administrator", entity: "company", ref: "RUPSHA FLEXIPACK LTD", action: "updated", changes: [{ field: "phone", from: "0-27701234", to: "02-27701234" }] },
+    { at: "2026-07-01T04:00:00.000Z", actor: "System Administrator", entity: "company", ref: "KANCHANJHARA APPAREL COMPOSITE LTD", action: "updated", changes: [{ field: "phone", from: "0-27701234", to: "02-27701234" }] },
   )
   raw.sort((a, b) => a.at!.localeCompare(b.at!)).forEach((e) => recordAudit(e))
 }

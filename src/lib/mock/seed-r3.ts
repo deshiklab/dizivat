@@ -16,7 +16,7 @@ const APPROVERS = ["Arif Hossain", "Farzana Akter"]
 
 type Bal = { get: (itemId: string) => number; add: (itemId: string, q: number) => void }
 
-/** A 100 % export-oriented garment factory — buys against back-to-back LCs (deemed export). */
+/** A 100 % export-oriented knit garment factory — buys our dyed knit fabric against back-to-back LCs (deemed export). */
 export const EXTRA_CUSTOMERS: Party[] = [
   { id: "c10", name: "AURORA KNIT COMPOSITE LTD", bin: "001582734-0302", mobile: "01713-909090", address: "Plot 41, Dhaka EPZ, Savar, Dhaka-1349", kind: "customer", mode: "Local", active: true, creditLimit: 3_000_000,
     // R6 (RMG): direct garment exporter with a bonded warehouse — the buyer side of our deemed exports
@@ -70,15 +70,15 @@ export function seedR3Sales(startId: number, sales: Sale[], customers: Party[], 
   const out: Sale[] = []
   let id = startId
   const plan: [date: string, cust: string, lines: [svc: string, qty: number, price: number][], process: "Created" | "Approved" | "Cancelled", paidPart: number][] = [
-    ["2026-07-08", "c1", [["ss1", 4200, 38], ["ss2", 6, 42000]], "Approved", 1],
+    ["2026-07-08", "c1", [["ss1", 4200, 145], ["ss2", 6, 42000]], "Approved", 1],
     ["2026-07-21", "c2", [["ss3", 3, 18500]], "Approved", 1],
-    ["2026-07-29", "c5", [["ss4", 12500, 6.5]], "Approved", 1],
-    ["2026-08-05", "c3", [["ss1", 2600, 40], ["ss3", 2, 16000]], "Approved", 1],
+    ["2026-07-29", "c5", [["ss4", 12500, 22]], "Approved", 1],
+    ["2026-08-05", "c3", [["ss1", 2600, 150], ["ss3", 2, 16000]], "Approved", 1],
     ["2026-08-17", "c4", [["ss5", 4, 22000]], "Approved", 1],
     ["2026-08-26", "c6", [["ss6", 1, 145000]], "Approved", 0.5],
     ["2026-09-02", "c1", [["ss2", 8, 41500]], "Approved", 0],
-    ["2026-09-09", "c7", [["ss4", 8200, 6.5], ["ss1", 1500, 39]], "Cancelled", 0],
-    ["2026-09-15", "c2", [["ss1", 3800, 38.5], ["ss5", 2, 22000]], "Approved", 0],
+    ["2026-09-09", "c7", [["ss4", 8200, 22], ["ss1", 1500, 148]], "Cancelled", 0],
+    ["2026-09-15", "c2", [["ss1", 3800, 146], ["ss5", 2, 22000]], "Approved", 0],
     ["2026-09-22", "c3", [["ss3", 1, 17500]], "Created", 0],
     ["2026-09-24", "c1", [["ss6", 1, 145000], ["ss2", 4, 42000]], "Created", 0],
   ]
@@ -107,8 +107,8 @@ export function seedR3Sales(startId: number, sales: Sale[], customers: Party[], 
   // Deemed exports (local supply to the EPZ garment factory against back-to-back LCs — zero-rated)
   const epz = customers.find((c) => c.id === "c10")!
   const deemed: [date: string, itemId: string, qty: number, price: number, process: "Created" | "Approved", lc: string][] = [
-    ["2026-09-10", "i21", 50000, 4.5, "Approved", "BB-LC-0934-26-0117"],
-    ["2026-09-22", "i20", 200, 830, "Created", "BB-LC-0934-26-0142"],
+    ["2026-09-10", "i21", 5000, 520, "Approved", "BB-LC-0934-26-0117"],
+    ["2026-09-22", "i20", 200, 610, "Created", "BB-LC-0934-26-0142"],
   ]
   deemed.forEach(([date, itemId, qty, price, process0, lc], i) => {
     const it = items.find((x) => x.id === itemId)!
@@ -143,10 +143,10 @@ export function seedCreditNotes(sales: Sale[], items: Item[], bal: Bal): CreditN
   const pool = sales.filter((s) => s.process === "Approved" && s.mode === "Local" && s.category !== "service" && !s.export && s.issueDate >= "2026-07-15" && s.issueDate <= "2026-09-20" && !s.lines.some((l) => l.itemId === "i19"))
   const picks = [0, 3, 7, 11, 15].map((i) => pool[Math.min(i, pool.length - 1)]).filter((s, i, a) => s && a.indexOf(s) === i)
   const plan: [CreditReason, "Created" | "Approved" | "Cancelled", string][] = [
-    ["damaged", "Approved", "Cartons crushed in transit; customer returned the affected rolls."],
-    ["quality", "Approved", "Print registration out of tolerance on part of the lot (QC report attached)."],
+    ["damaged", "Approved", "Cartons crushed in transit; customer returned the affected pieces."],
+    ["quality", "Approved", "Shade variation between panels on part of the lot (QC report attached)."],
     ["excess", "Approved", "Delivered above the PO quantity; excess taken back."],
-    ["wrongItem", "Created", "Wrong laminate specification delivered — awaiting return confirmation."],
+    ["wrongItem", "Created", "Wrong size ratio delivered — awaiting return confirmation."],
     ["priceAdjustment", "Cancelled", ""],
   ]
   const out: CreditNote[] = []
@@ -154,7 +154,7 @@ export function seedCreditNotes(sales: Sale[], items: Item[], bal: Bal): CreditN
   picks.forEach((s, i) => {
     const [reason, process, note] = plan[i]
     const src = s.lines[0]
-    const unit = src.uom === "Pcs" ? 1000 : 1
+    const unit = src.uom === "Pcs" ? 10 : 1
     const qty = Math.max(unit, Math.round((src.qty * (0.05 + (i % 3) * 0.02)) / unit) * unit)
     const c = calcCreditLine(src, qty)
     const line: CreditLine = { itemId: src.itemId, name: src.name, hsCode: src.hsCode, uom: src.uom, soldQty: src.qty, qty, price: src.price, sdRate: src.sdRate, vatRate: src.vatRate, ...c }
@@ -176,14 +176,17 @@ export function seedCreditNotes(sales: Sale[], items: Item[], bal: Bal): CreditN
 
 /* ── Production ──────────────────────────────────────────────────────── */
 
-/** Input coefficients per unit of each finished good: [input item, qty, wastage %]. */
+/**
+ * Input coefficients per unit of each finished good: [input item, qty, wastage %]. Garments are declared per piece
+ * from yarn (the composite knits and dyes its own fabric), knit fabric per kg, jeans per piece from denim.
+ */
 const RECIPES: Record<string, [string, number, number][]> = {
-  i17: [["i6", 1.0, 2], ["i10", 0.04, 5], ["i11", 0.012, 5], ["i12", 0.05, 10], ["i16", 0.02, 0]],
-  i18: [["i5", 0.2, 3], ["i9", 0.55, 2], ["i4", 0.3, 3], ["i3", 0.03, 5], ["i12", 0.05, 10]],
-  i19: [["i4", 0.95, 3], ["i2", 0.06, 4], ["i12", 0.04, 10]],
-  i20: [["i8", 0.4, 2], ["i1", 0.45, 3], ["i3", 0.03, 5], ["i11", 0.01, 5]],
-  i21: [["i5", 0.004, 4], ["i1", 0.006, 4], ["i11", 0.0002, 5], ["i3", 0.0002, 5]],
-  i22: [["i7", 0.35, 2], ["i1", 0.5, 3], ["i5", 0.15, 3], ["i3", 0.03, 5], ["i16", 0.01, 0]],
+  i17: [["i6", 0.2, 2], ["i10", 0.006, 5], ["i11", 0.004, 5], ["i12", 0.003, 10], ["i16", 1, 0]],
+  i18: [["i9", 0.28, 2], ["i3", 0.004, 5], ["i10", 0.009, 5], ["i12", 0.004, 10], ["i14", 0.042, 0]],
+  i19: [["i1", 0.42, 2], ["i2", 0.16, 3], ["i12", 0.006, 10]],
+  i20: [["i7", 1.0, 3], ["i3", 0.05, 5], ["i10", 0.025, 5]],
+  i21: [["i8", 1.04, 3], ["i10", 0.02, 5], ["i3", 0.002, 5], ["i12", 0.0005, 5]],
+  i22: [["i5", 1.3, 3], ["i4", 0.25, 3], ["i12", 0.012, 10], ["i14", 0.05, 0], ["i16", 1, 0]],
 }
 const SPLIT: [CostHead, number][] = [["labour", 0.28], ["power", 0.14], ["overhead", 0.18], ["packing", 0.05], ["admin", 0.08], ["finance", 0.04], ["profit", 0.23]]
 
@@ -203,7 +206,7 @@ export function makeBom(fg: Item, items: Item[], recipe: [string, number, number
   }
 }
 
-/** One approved 4.3 declaration per finished good; Blister Foil has an amended v2, Strip Laminate a pending v2 draft. */
+/** One approved 4.3 declaration per finished good; the T-shirt has an amended v2, the rib fabric a pending v2 draft. */
 export function seedBoms(items: Item[]): Bom[] {
   const out: Bom[] = []
   const push = (b: Bom) => { b.id = `bom${out.length + 1}`; out.push(b) }
@@ -216,7 +219,7 @@ export function seedBoms(items: Item[]): Bom[] {
       push(std(v1))
       const v2Created = at("2026-01-14", "11:20")
       push({
-        ...makeBom(fg, items, recipe, fg.salePrice, 2, { effectiveDate: "2026-02-01", licenseDate: "2026-01-20", createdAt: v2Created, amendmentReason: "New slitter reduced foil wastage from 3.5 % to 2 %; declared price revised to the current market rate." }),
+        ...makeBom(fg, items, recipe, fg.salePrice, 2, { effectiveDate: "2026-02-01", licenseDate: "2026-01-20", createdAt: v2Created, amendmentReason: "New open-width compactor cut yarn (knitting + dyeing) wastage from 3.5 % to 2 %; declared price revised to the current market rate." }),
         history: [{ at: v2Created, by: "Farzana Akter", action: "created" }, { at: at("2026-01-20", "16:00"), by: "Arif Hossain", action: "approved" }],
       })
       continue
@@ -225,9 +228,9 @@ export function seedBoms(items: Item[]): Bom[] {
     if (fg.id === "i20") {
       const created = at("2026-09-23", "14:05")
       push({
-        ...makeBom(fg, items, recipe.map(([id, q, w]) => [id, id === "i1" ? 0.47 : q, w]), round2(fg.salePrice * 1.04), 2, {
+        ...makeBom(fg, items, recipe.map(([id, q, w]) => [id, id === "i3" ? 0.07 : q, w]), round2(fg.salePrice * 1.04), 2, {
           effectiveDate: "2026-10-01", licenseDate: "", createdAt: created, process: "Created",
-          amendmentReason: "Thicker LLDPE sealant layer requested by customers (0.45 → 0.47 kg); LLDPE price increase.",
+          amendmentReason: "Buyer asked for more stretch recovery: elastane share 5 % → 7 % (0.05 → 0.07 kg per kg); elastane price increase.",
         }),
         history: [{ at: created, by: "Farzana Akter", action: "created" }],
       })
@@ -262,10 +265,10 @@ export function seedProduction(items: Item[], boms: Bom[], vendors: Party[], mai
   const item = (id: string) => items.find((i) => i.id === id)!
   const activeBom = (id: string, date: string) => boms.filter((b) => b.itemId === id && b.process === "Approved" && b.effectiveDate <= date).sort((a, b) => b.version - a.version)[0]
   const woPlan: [no: string, date: string, req: string, due: string, lines: [string, number][], process: "Created" | "Approved", remark: string][] = [
-    ["PW-08260001", "2026-08-03", "REQ-26-114", "2026-08-20", [["i18", 1200], ["i21", 200000]], "Approved", "Monthly plan — August (pharma blister customers)."],
-    ["PW-08260002", "2026-08-20", "REQ-26-121", "2026-08-31", [["i20", 1500]], "Approved", "Strip laminate for NATIONAL MEDICARE LIMITED order."],
-    ["PW-09260001", "2026-09-08", "REQ-26-133", "2026-09-30", [["i22", 2000], ["i18", 800]], "Approved", "September plan — sachet roll stock and alu-alu."],
-    ["PW-09260002", "2026-09-18", "REQ-26-139", "2026-10-05", [["i21", 300000]], "Approved", "Pouch order from BAYSIDE FOODS & BEVERAGE LTD."],
+    ["PW-08260001", "2026-08-03", "REQ-26-114", "2026-08-20", [["i18", 12000], ["i21", 10000]], "Approved", "Monthly plan — August (polo export order; single jersey for AURORA's back-to-back LC)."],
+    ["PW-08260002", "2026-08-20", "REQ-26-121", "2026-08-31", [["i20", 1500]], "Approved", "Rib 1x1 collar & cuff fabric for AURORA KNIT COMPOSITE LTD (UD BKMEA/UD/2026/08812)."],
+    ["PW-09260001", "2026-09-08", "REQ-26-133", "2026-09-30", [["i22", 2000], ["i18", 8000]], "Approved", "September plan — denim jeans (woven unit) and polo shirts."],
+    ["PW-09260002", "2026-09-18", "REQ-26-139", "2026-10-05", [["i21", 30000]], "Approved", "Single jersey for AURORA KNIT COMPOSITE LTD — UD BKMEA/UD/2026/09120."],
     ["PW-09260003", "2026-09-24", "", "2026-10-10", [["i20", 600]], "Created", "Draft — waiting for the October sales forecast."],
   ]
   const workOrders: WorkOrder[] = woPlan.map(([no, date, req, due, ls, process, remark], i) => {
@@ -280,14 +283,14 @@ export function seedProduction(items: Item[], boms: Bom[], vendors: Party[], mai
 
   type Plan = { no: string; mode: Batch["mode"]; date: string; receive?: string; vendor?: string; lines: [itemId: string, wo: string, issue: number, receive: number, damage: number][]; process: "Created" | "Approved" | "Cancelled"; remark: string; received?: string }
   const plan: Plan[] = [
-    { no: "PB-07250001", mode: "opening", date: "2025-07-01", lines: [["i18", "", 120, 118, 2], ["i22", "", 260, 255, 5]], process: "Approved", remark: "Work in progress at go-live, finished and brought forward." },
-    { no: "PB-08260001", mode: "inHouse", date: "2026-08-06", receive: "2026-08-12", lines: [["i18", "PW-08260001", 1200, 1180, 20], ["i21", "PW-08260001", 100000, 99000, 1000]], process: "Approved", remark: "Line 2 — alu-alu cold form; pouch line 1." },
-    { no: "PB-08260002", mode: "inHouse", date: "2026-08-18", receive: "2026-08-21", lines: [["i21", "PW-08260001", 100000, 98500, 1500]], process: "Approved", remark: "" },
-    { no: "PB-08260003", mode: "inHouse", date: "2026-08-24", receive: "2026-08-30", lines: [["i20", "PW-08260002", 1500, 1450, 50]], process: "Approved", remark: "Customer spec SL-27; 50 kg rejected at QC (lamination bond)." },
-    { no: "PB-09260001", mode: "contractual", date: "2026-09-02", receive: "2026-09-12", vendor: "v7", lines: [["i22", "PW-09260001", 900, 880, 20]], process: "Approved", received: "2026-09-12", remark: "Extrusion lamination by contract manufacturer (Mushak 6.4)." },
-    { no: "PB-09260002", mode: "inHouse", date: "2026-09-10", lines: [["i17", "", 500, 0, 0]], process: "Cancelled", remark: "Planned on the superseded 4.3 version — re-planned." },
-    { no: "PB-09260003", mode: "contractual", date: "2026-09-21", vendor: "v7", lines: [["i18", "PW-09260001", 400, 0, 0]], process: "Approved", remark: "Inputs sent to the contractor; finished goods expected in October." },
-    { no: "PB-09260004", mode: "inHouse", date: "2026-09-23", receive: "2026-09-25", lines: [["i20", "", 300, 290, 10]], process: "Created", remark: "Trial run for the thicker sealant (draft)." },
+    { no: "PB-07250001", mode: "opening", date: "2025-07-01", lines: [["i18", "", 1200, 1180, 20], ["i22", "", 260, 255, 5]], process: "Approved", remark: "Work in progress at go-live, finished and brought forward." },
+    { no: "PB-08260001", mode: "inHouse", date: "2026-08-06", receive: "2026-08-12", lines: [["i18", "PW-08260001", 12000, 11800, 200], ["i21", "PW-08260001", 5000, 4950, 50]], process: "Approved", remark: "Knit unit — polo line 2; single jersey on circular machines 4–9." },
+    { no: "PB-08260002", mode: "inHouse", date: "2026-08-18", receive: "2026-08-21", lines: [["i21", "PW-08260001", 5000, 4925, 75]], process: "Approved", remark: "" },
+    { no: "PB-08260003", mode: "inHouse", date: "2026-08-24", receive: "2026-08-30", lines: [["i20", "PW-08260002", 1500, 1450, 50]], process: "Approved", remark: "Buyer spec RB-27; 50 kg rejected at QC (shade variation after dyeing)." },
+    { no: "PB-09260001", mode: "contractual", date: "2026-09-02", receive: "2026-09-12", vendor: "v7", lines: [["i22", "PW-09260001", 900, 880, 20]], process: "Approved", received: "2026-09-12", remark: "Enzyme + stone wash of jeans by the washing subcontractor (Mushak 6.4)." },
+    { no: "PB-09260002", mode: "inHouse", date: "2026-09-10", lines: [["i17", "", 5000, 0, 0]], process: "Cancelled", remark: "Planned on the superseded 4.3 version — re-planned." },
+    { no: "PB-09260003", mode: "contractual", date: "2026-09-21", vendor: "v7", lines: [["i18", "PW-09260001", 4000, 0, 0]], process: "Approved", remark: "Inputs sent to the embroidery subcontractor; finished goods expected in October." },
+    { no: "PB-09260004", mode: "inHouse", date: "2026-09-23", receive: "2026-09-25", lines: [["i20", "", 300, 290, 10]], process: "Created", remark: "Trial run for the 7 % elastane rib (draft)." },
   ]
   const batches: Batch[] = []
   plan.forEach((p, i) => {
@@ -306,7 +309,7 @@ export function seedProduction(items: Item[], boms: Bom[], vendors: Party[], mai
     const batch: Batch = {
       id: `pb${i + 1}`, no: p.no, mode: p.mode, issueDate: p.date, receiveDate: p.receive ?? (p.mode === "opening" ? p.date : undefined),
       vendorId: vendor?.id, vendorName: vendor?.name, vendorBin: vendor?.bin, vendorAddress: vendor?.address, address: vendor ? `${vendor.name}, ${vendor.address}` : undefined,
-      remark: p.remark || undefined, jobProcess: p.mode === "contractual" ? (p.no === "PB-09260001" ? "lamination" : "printing") : undefined, issuedBy: "Arif Hossain", designation: "Shift-In-Charge", issueTime: "09:00", lines, consumption,
+      remark: p.remark || undefined, jobProcess: p.mode === "contractual" ? (p.no === "PB-09260001" ? "washing" : "embroidery") : undefined, issuedBy: "Arif Hossain", designation: "Shift-In-Charge", issueTime: "09:00", lines, consumption,
       totalIssue: round2(lines.reduce((a, l) => a + l.issueQty, 0)), totalReceive: round2(lines.reduce((a, l) => a + l.receiveQty, 0)), totalDamage: round2(lines.reduce((a, l) => a + l.damageQty, 0)),
       materialValue: round2(consumption.reduce((a, c) => a + c.value, 0)), value: round2(lines.reduce((a, l) => a + l.value, 0)),
       process, receivedAt: p.received && process === "Approved" ? at(p.received, "16:00") : undefined, branchId: main.id, branchName: main.name, createdAt: created,

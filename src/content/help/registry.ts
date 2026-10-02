@@ -2,7 +2,7 @@
  * Language-neutral article registry: order, category, the app screens each article documents and related reading.
  * Small on purpose — the shell imports it for "Help for this page"; article text lives in ./en and ./bn.
  */
-export const HELP_UPDATED = "2026-10-01"
+export const HELP_UPDATED = "2026-10-02"
 
 export const CATEGORIES = ["gettingStarted", "sales", "purchase", "inventory", "production", "accounting", "nbrVat", "masterData", "reference"] as const
 export type Category = (typeof CATEGORIES)[number]
@@ -44,6 +44,9 @@ export const REGISTRY = {
   "vat-adjustments": { category: "nbrVat", routes: ["/vat/adjustments"], related: ["vat-return-9-1", "credit-notes"] },
   "purchase-sales-books": { category: "nbrVat", routes: ["/vat/mushak-6-1", "/vat/mushak-6-2", "/vat/mushak-6-2-1", "/vat/mushak-6-10"], related: ["compliance-centre", "local-purchases", "sales-invoices"] },
   "rmg-exports-and-uds": { category: "nbrVat", routes: ["/vat/export-compliance", "/vat/ud-register"], related: ["exports", "sales-invoices"] },
+  "sd-on-exported-inputs": { category: "nbrVat", routes: ["/vat/adjustments"], related: ["vat-adjustments", "vat-return-9-1"] },
+  "ud-amendments-and-bblc": { category: "nbrVat", routes: ["/vat/ud-register"], related: ["rmg-exports-and-uds", "exports"] },
+  "interest-and-penalties": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "treasury-tr6"] },
   "vat-settings-and-tariff": { category: "nbrVat", routes: ["/vat/settings", "/vat/tariff"], related: ["items-and-hs-codes", "vat-return-9-1"] },
 
   "customers-and-vendors": { category: "masterData", routes: ["/master/customers", "/master/vendors"], related: ["sales-invoices", "local-purchases"] },
@@ -51,6 +54,7 @@ export const REGISTRY = {
   "company-and-branches": { category: "masterData", routes: ["/master/company"], related: ["transfers", "vat-settings-and-tariff"] },
   "audit-log": { category: "masterData", routes: ["/master/audit"], related: ["users-and-roles", "document-lifecycle"] },
   "backups-and-data-import": { category: "masterData", routes: ["/master/backups", "/master/import"], related: ["items-and-hs-codes", "customers-and-vendors"] },
+  "backup-restore": { category: "masterData", routes: ["/master/backups"], related: ["backups-and-data-import", "audit-log"] },
   "vat-officer-access": { category: "masterData", related: ["users-and-roles", "audit-log"] },
 
   "document-lifecycle": { category: "reference", related: ["sales-invoices", "vat-return-9-1"] },

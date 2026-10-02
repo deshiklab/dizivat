@@ -57,15 +57,15 @@ async def main():
             c11 = await jget(admin, "/vat/periods")
             assert any(x["period"] == "2026-09" for x in c11); ok("Aug 2026 return due 15 Sep; periods list intact")
             p0 = settings0.get("profile") or {}
-            assert p0.get("segment") == "rmgDeemed" and p0.get("importerType") == "manufacturer" and p0.get("bondLicenseNo"), p0
-            ok("seeded business profile: RMG deemed exporter, manufacturer, bond licence on file")
+            assert p0.get("segment") == "rmgComposite" and p0.get("importerType") == "manufacturer" and p0.get("bondLicenseNo") == "CUS-BOND/DHK/G-1186/2021", p0
+            ok("seeded business profile: RMG knit + woven composite, manufacturer, own bond licence on file")
         except Exception as e: fail(1, e)
 
         # ── 2. Business profile card ──────────────────────────────────
         try:
             await pg.goto(BASE + "/en/vat/settings", wait_until="networkidle")
             card = pg.locator("form", has=pg.get_by_text("Business profile", exact=True))
-            await expect(card.get_by_text("RMG — deemed exporter (accessories / packaging)")).to_be_visible()
+            await expect(card.get_by_text("RMG — composite (direct and deemed)")).to_be_visible()
             await expect(card.get_by_text(re.compile(r"advance tax 2%"))).to_be_visible()
             await expect(card.get_by_text("Return for 2026-09 is due on 15 Oct 2026")).to_be_visible()
             ok("profile card shows the segment, advance tax 2 % and the next return due date")

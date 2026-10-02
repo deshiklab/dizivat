@@ -5,20 +5,20 @@ import type { Company, CompanySummary } from "../types"
  * Fictitious demo company: every name, number and address here is made up.
  */
 const seed = (): Company => ({
-  name: "RUPSHA FLEXIPACK LTD",
+  name: "KANCHANJHARA APPAREL COMPOSITE LTD",
   vatSlab: "standard",
-  bin: "004817362-0105",
+  bin: "004937518-0102",
   tin: "512378904461",
   mobile: "01700-555101",
   phone: "02-27701234",
-  email: "factory@rupsha-flexipack.example",
-  address: "Plot 14, Hi-Tech Park Road, Kaliakair, Gazipur - 1750, Bangladesh",
+  email: "compliance@kanchanjhara-apparel.example",
+  address: "Plot 22-25, BSCIC Road, Konabari, Gazipur - 1346, Bangladesh",
   owner: { name: "AHSAN KABIR CHOWDHURY", nid: "1990000000001", mobile: "01700-000001", designation: "Managing Director" },
-  signatory: { name: "Md. Arif Hossain", designation: "Shift-In-Charge", mobile: "01700-555101", email: "factory@rupsha-flexipack.example", nid: "1990000000002" },
+  signatory: { name: "Md. Arif Hossain", designation: "Shift-In-Charge", mobile: "01700-555101", email: "compliance@kanchanjhara-apparel.example", nid: "1990000000002" },
   branches: [
-    { id: "b1", name: "Factory — Kaliakair", address: "Plot 14, Hi-Tech Park Road, Kaliakair, Gazipur - 1750", category: "factory", code: "0105" },
-    { id: "b2", name: "Head office — Banani", address: "House 9, Road 11, Banani, Dhaka - 1213", category: "office" },
-    { id: "b3", name: "Finished goods store — Mirpur", address: "Section 7, Mirpur, Dhaka - 1216", category: "warehouse" },
+    { id: "b1", name: "Factory — Konabari (knit + woven)", address: "Plot 22-25, BSCIC Road, Konabari, Gazipur - 1346", category: "factory", code: "0102" },
+    { id: "b2", name: "Head office — Gulshan", address: "House 31, Road 113, Gulshan-2, Dhaka - 1212", category: "office" },
+    { id: "b3", name: "Finished goods store — Ashulia", address: "Zirabo, Ashulia, Savar, Dhaka - 1341", category: "warehouse" },
   ],
   updatedAt: "2026-07-01T04:00:00.000Z",
   updatedBy: "System Administrator",

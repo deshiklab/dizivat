@@ -514,13 +514,24 @@ export const vdsInput = z.object({
 export type VdsInput = z.input<typeof vdsInput>
 
 export const adjustmentInput = z.object({
-  kind: z.enum(["otherIncrease", "otherDecrease", "sdIncrease", "sdDecrease"], { error: "required" }),
+  kind: z.enum(["otherIncrease", "otherDecrease", "sdIncrease", "sdDecrease", "sdExport"], { error: "required" }),
   issueDate: date,
   taxPeriod: period,
   amount: money(0.01),
   description: z.string().trim().min(10, "descriptionMin").max(500),
   reference: z.string().trim().max(80).optional().default(""),
+  /** R6.3, kind "sdExport": SD-paid purchase line, quantity claimed and the direct-export invoice it went into */
+  purchaseId: z.string().trim().max(40).optional().default(""),
+  itemId: z.string().trim().max(40).optional().default(""),
+  saleId: z.string().trim().max(40).optional().default(""),
+  qty: z.number().optional().catch(undefined),
   process: z.enum(["Created", "Approved"]),
+}).superRefine((v, ctx) => {
+  if (v.kind !== "sdExport") return
+  if (!v.purchaseId || !v.itemId) ctx.addIssue({ code: "custom", path: ["purchaseId"], message: "required" })
+  if (!v.saleId) ctx.addIssue({ code: "custom", path: ["saleId"], message: "required" })
+  if (v.qty == null || !Number.isFinite(v.qty)) ctx.addIssue({ code: "custom", path: ["qty"], message: "required" })
+  else if (v.qty <= 0) ctx.addIssue({ code: "custom", path: ["qty"], message: "positive" })
 })
 export type AdjustmentInput = z.input<typeof adjustmentInput>
 
@@ -573,7 +584,13 @@ export const udInput = z.object({
   expiry: isoDate,
   note: z.string().trim().max(300).optional().default(""),
   status: z.enum(["active", "closed"]).optional().default("active"),
-  lines: z.array(z.object({ itemId: z.string().min(1, "required"), qty: z.number({ error: "required" }).positive("positive") })).min(1, "atLeastOneLine"),
+  /** R6.3: export LC value and UD currency; per-line `value` = the BB-LC ceiling for that input */
+  masterLcValue: z.number().min(0, "min0").optional().catch(undefined),
+  currency: z.enum(["USD", "EUR", "GBP"]).optional().default("USD"),
+  lines: z.array(z.object({ itemId: z.string().min(1, "required"), qty: z.number({ error: "required" }).positive("positive"), value: z.number().min(0, "min0").optional().catch(undefined) })).min(1, "atLeastOneLine"),
+  /** R6.3: amendment certificate — reason (required once the UD is used on an invoice) and date */
+  amendReason: z.string().trim().max(200).optional().default(""),
+  amendDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date").optional().or(z.literal("")).default(""),
 }).superRefine((v, ctx) => {
   if (v.expiry < v.date) ctx.addIssue({ code: "custom", path: ["expiry"], message: "expiryBeforeDate" })
   const seen = new Set<string>()

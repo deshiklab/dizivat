@@ -12,7 +12,7 @@ export const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://dizivat:dizi
  * Neon hands out `…?sslmode=require&channel_binding=require`. node-postgres ignores channel_binding in the URL and
  * warns about sslmode=require; Neon certificates are publicly trusted, so verify them fully and bind the channel.
  */
-function connection(url: string) {
+export function connection(url: string) {
   try {
     const u = new URL(url)
     const binding = u.searchParams.get("channel_binding") === "require"

@@ -68,9 +68,10 @@ export const DISTRICTS = [
 /* ── VDS & adjustments ─────────────────────────────────────────────────── */
 
 export const VDS_MODES: VdsMode[] = ["purchase", "sales"]
-export const ADJUSTMENT_KINDS: AdjustmentKind[] = ["otherIncrease", "otherDecrease", "sdIncrease", "sdDecrease"]
-export const ADJUSTMENT_NOTE: Record<AdjustmentKind, 27 | 32 | 38 | 39> = { otherIncrease: 27, otherDecrease: 32, sdIncrease: 38, sdDecrease: 39 }
-export const ADJUSTMENT_TONE: Record<AdjustmentKind, Tone> = { otherIncrease: "danger", otherDecrease: "success", sdIncrease: "warning", sdDecrease: "info" }
+export const ADJUSTMENT_KINDS: AdjustmentKind[] = ["otherIncrease", "otherDecrease", "sdIncrease", "sdDecrease", "sdExport"]
+/** R6.3: "sdExport" — SD paid on inputs of goods exported within six months (note 40) */
+export const ADJUSTMENT_NOTE: Record<AdjustmentKind, 27 | 32 | 38 | 39 | 40> = { otherIncrease: 27, otherDecrease: 32, sdIncrease: 38, sdDecrease: 39, sdExport: 40 }
+export const ADJUSTMENT_TONE: Record<AdjustmentKind, Tone> = { otherIncrease: "danger", otherDecrease: "success", sdIncrease: "warning", sdDecrease: "info", sdExport: "success" }
 
 /* ── Mushak 9.1 ────────────────────────────────────────────────────────── */
 

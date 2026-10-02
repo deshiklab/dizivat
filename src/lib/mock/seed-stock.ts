@@ -39,24 +39,24 @@ function history(created: string, process: Process, i: number, cancelNote?: stri
 
 type TPlan = [date: string, from: "b1" | "b3", to: "b1" | "b3", process: Process, lines: [itemId: string, frac: number][], vehicle: string, note: string, cancel?: string]
 const TRANSFERS: TPlan[] = [
-  ["2026-07-08", "b1", "b3", "Approved", [["i17", 0.12], ["i19", 0.1]], "Dhaka Metro-Ta 11-4821", "Monthly replenishment of the Mirpur store"],
-  ["2026-07-22", "b1", "b3", "Approved", [["i21", 0.15], ["i22", 0.1]], "Dhaka Metro-Ta 11-4821", "Pouches and roll stock for city customers"],
-  ["2026-08-05", "b1", "b3", "Approved", [["i18", 0.15], ["i20", 0.1]], "Dhaka Metro-Ta 14-0937", "Pharma laminates ahead of Q2 orders"],
+  ["2026-07-08", "b1", "b3", "Approved", [["i17", 0.12], ["i19", 0.1]], "Dhaka Metro-Ta 11-4821", "Monthly replenishment of the Ashulia store"],
+  ["2026-07-22", "b1", "b3", "Approved", [["i21", 0.15], ["i22", 0.1]], "Dhaka Metro-Ta 11-4821", "Fabric and jeans for local buyers"],
+  ["2026-08-05", "b1", "b3", "Approved", [["i18", 0.15], ["i20", 0.1]], "Dhaka Metro-Ta 14-0937", "Polo shirts and rib fabric ahead of the Puja season"],
   ["2026-08-19", "b1", "b3", "Approved", [["i17", 0.08], ["i21", 0.08]], "Dhaka Metro-Ta 11-4821", "Top-up after stock count"],
-  ["2026-09-02", "b1", "b3", "Cancelled", [["i19", 0.05]], "Dhaka Metro-Ta 14-0937", "Blister film for RIVERVIEW order", "Customer moved the order to factory pickup; nothing was loaded."],
+  ["2026-09-02", "b1", "b3", "Cancelled", [["i19", 0.05]], "Dhaka Metro-Ta 14-0937", "Hoodies for RIVERVIEW order", "Customer moved the order to factory pickup; nothing was loaded."],
   ["2026-09-09", "b1", "b3", "Approved", [["i22", 0.06], ["i20", 0.06]], "Dhaka Metro-Ta 11-4821", "September replenishment"],
-  ["2026-09-16", "b3", "b1", "Approved", [["i18", 0.2]], "Dhaka Metro-Ta 14-0937", "Slow-moving Alu-Alu returned to the factory store"],
+  ["2026-09-16", "b3", "b1", "Approved", [["i18", 0.2]], "Dhaka Metro-Ta 14-0937", "Slow-moving polo sizes returned to the factory store"],
   ["2026-09-23", "b1", "b3", "Created", [["i17", 0.05], ["i19", 0.05]], "Dhaka Metro-Ta 11-4821", "Draft — awaiting vehicle confirmation"],
 ]
 
 type DPlan = [date: string, branch: "b1" | "b3", reason: DamageReason, process: Process, lines: [itemId: string, frac: number][], note: string, cancel?: string]
 const DAMAGES: DPlan[] = [
-  ["2026-07-15", "b1", "wastage", "Approved", [["i4", 0.008], ["i6", 0.005]], "Edge trim and set-up waste on laminator L2 (job cards JC-0715-02/03)"],
+  ["2026-07-15", "b1", "wastage", "Approved", [["i4", 0.008], ["i6", 0.005]], "Fabric off-cuts and knitting set-up waste on line K2 (job cards JC-0715-02/03)"],
   ["2026-08-11", "b1", "damaged", "Approved", [["i14", 0.02]], "Cartons soaked by a roof leak in store 2"],
-  ["2026-08-28", "b3", "expired", "Approved", [["i19", 0.1]], "Shelf life exceeded (24 months) — QA rejection report QA-0826-07"],
-  ["2026-09-05", "b3", "damaged", "Cancelled", [["i22", 0.05]], "Rolls crushed during unloading", "Rolls were re-inspected by QA and passed; no write-off needed."],
-  ["2026-09-12", "b1", "lost", "Approved", [["i12", 0.005]], "Drum leak during unloading; gate pass GP-0912-03, insurance claim filed"],
-  ["2026-09-20", "b1", "damaged", "Created", [["i13", 0.05]], "Cylinder surface scratched during mounting"],
+  ["2026-08-28", "b3", "expired", "Approved", [["i19", 0.1]], "Out-of-season stock past the buyer's sell-by window — QA rejection report QA-0826-07"],
+  ["2026-09-05", "b3", "damaged", "Cancelled", [["i22", 0.05]], "Bundles soaked during unloading", "Bundles were re-inspected by QA and passed; no write-off needed."],
+  ["2026-09-12", "b1", "lost", "Approved", [["i12", 0.005]], "Thread cones lost in transit; gate pass GP-0912-03, insurance claim filed"],
+  ["2026-09-20", "b1", "damaged", "Created", [["i13", 0.05]], "Knitting needles broken during cylinder set-up"],
 ]
 
 /**

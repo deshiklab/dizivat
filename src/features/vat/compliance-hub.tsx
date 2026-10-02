@@ -19,6 +19,7 @@ import { api } from "@/lib/api/client"
 import { fmtDate, fmtNum } from "@/lib/format"
 import { periodLabel } from "@/lib/r4"
 import type { TaxPeriod } from "@/lib/types"
+import { PenaltyCard } from "./penalty-card"
 
 const TONE: Record<TaxPeriod["status"], "success" | "warning" | "danger" | "info"> = { submitted: "success", draft: "warning", overdue: "danger", open: "info" }
 
@@ -114,6 +115,8 @@ export function ComplianceHub() {
                 </Card>
               </div>
             </div>
+
+            <PenaltyCard period={d.period} />
 
             <Card>
               <CardHeader><CardTitle className="flex items-center gap-2"><CalendarClock className="size-4" aria-hidden /> {t("calendar")}</CardTitle><CardDescription>{t("calendarHint")}</CardDescription></CardHeader>

@@ -113,6 +113,9 @@ jobs:
       - name: E2E — R6.2 (UD register, export proceeds, subcontracting, Mushak 6.2.1, backups, bulk import, VAT officer)
         working-directory: scripts
         run: python e2e_r62.py
+      - name: E2E — R6.3 (RMG demo company + SD on exported inputs note 40 + UD amendments and BB-LC + interest and penalty + restore drill)
+        working-directory: scripts
+        run: python e2e_r63.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

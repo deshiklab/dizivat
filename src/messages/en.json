@@ -1,7 +1,7 @@
 {
   "meta": {
     "app": "DiziVAT",
-    "description": "VAT management for RUPSHA FLEXIPACK LTD — sales, purchases, inventory and NBR Mushak compliance."
+    "description": "VAT management for KANCHANJHARA APPAREL COMPOSITE LTD — sales, purchases, production, RMG exports and NBR Mushak compliance."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -348,7 +348,15 @@
     "belowUsed": "Cannot go below the quantity already supplied.",
     "exceedsOutstanding": "More than the amount still outstanding.",
     "duplicateInFile": "Appears twice in the file.",
-    "customerMode": "Customers must be registered (Local) or foreign."
+    "customerMode": "Customers must be registered (Local) or foreign.",
+    "date": "Enter a valid date.",
+    "sdPurchaseApproved": "Pick an approved purchase.",
+    "sdNoSd": "No supplementary duty was paid on this purchase line.",
+    "sdDirectExportOnly": "Pick an approved direct-export invoice.",
+    "sdWindow": "The export must be shipped within six months of the purchase.",
+    "sdPeriodBeforeExport": "The tax period cannot be before the export.",
+    "sdExceeds": "More than the SD-paid quantity still unclaimed.",
+    "sdClaimLapsed": "The six-month window of this purchase has ended — its SD can no longer be claimed."
   },
   "form": {
     "discardTitle": "Discard unsaved changes?",
@@ -558,7 +566,7 @@
       "badge": "Service",
       "new": "New service sale",
       "newTitle": "New service sale",
-      "newSub": "Mushak 6.3 for services — job work, cylinders, design … No stock moves; VDS applies when the buyer withholds.",
+      "newSub": "Mushak 6.3 for services — dyeing, knitting or print job work, samples, testing … No stock moves; VDS applies when the buyer withholds.",
       "itemsHint": "Pick the service codes supplied. VAT is at the service rate; SD does not apply.",
       "select": "Select service…",
       "search": "Search service or code…",
@@ -1108,7 +1116,7 @@
     "hint": {
       "username": "Used to sign in; cannot be changed later.",
       "usernameFixed": "Usernames can't be changed (the audit trail refers to them).",
-      "department": "For example: Factory — Kaliakair",
+      "department": "For example: Factory — Konabari",
       "active": "Turn off to block sign-in without deleting the account.",
       "accessUntil": "Last day the officer can sign in — at most {days} days from today."
     },
@@ -2085,7 +2093,7 @@
     "hint": {
       "effectiveDate": "Batches issued on or after this date use this version.",
       "licenseDate": "Date submitted to the VAT circle (optional).",
-      "amendmentReason": "e.g. film price increase, new laminate structure…"
+      "amendmentReason": "e.g. yarn price increase, new fabric composition…"
     },
     "field": {
       "item": "Finished good",
@@ -2948,7 +2956,7 @@
   },
   "adjust": {
     "title": "VAT adjustments",
-    "subtitle": "Manual increasing and decreasing adjustments for Mushak 9.1 — notes 27, 32, 38 and 39.",
+    "subtitle": "Manual increasing and decreasing adjustments for Mushak 9.1 — notes 27, 32, 38, 39 and 40.",
     "summary": "{count} adjustments · ৳{value} · {pending} drafts",
     "new": "New adjustment",
     "newTitle": "New VAT adjustment",
@@ -2961,7 +2969,8 @@
       "otherIncrease": "VAT increase",
       "otherDecrease": "VAT decrease",
       "sdIncrease": "SD increase",
-      "sdDecrease": "SD decrease"
+      "sdDecrease": "SD decrease",
+      "sdExport": "SD on exported inputs"
     },
     "facet": {
       "process": "Status",
@@ -2998,7 +3007,52 @@
     "draftNote": "Draft — not counted in the return until approved.",
     "noteLink": "Note {n} · {period}",
     "viewDoc": "View {no}",
-    "approveDoc": "Approve {no}"
+    "approveDoc": "Approve {no}",
+    "sd": {
+      "autoDescription": "SD paid on {item} ({boe}) used in export {sale} to {customer} — claimed within six months of the purchase.",
+      "input": "SD-paid input (purchase line)",
+      "inputHint": "{remaining} {uom} still unclaimed · export by {deadline} ({days} days left)",
+      "noneOpen": "No SD-paid purchase line is inside its six-month window.",
+      "pickInput": "Pick a purchase line",
+      "left": "{qty} {uom} left",
+      "export": "Export invoice",
+      "exportHint": "Direct exports shipped between {from} and {to}.",
+      "noExport": "No direct export in the window yet",
+      "pickExport": "Pick the export",
+      "qty": "Quantity used",
+      "qtyUom": "Quantity used ({uom})",
+      "amountHint": "SD ৳{sd} on {qty} {uom}, pro rata.",
+      "amountAuto": "Calculated from the purchase line and the quantity.",
+      "linkTitle": "Input and export",
+      "purchase": "Purchase / BoE",
+      "purchaseDate": "Purchased",
+      "item": "Item — claimed / purchased",
+      "sdPaid": "SD paid on the line",
+      "customer": "Buyer",
+      "deadline": "Six-month window ends",
+      "registerTitle": "SD paid on inputs — export window",
+      "registerSub": "Supplementary duty paid on inputs can be taken back (note 40) when the goods are exported within {months} months of the purchase.",
+      "hide": "Hide lines",
+      "show": "Show lines",
+      "claimable": "Still claimable",
+      "expiringTotal": "Window ends within {days} days",
+      "lapsedTotal": "Lapsed unclaimed",
+      "claimed": "Claimed",
+      "remaining": "Remaining",
+      "status": "Status",
+      "actions": "Actions",
+      "lapsedAgo": "lapsed {days} days ago",
+      "daysLeft": "{days} days left",
+      "state": {
+        "open": "Open",
+        "expiring": "Ends soon",
+        "lapsed": "Lapsed",
+        "claimed": "Fully claimed"
+      },
+      "claim": "Claim",
+      "claimOne": "Claim SD on {item} from {no}",
+      "registerNote": "Drafts reserve their quantity. Keep the packing list and EXP with each claim — the officer checks that the input went into the export."
+    }
   },
   "ret": {
     "title": "Mushak 9.1 VAT return",
@@ -3176,7 +3230,33 @@
       "m64": "Subcontracting register",
       "m64Hint": "Inputs at contractors (Mushak 6.4) and overdue returns"
     },
-    "vdsIssueBy": "Issue Mushak 6.6 by {date} (3 working days after filing)"
+    "vdsIssueBy": "Issue Mushak 6.6 by {date} (3 working days after filing)",
+    "pen": {
+      "title": "Interest & penalty — {period}",
+      "sub": "Late payment interest (§127, 1 % a month or part of a month, at most 24 months) and the late-return penalty. Change any figure for a what-if.",
+      "vat": "Unpaid VAT (৳)",
+      "sd": "Unpaid SD (৳)",
+      "paidOn": "Paid on",
+      "filedOn": "Return filed on",
+      "filedOnHint": "Blank = filed with the payment.",
+      "latePenalty": "Late-return penalty (৳)",
+      "due": "Due {date}",
+      "late": "{days} days late · {months, plural, one {# month} other {# months}} charged",
+      "onTime": "On time",
+      "capped": "Capped at {max} months",
+      "note41": "Interest on VAT — note 41 ({rate} % × {months})",
+      "note42": "Interest on SD — note 42 ({rate} % × {months})",
+      "note43": "Late-return penalty — note 43",
+      "total": "Total",
+      "openReturn": "Open the 9.1 return (notes 41–44)",
+      "depositInterest": "Deposit the interest (TR-6)",
+      "depositPenalty": "Deposit the penalty (TR-6)",
+      "exposureTitle": "Exposure across all tax periods as of {date}",
+      "lateFiling": "Filed late",
+      "unpaid": "Tax unpaid",
+      "exposureNone": "None of the {n} tax periods owes interest or a penalty — every return was filed and paid on time.",
+      "disclaimer": "An estimate from the return figures as of {today}. The penalty amount is set by the VAT officer; enter the amount in the order once received."
+    }
   },
   "m610": {
     "title": "Mushak 6.10",
@@ -3598,11 +3678,15 @@
       "buyer": "Foreign buyer",
       "lines": "Items and quantities allowed",
       "status": "Status",
-      "note": "Note"
+      "note": "Note",
+      "masterLcValue": "Export LC value",
+      "masterLcValueUsd": "Export LC value (USD)"
     },
     "hint": {
       "no": "e.g. BKMEA/UD/2026/08812",
-      "noExporters": "Mark a customer as a direct or deemed exporter first."
+      "noExporters": "Mark a customer as a direct or deemed exporter first.",
+      "masterLcValue": "Garment order value on the master LC / contract.",
+      "lineValue": "Value per input (USD, optional) — the ceiling for back-to-back LCs opened in our favour."
     },
     "err": {
       "required": "Required.",
@@ -3610,7 +3694,33 @@
       "duplicate": "Item listed twice.",
       "unknown": "Unknown item.",
       "atLeastOneLine": "Add at least one item.",
-      "belowUsed": "Below the quantity already supplied."
+      "belowUsed": "Below the quantity already supplied.",
+      "min0": "Cannot be negative."
+    },
+    "bblc": {
+      "short": "BB-LC value",
+      "title": "Back-to-back LCs against this UD",
+      "state": {
+        "ok": "Within UD value",
+        "warn": "Near the UD value",
+        "over": "Above the UD value",
+        "none": "No values"
+      },
+      "remaining": "{value} of the UD value is left for new BB-LCs.",
+      "overBy": "BB-LCs exceed the UD value by {value} — ask the exporter to amend the UD.",
+      "invoices": "{n, plural, one {# invoice} other {# invoices}}",
+      "drafts": "{n, plural, one {# draft} other {# drafts}}",
+      "none": "No deemed-export invoice cites this UD yet."
+    },
+    "lineValue": "Line {n} value (USD)",
+    "amend": {
+      "legend": "Amendment",
+      "date": "Amendment date",
+      "reason": "Reason / amendment certificate",
+      "reasonHintUsed": "Required: the UD is already used on invoices — quantity or value changes are recorded as an amendment.",
+      "reasonHint": "Changes to quantities or values are recorded as an amendment.",
+      "title": "Amendments ({n})",
+      "no": "Amendment {n}"
     }
   },
   "proceeds": {
@@ -3781,6 +3891,29 @@
     "download": "Download",
     "verifyOne": "Verify backup of {at}",
     "downloadOne": "Download backup of {at}",
-    "note": "Each backup is a compressed JSON snapshot of every table, including the audit trail. Downloads are recorded in the audit trail. Keep an off-site copy of at least one backup a week."
+    "note": "Each backup is a compressed JSON snapshot of every table, including the audit trail. Downloads are recorded in the audit trail. Keep an off-site copy of at least one backup a week.",
+    "drill": {
+      "title": "Last restore drill",
+      "passed": "Passed",
+      "failed": "Failed",
+      "never": "Not run yet",
+      "summary": "{at}: backup {backup} (taken {backupAt}) restored into an empty database and verified in {s} s.",
+      "tables": "{n} tables · {rows} rows",
+      "documents": "{n} documents",
+      "chain": "Audit chain",
+      "chainState": {
+        "ok": "intact",
+        "broken": "broken",
+        "skipped": "not checked"
+      },
+      "boot": "App start",
+      "bootState": {
+        "ok": "signed in, documents listed",
+        "failed": "failed",
+        "skipped": "not checked"
+      },
+      "neverHint": "No restore drill is recorded for this database yet.",
+      "how": "A backup counts only once it has been restored. The drill restores the newest backup into a fresh database, compares every table and document, verifies the audit chain and starts the app on it. See Help → Restoring a backup and the restore drill."
+    }
   }
 }

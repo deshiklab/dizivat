@@ -1,6 +1,7 @@
 import type { AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
 import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
+import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
 import type { BackupRow, BackupStatus, BackupVerify, ImportEntity, ImportResult, Sale as R62Sale, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
 import type { RealisationInput, UdInput } from "../schemas"
 import type { UdFit } from "../rmg"
@@ -250,6 +251,12 @@ export const api = {
     vds: docResource<VdsEntry, VdsInput>("/vat/vds"),
     vdsEligible: (mode: "purchase" | "sales", exclude?: string) => req<VdsEligible[]>(`/vat/vds/eligible${qs({ mode, exclude })}`),
     adjustments: docResource<VatAdjustment, AdjustmentInput>("/vat/adjustments"),
+    /** R6.3: SD-paid purchase lines and their six-month export window (note 40) */
+    sdEligible: (exclude?: string) => req<SdEligible>(`/vat/sd-eligible${qs({ exclude })}`),
+    /** R6.3: §127 interest + late-return penalty — exposure (no period) or a what-if quote for one period */
+    penaltyExposure: () => req<PenaltyExposure>("/vat/penalty"),
+    penalty: (p: { period: string; vat?: number; sd?: number; paidOn?: string; filedOn?: string; latePenalty?: number }) =>
+      req<PenaltyQuote>(`/vat/penalty${qs({ period: p.period, vat: p.vat, sd: p.sd, paidOn: p.paidOn, filedOn: p.filedOn, latePenalty: p.latePenalty })}`),
     returns: {
       list: (p: ListParams) => req<ListResult<VatReturnRow> & { periods: TaxPeriod[] }>(`/vat/returns${qs(p)}`),
       get: (period: string) => req<ReturnView>(`/vat/returns/${period}`),

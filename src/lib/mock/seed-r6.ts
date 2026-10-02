@@ -13,20 +13,30 @@ const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * 864e5).to
 export function seedUds(customers: Party[], items: Item[]): UdRecord[] {
   const c = customers.find((x) => x.id === "c10")
   if (!c) return []
-  const line = (itemId: string, qty: number) => {
+  const line = (itemId: string, qty: number, value: number) => {
     const it = items.find((i) => i.id === itemId)!
-    return { itemId, name: it.name, hsCode: it.hsCode, uom: it.unit, qty }
+    return { itemId, name: it.name, hsCode: it.hsCode, uom: it.unit, qty, value }
   }
   const base = { customerId: c.id, customerName: c.name, customerBin: c.bin, createdBy: "Farzana Akter" }
-  const mk = (id: string, no: string, date: string, expiry: string, lc: string, buyer: string, lines: UdRecord["lines"], status: UdRecord["status"], note?: string): UdRecord => ({
-    id, no, kind: "UD", date, expiry, masterLcNo: lc, buyer, lines, status, note, ...base,
+  const mk = (id: string, no: string, date: string, expiry: string, lc: string, buyer: string, lines: UdRecord["lines"], status: UdRecord["status"], note?: string, masterLcValue?: number): UdRecord => ({
+    id, no, kind: "UD", date, expiry, masterLcNo: lc, buyer, lines, status, note, masterLcValue, currency: "USD", ...base,
     createdAt: at(addDays(date, 2), "11:20"), history: [{ at: at(addDays(date, 2), "11:20"), by: "Farzana Akter", action: "created" }],
   })
-  return [
-    mk("ud1", "BKMEA/UD/2025/11871", "2025-11-04", "2026-06-30", "EXP-LC-25-1187", "NORDLINE RETAIL AB", [line("i21", 80000)], "active", "Spring 2026 order — shipped; UD lapsed unused."),
-    mk("ud2", "BKMEA/UD/2026/08812", "2026-08-16", "2027-02-28", "EXP-LC-26-0881", "HARBOUR & PINE INC", [line("i21", 60000), line("i20", 250)], "active", "Autumn 2026 knitwear order — blister packs and laminate for retail packaging."),
-    mk("ud3", "BKMEA/UD/2026/09120", "2026-09-15", "2027-03-31", "EXP-LC-26-0912", "NORDLINE RETAIL AB", [line("i21", 100000), line("i20", 400)], "active"),
+  const uds = [
+    mk("ud1", "BKMEA/UD/2025/11871", "2025-11-04", "2026-06-30", "EXP-LC-25-1187", "NORDLINE RETAIL AB", [line("i21", 8000, 34_400)], "active", "Spring 2026 order — shipped; UD lapsed unused.", 412_000),
+    mk("ud2", "BKMEA/UD/2026/08812", "2026-08-16", "2027-02-28", "EXP-LC-26-0881", "HARBOUR & PINE INC", [line("i21", 6000, 25_800), line("i20", 250, 1_250)], "active", "Autumn 2026 knitwear order — single jersey body fabric and rib collars.", 268_500),
+    mk("ud3", "BKMEA/UD/2026/09120", "2026-09-15", "2027-03-31", "EXP-LC-26-0912", "NORDLINE RETAIL AB", [line("i21", 10000, 43_000), line("i20", 400, 2_000)], "active", undefined, 455_000),
   ]
+  // R6.3: amendment history (BKMEA amendment certificates)
+  const amend = (u: UdRecord, date: string, reason: string, lines: NonNullable<UdRecord["amendments"]>[number]["lines"], lc?: [number, number]) => {
+    const when = at(date, "15:30")
+    ;(u.amendments ??= []).push({ no: u.amendments.length + 1, date, reason, by: "Farzana Akter", at: when, lines, ...(lc ? { masterLcValueFrom: lc[0], masterLcValueTo: lc[1] } : {}) })
+    u.history!.push({ at: when, by: "Farzana Akter", action: "edited", note: `Amendment ${u.amendments.length} — ${reason}` })
+    u.updatedAt = when
+  }
+  amend(uds[0], "2026-01-20", "Buyer reduced the spring order from 46,000 to 37,000 pcs — fabric requirement revised.", [{ itemId: "i21", name: uds[0].lines[0].name, uom: "Kg", qtyFrom: 10_000, qtyTo: 8_000, valueFrom: 43_000, valueTo: 34_400 }], [515_000, 412_000])
+  amend(uds[1], "2026-09-05", "Buyer added 4,000 pcs to the autumn order (LC amendment no. 1) — body fabric increased.", [{ itemId: "i21", name: uds[1].lines[0].name, uom: "Kg", qtyFrom: 5_000, qtyTo: 6_000, valueFrom: 21_500, valueTo: 25_800 }], [224_000, 268_500])
+  return uds
 }
 
 /**

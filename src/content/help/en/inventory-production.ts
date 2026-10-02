@@ -19,7 +19,7 @@ export default {
       ),
       warn("Returns with unknown HS codes are rejected by NBR. If DiziVAT says a code *isn't in the NBR tariff*, check it before you use the item."),
       h("Master items"),
-      p("[Master items](/inventory/master-items) hold the HS-level tax profile that several SKUs share, for example one laminate HS code with many sizes. Creation takes three steps: **HS code** → **Identity** → **Tax profile**."),
+      p("[Master items](/inventory/master-items) hold the HS-level tax profile that several SKUs share, for example one cotton-yarn HS code shared by several counts. Creation takes three steps: **HS code** → **Identity** → **Tax profile**."),
       list(
         "Rates default to the tariff. Changed rates are highlighted as **Overridden** and need a **Reason for override**, which is kept in the audit log.",
         "**Linked SKUs** shows the items using the profile and warns if one of them uses a different VAT rate.",
@@ -105,7 +105,7 @@ export default {
       h("Amending a declaration"),
       steps(
         "Open the active declaration and click **Amend (new version)**.",
-        "Change coefficients or prices and give the **Reason for amendment**, for example a film price increase.",
+        "Change coefficients or prices and give the **Reason for amendment**, for example a yarn price increase.",
         "Approve. The new version becomes **Active** and the old one is **Superseded**, but kept for the batches produced under it.",
       ),
       p("**Compare versions** shows the changes side by side, marked *increase*, *decrease*, *added* or *removed*. **Print 4.3** prints the official form."),

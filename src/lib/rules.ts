@@ -12,7 +12,7 @@ export type RuleKey =
   | "itc.windowPeriods" | "at.adjustWindowPeriods" | "vds.supplierWindowPeriods"
   | "vds.certificateWorkingDays" | "vds.unregisteredDepositDays"
   | "at.rate.manufacturer" | "at.rate.commercial"
-  | "interest.monthlyPct" | "interest.maxMonths"
+  | "interest.monthlyPct" | "interest.maxMonths" | "penalty.lateReturn"
   | "bank.channelLimit" | "m610.limit" | "software.mandatoryTurnover" | "registration.threshold"
 
 export interface TaxRule { key: RuleKey; value: number; from: string; to?: string; ref: string }
@@ -35,6 +35,7 @@ export const TAX_RULES: TaxRule[] = [
   { key: "at.rate.commercial", value: 7.5, from: "2025-07-01", ref: "Finance Ordinance 2025" },
   { key: "interest.monthlyPct", value: 1, from: "2019-07-01", ref: "§127 — simple interest per month" },
   { key: "interest.maxMonths", value: 24, from: "2019-07-01", ref: "§127" },
+  { key: "penalty.lateReturn", value: 10_000, from: "2019-07-01", ref: "§85 — return not submitted on time: penalty up to Tk 10,000 for a VAT-registered person (set by the officer; editable)" },
   { key: "bank.channelLimit", value: 100_000, from: "2019-07-01", ref: "§46 — payments above Tk 1 lakh through bank / MFS" },
   { key: "m610.limit", value: 200_000, from: "2019-07-01", ref: "Rule 42 — Mushak 6.10" },
   { key: "software.mandatoryTurnover", value: 50_000_000, from: "2019-01-01", ref: "General Order 16/Mushak/2019 — NBR-enlisted VAT software above Tk 5 crore" },

@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { CalendarClock, CheckCircle2, CircleAlert, DatabaseBackup, Download, HardDrive, Loader2, ShieldCheck } from "lucide-react"
+import { CalendarClock, CheckCircle2, CircleAlert, DatabaseBackup, Download, HardDrive, History, Loader2, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -14,7 +14,7 @@ import { Pill } from "@/components/common/status-badge"
 import { RequirePerm } from "@/components/auth/me-provider"
 import { api } from "@/lib/api/client"
 import { fmtDateTime, fmtNum } from "@/lib/format"
-import type { BackupVerify } from "@/lib/types"
+import type { BackupVerify, RestoreDrill } from "@/lib/types"
 
 const kb = (n: number, locale: string) => (n >= 1048576 ? `${fmtNum(n / 1048576, locale, 1)} MB` : `${fmtNum(Math.max(1, Math.round(n / 1024)), locale)} KB`)
 
@@ -64,6 +64,7 @@ function Backups() {
             <Card size="sm"><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><HardDrive className="size-4" aria-hidden /> {t("retention")}</CardTitle></CardHeader>
               <CardContent className="text-sm"><span className="font-semibold tabular">{t("keep", { n: d.retention })}</span><p className="mt-1 text-xs text-muted-foreground">{t(`storage.${d.storage}`)}</p></CardContent></Card>
           </div>
+          <DrillPanel drill={d.drill} />
           <div className="overflow-x-auto rounded-lg border bg-card" tabIndex={0} role="region" aria-label={t("table")}>
             <table className="w-full min-w-[860px] text-sm">
               <caption className="sr-only">{t("table")}</caption>
@@ -100,5 +101,34 @@ function Backups() {
         </div>
       )}
     </>
+  )
+}
+
+/** R6.3: the latest restore drill — a backup restored into an empty database, verified and started (docs/BACKUP_RESTORE.md). */
+function DrillPanel({ drill }: { drill?: RestoreDrill | null }) {
+  const t = useTranslations("backup.drill")
+  const locale = useLocale()
+  return (
+    <section aria-labelledby="drill-h" className={`grid gap-2 rounded-lg border bg-card p-4 ${drill && !drill.ok ? "border-destructive/50" : ""}`} data-testid="restore-drill">
+      <h2 id="drill-h" className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+        <History className="size-4" aria-hidden /> {t("title")}
+        {drill ? <Pill tone={drill.ok ? "success" : "danger"}>{drill.ok ? t("passed") : t("failed")}</Pill> : <Pill tone="warning">{t("never")}</Pill>}
+      </h2>
+      {drill ? (
+        <>
+          <p className="text-sm">{t("summary", { at: fmtDateTime(drill.at, locale), backup: drill.backupId ?? "—", backupAt: drill.backupAt ? fmtDateTime(drill.backupAt, locale) : "—", s: fmtNum(drill.ms / 1000, locale, 1) })}</p>
+          <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <li>{t("tables", { n: fmtNum(drill.tables, locale), rows: fmtNum(drill.rows, locale) })}</li>
+            <li>{t("documents", { n: fmtNum(drill.documents, locale) })}</li>
+            <li>{t("chain")}: <span className={drill.auditChain === "broken" ? "font-medium text-destructive" : ""}>{t(`chainState.${drill.auditChain}`)}</span></li>
+            <li>{t("boot")}: <span className={drill.boot === "failed" ? "font-medium text-destructive" : ""}>{t(`bootState.${drill.boot}`)}</span></li>
+            <li className="tabular">SHA-256 {drill.sha256.slice(0, 12)}…</li>
+            <li>{drill.by}</li>
+          </ul>
+          {drill.mismatches.length > 0 && <ul className="grid gap-0.5 text-xs text-destructive">{drill.mismatches.map((m) => <li key={m}>{m}</li>)}</ul>}
+        </>
+      ) : <p className="text-sm text-muted-foreground">{t("neverHint")}</p>}
+      <p className="text-xs text-muted-foreground">{t("how")}</p>
+    </section>
   )
 }

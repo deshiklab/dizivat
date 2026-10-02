@@ -1,4 +1,4 @@
-# RMG (ready-made garments) — VAT features (R6 / R6.2)
+# RMG (ready-made garments) — VAT features (R6 / R6.2 / R6.3)
 
 DiziVAT's main customer segment is the garment industry. That covers two kinds of business:
 
@@ -71,8 +71,12 @@ API: `GET /api/v1/vat/exports?from&to&kind=direct|deemed&risk=1&format=csv`. Cus
 - Of its two deemed exports in September 2026, the approved one meets all five conditions. The draft still lacks the
   UD, so it shows *at risk*.
 - Direct exports carry EXP numbers and USD values at Tk 122. The latest shipment is still waiting for its EXP number.
-- The company profile is *RMG — deemed exporter (accessories / packaging)*: not 100 % export-oriented, manufacturer
-  (AT 2 %), with its own bond licence.
+- Since R6.3 the demo company itself is a garment maker: **KANCHANJHARA APPAREL COMPOSITE LTD** (fictional), a knit +
+  woven composite in Konabari, Gazipur (BIN `004937518-0102`, bond `CUS-BOND/DHK/G-1186/2021`, BKMEA-2864) with a
+  factory, a Gulshan head office and an Ashulia finished-goods store. The profile is *RMG — composite*, manufacturer
+  (AT 2 %). Items are yarn, knit / denim / poplin fabric, trims and packaging (inputs) and T-shirts, polo shirts,
+  hoodies, rib and single-jersey fabric and denim jeans (finished goods); BOMs, production batches, an embroidery
+  subcontractor and stock are seeded to match.
 
 ## 4. R6.2 — deeper RMG
 
@@ -101,7 +105,32 @@ Older direct exports are fully realised; two are overdue (one part-paid) and two
 API: `GET/POST /vat/uds`, `GET/PUT/DELETE /vat/uds/{id}`, `POST /vat/uds/fit`, `POST/DELETE /sales/{id}/realisations`,
 `GET /production/subcontract`, `GET /mushak/6.2.1`, `POST /import` — see `docs/API.md`.
 
-## 5. Still planned
+## 5. R6.3 — RMG demo company, SD on exported inputs, UD amendments, BB-LC values
 
-1. **SD decreasing adjustment** when inputs are exported within six months.
-2. UD amendments (quantity changes with history) and BBLC value tracking against the UD.
+- **SD paid on inputs of exported goods (Mushak 9.1 note 40):** polybags, gum tape and export cartons carry SD at
+  import. When the goods they go into are **exported within six months of the purchase**, the SD can be taken back as a
+  decreasing adjustment of SD (note 40 reduces note 36). *NBR VAT › VAT adjustments* opens with a **six-month register**
+  of every SD-paid purchase line — claimed, remaining, the last qualifying export date and the state (*open*, *ends
+  soon* < 30 days, *lapsed*, *fully claimed*). **Claim** opens an adjustment of kind *SD on exported inputs* linked to
+  the purchase line and a direct-export invoice; the amount is the line's SD pro rata to the quantity claimed. Rules
+  (422): approved purchase with SD on the line, an approved direct export shipped inside the window, the claim dated
+  before the window ends, tax period not before the export, quantity not above what is unclaimed (drafts reserve
+  theirs). Approving re-checks.
+- **UD amendments:** changing a UD's quantities, line values or export LC value records a numbered amendment (date,
+  reason, before → after); once invoices use the UD the reason is required and a line cannot go below what is
+  supplied. The UD sheet lists the amendments.
+- **Back-to-back LC values:** UD lines can carry the permitted value (USD) and the UD the export LC value. The BB-LCs
+  on the deemed-export invoices that cite the UD are summed per LC and compared with the UD value — *within* (< 80 %),
+  *near* (≥ 80 %), *above*. The register shows the used value per UD.
+
+Demo data (R6.3): three SD-paid imports — February's polybags and gum tape (window lapsed, part unclaimed),
+April's polybags and cartons (window ends 6 Oct 2026; one approved claim and one draft), August's (open, no export
+yet). UD 08812 has a $268,500 export LC, BB-LC `BB-LC-0934-26-0117` at 78.8 % of the UD value and one amendment.
+
+API: `GET /vat/sd-eligible`, `POST /vat/adjustments` with `kind: "sdExport"`, `PUT /vat/uds/{id}` with `amendReason` —
+see `docs/API.md`.
+
+## 6. Still planned
+
+1. Duty drawback / bond consumption register (inputs imported under bond vs used in exports).
+2. Export proceeds matched automatically from the bank's PRC file.

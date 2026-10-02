@@ -1,7 +1,7 @@
 import { TODAY } from "@/lib/company"
 import { db } from "@/lib/mock/db"
 import { diff, recordAudit } from "@/lib/mock/audit"
-import { udRow } from "@/lib/rmg"
+import { udAmendment, udRow } from "@/lib/rmg"
 import { udInput } from "@/lib/schemas"
 import { json, problem, withAuth, zodProblem } from "../../../_lib"
 import { udCheck, udInUse } from "../../../_r62"
@@ -35,16 +35,28 @@ export const PUT = withAuth<Ctx>("doc.edit", async (req, { params }, user) => {
     const i = d.lines.findIndex((x) => x.itemId === l.itemId)
     if (l.used > 0 && (i < 0 || d.lines[i].qty < l.used)) errors[i < 0 ? "lines" : `lines.${i}.qty`] = ["belowUsed"]
   })
+  // R6.3: a change of quantities / values is an amendment — once the UD is in use it needs the amendment reason
+  // a line (or the LC value) sent without a value keeps the one on file — clearing needs an explicit 0
+  for (const l of c.lines!) if (l.value == null) { const old = u.lines.find((x) => x.itemId === l.itemId)?.value; if (old != null) l.value = old }
+  if (d.masterLcValue == null) d.masterLcValue = u.masterLcValue
+  const amendment = udAmendment(u, c.lines!, d.masterLcValue, { reason: d.amendReason, date: d.amendDate || TODAY, by: user.name })
+  if (amendment) {
+    if (used && !amendment.reason) errors.amendReason = ["amendmentReason"]
+    if (amendment.date < u.date) errors.amendDate = ["beforeIssue"]
+    else if (amendment.date > TODAY) errors.amendDate = ["future"]
+  }
   if (Object.keys(errors).length) return problem(422, "Validation failed", errors)
-  const before = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty])) }
+  const before = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
   const at = new Date().toISOString()
   Object.assign(u, {
     no: d.no.trim().toUpperCase(), kind: d.kind, date: d.date, expiry: d.expiry, customerId: c.customer!.id, customerName: c.customer!.name, customerBin: c.customer!.bin,
     masterLcNo: d.masterLcNo, buyer: d.buyer || undefined, lines: c.lines!, status: d.status, note: d.note || undefined, updatedAt: at,
+    masterLcValue: d.masterLcValue, currency: d.currency,
   })
-  const after = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty])) }
-  const changes = diff(before, after, ["no", "kind", "date", "expiry", "masterLcNo", "buyer", "status", "lines", "note"])
-  ;(u.history ??= []).push({ at, by: user.name, action: "edited", note: changes.map((x) => x.field).join(", ") || undefined })
+  if (amendment) (u.amendments ??= []).push({ ...amendment, at })
+  const after = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
+  const changes = diff(before, after, ["no", "kind", "date", "expiry", "masterLcNo", "masterLcValue", "buyer", "status", "lines", "note"])
+  ;(u.history ??= []).push({ at, by: user.name, action: "edited", note: amendment ? `Amendment ${amendment.no}${amendment.reason ? ` — ${amendment.reason}` : ""}` : changes.map((x) => x.field).join(", ") || undefined })
   recordAudit({ actor: user, entity: "ud", entityId: u.id, ref: `${u.no} · ${u.customerName}`, action: "edited", changes })
   return json(udRow(u, db.sales, TODAY))
 })

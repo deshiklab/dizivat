@@ -224,7 +224,7 @@ async def main():
             await pg.goto(f"{BASE}/en/vat/return-9-1?period={CUR}", wait_until="networkidle")
             await expect(pg.get_by_role("heading", name="Mushak 9.1 VAT return")).to_be_visible()
             await settle(pg); await pg.screenshot(path=f"{OUT}/98_return_91.png"); ok("return builder renders parts 3–11")
-            await pg.get_by_role("button", name="Source documents for note 4").click()
+            await pg.get_by_role("button", name="Source documents for note 4", exact=True).click()
             await expect(pg.get_by_role("heading", name="Sub-form — note 4")).to_be_visible()
             await expect(pg.get_by_role("rowheader", name=re.compile(r"Total"))).to_be_visible()
             await settle(pg); await pg.screenshot(path=f"{OUT}/99_subform.png"); ok("note drill-down opens the sub-form with source documents")

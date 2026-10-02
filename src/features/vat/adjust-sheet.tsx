@@ -13,7 +13,7 @@ import { useCan } from "@/components/auth/me-provider"
 import { DocBanner, HistoryCard } from "@/features/docs/doc-parts"
 import { Link } from "@/i18n/navigation"
 import { api } from "@/lib/api/client"
-import { fmtDate } from "@/lib/format"
+import { fmtDate, fmtNum } from "@/lib/format"
 import { ADJUSTMENT_TONE, periodLabel } from "@/lib/r4"
 import { DefList, PeriodLockNote, useR4Actions } from "@/features/r4/r4-actions"
 import { usePeriodLocked } from "@/features/r4/period-lock"
@@ -50,6 +50,20 @@ export function AdjustSheet({ id, onOpenChange, onEdit }: { id: string | null; o
                 [t("field.reference"), d.reference || "—"],
                 [t("field.issuedBy"), d.issuedBy || "—"],
               ]} />
+              {d.sdExport && (
+                <section aria-labelledby="sd-link-h" className="grid gap-2 rounded-lg border p-3">
+                  <h3 id="sd-link-h" className="text-sm font-medium">{t("sd.linkTitle")}</h3>
+                  <DefList rows={[
+                    [t("sd.purchase"), <Link key="p" href={`/purchases/${d.sdExport.purchaseId}`} className="text-primary hover:underline tabular">{d.sdExport.purchaseNo}{d.sdExport.boeNo ? ` · ${d.sdExport.boeNo}` : ""}</Link>],
+                    [t("sd.purchaseDate"), `${fmtDate(d.sdExport.purchaseDate, locale)} · ${d.sdExport.vendorName}`],
+                    [t("sd.item"), `${d.sdExport.itemName} — ${fmtNum(d.sdExport.qty, locale)} / ${fmtNum(d.sdExport.purchasedQty, locale)} ${d.sdExport.uom}`],
+                    [t("sd.sdPaid"), <Money key="s" value={d.sdExport.sdPaid} />],
+                    [t("sd.export"), <Link key="e" href={`/sales/${d.sdExport.saleId}`} className="text-primary hover:underline tabular">{d.sdExport.saleNo} · {fmtDate(d.sdExport.saleDate, locale)}</Link>],
+                    [t("sd.customer"), d.sdExport.customerName],
+                    [t("sd.deadline"), fmtDate(d.sdExport.deadline, locale)],
+                  ]} />
+                </section>
+              )}
               <div className="grid gap-1 text-sm"><span className="text-xs text-muted-foreground">{t("field.description")}</span><p className="whitespace-pre-wrap">{d.description}</p></div>
               <HistoryCard history={d.history} />
             </div>

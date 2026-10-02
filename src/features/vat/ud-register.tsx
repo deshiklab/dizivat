@@ -135,6 +135,11 @@ export function UdRegisterPage() {
                             </li>
                           ))}
                         </ul>
+                        {r.bblc.state !== "none" && (
+                          <p className={cn("mt-1.5 flex justify-between gap-2 border-t pt-1.5 text-xs", r.bblc.state === "over" ? "text-destructive" : r.bblc.state === "warn" ? "text-warning" : "text-muted-foreground")} data-testid="ud-bblc">
+                            <span>{t("bblc.short")}</span><span className="tabular">{money(r.bblc.currency, r.bblc.used, locale)} / {money(r.bblc.currency, r.bblc.permitted, locale)} ({fmtNum(r.bblc.pct, locale, 1)} %)</span>
+                          </p>
+                        )}
                       </td>
                       <td className="px-3 py-2"><Pill tone={UD_TONE[r.state]}>{t(`state.${r.state}`)}</Pill><span className="mt-1 block text-xs text-muted-foreground tabular">{t("invoices", { n: r.invoices, count: r.invoices })}</span></td>
                       <td className="px-3 py-2 text-right">{can("doc.edit") && <Button variant="ghost" size="icon-sm" aria-label={t("editOne", { no: r.no })} onClick={() => setEdit(r)}><Pencil /></Button>}</td>
@@ -226,8 +231,10 @@ function UdSheet({ ud, onOpenChange, onEdit }: { ud: UdRow | null; onOpenChange:
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <div><dt className="text-xs text-muted-foreground">{t("col.exporter")}</dt><dd>{ud.customerName} <span className="text-xs text-muted-foreground tabular">· BIN {ud.customerBin}</span></dd></div>
               <div><dt className="text-xs text-muted-foreground">{t("col.lc")}</dt><dd className="tabular">{ud.masterLcNo}{ud.buyer ? ` · ${ud.buyer}` : ""}</dd></div>
+              {ud.masterLcValue != null && <div><dt className="text-xs text-muted-foreground">{t("field.masterLcValue")}</dt><dd className="tabular">{money(ud.currency ?? "USD", ud.masterLcValue, locale)}</dd></div>}
               {ud.note && <div className="sm:col-span-2"><dt className="text-xs text-muted-foreground">{t("field.note")}</dt><dd>{ud.note}</dd></div>}
             </dl>
+            <BblcSection ud={ud} />
             {ud.lines.map((l) => (
               <section key={l.itemId} className="grid gap-2 rounded-md border p-3" aria-label={l.name}>
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -250,6 +257,7 @@ function UdSheet({ ud, onOpenChange, onEdit }: { ud: UdRow | null; onOpenChange:
                 )}
               </section>
             ))}
+            <AmendmentsSection ud={ud} />
             <RecordHistory entityId={ud.id} compact />
           </div>
         )}
@@ -263,7 +271,73 @@ function UdSheet({ ud, onOpenChange, onEdit }: { ud: UdRow | null; onOpenChange:
   )
 }
 
-const blank = (): In => ({ kind: "UD", no: "", date: TODAY, customerId: "", masterLcNo: "", buyer: "", expiry: "", note: "", status: "active", lines: [{ itemId: "", qty: 0 }] })
+const blank = (): In => ({ kind: "UD", no: "", date: TODAY, customerId: "", masterLcNo: "", buyer: "", expiry: "", note: "", status: "active", masterLcValue: NaN, currency: "USD", amendReason: "", amendDate: "", lines: [{ itemId: "", qty: 0, value: NaN }] })
+
+/** Amount in the UD currency, e.g. "USD 25,800.00". */
+const money = (currency: string, n: number, locale: string) => `${currency} ${fmtNum(n, locale, 2)}`
+const BBLC_TONE: Record<UdRow["bblc"]["state"], Tone> = { ok: "success", warn: "warning", over: "danger", none: "neutral" }
+
+/** R6.3: back-to-back LCs received against the UD vs the values it permits. */
+function BblcSection({ ud }: { ud: UdRow }) {
+  const t = useTranslations("ud")
+  const locale = useLocale()
+  const b = ud.bblc
+  if (b.state === "none" && !b.lcs.length) return null
+  return (
+    <section aria-labelledby="ud-bblc-h" className="grid gap-2 rounded-md border p-3" data-testid="ud-bblc-section">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 id="ud-bblc-h" className="text-sm font-semibold">{t("bblc.title")}</h3>
+        {b.state !== "none" && <Pill tone={BBLC_TONE[b.state]}>{t(`bblc.state.${b.state}`)}</Pill>}
+      </div>
+      {b.state !== "none" && <>
+        <p className="text-sm tabular">{money(b.currency, b.used, locale)} / {money(b.currency, b.permitted, locale)} <span className="text-muted-foreground">({fmtNum(b.pct, locale, 1)} %)</span></p>
+        <UsageBar pct={b.pct} label={t("bblc.title")} />
+        <p className="text-xs text-muted-foreground">{b.remaining >= 0 ? t("bblc.remaining", { value: money(b.currency, b.remaining, locale) }) : t("bblc.overBy", { value: money(b.currency, -b.remaining, locale) })}</p>
+      </>}
+      {b.lcs.length > 0 ? (
+        <ul className="grid gap-1 text-sm">
+          {b.lcs.map((l) => (
+            <li key={l.lcNo} className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium tabular">{l.lcNo}</span>
+              <span className="text-xs text-muted-foreground">{l.lcDate ? fmtDate(l.lcDate, locale) : "—"} · {t("bblc.invoices", { n: l.invoices })}{l.drafts ? ` · ${t("bblc.drafts", { n: l.drafts })}` : ""}</span>
+              <span className="tabular">{money(b.currency, l.value, locale)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="text-xs text-muted-foreground">{t("bblc.none")}</p>}
+    </section>
+  )
+}
+
+/** R6.3: UD amendment history (newest first). */
+function AmendmentsSection({ ud }: { ud: UdRow }) {
+  const t = useTranslations("ud")
+  const locale = useLocale()
+  const list = [...(ud.amendments ?? [])].reverse()
+  if (!list.length) return null
+  return (
+    <section aria-labelledby="ud-amend-h" className="grid gap-2 rounded-md border p-3" data-testid="ud-amendments">
+      <h3 id="ud-amend-h" className="text-sm font-semibold">{t("amend.title", { n: list.length })}</h3>
+      <ol className="grid gap-3">
+        {list.map((a) => (
+          <li key={a.no} className="grid gap-1 text-sm">
+            <span className="flex flex-wrap items-baseline justify-between gap-2"><span className="font-medium">{t("amend.no", { n: a.no })} · {fmtDate(a.date, locale)}</span><span className="text-xs text-muted-foreground">{a.by}</span></span>
+            {a.reason && <span className="text-muted-foreground">{a.reason}</span>}
+            <ul className="grid gap-0.5 text-xs">
+              {a.lines.map((l) => (
+                <li key={l.itemId} className="flex flex-wrap justify-between gap-2">
+                  <span>{l.name}</span>
+                  <span className="tabular">{fmtNum(l.qtyFrom, locale)} → {fmtNum(l.qtyTo, locale)} {l.uom}{l.valueFrom != null ? ` · ${money(ud.currency ?? "USD", l.valueFrom, locale)} → ${money(ud.currency ?? "USD", l.valueTo ?? 0, locale)}` : ""}</span>
+                </li>
+              ))}
+              {a.masterLcValueFrom != null && <li className="flex flex-wrap justify-between gap-2"><span>{t("field.masterLcValue")}</span><span className="tabular">{money(ud.currency ?? "USD", a.masterLcValueFrom, locale)} → {money(ud.currency ?? "USD", a.masterLcValueTo ?? 0, locale)}</span></li>}
+            </ul>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
 
 /** Create / amend a UD or UP. */
 function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onOpenChange: (o: boolean) => void }) {
@@ -280,7 +354,7 @@ function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onO
   const lines = useFieldArray({ control, name: "lines" })
   React.useEffect(() => {
     if (!value) return
-    reset(ud ? { kind: ud.kind, no: ud.no, date: ud.date, customerId: ud.customerId, masterLcNo: ud.masterLcNo, buyer: ud.buyer ?? "", expiry: ud.expiry, note: ud.note ?? "", status: ud.status, lines: ud.lines.map((l) => ({ itemId: l.itemId, qty: l.qty })) } : blank())
+    reset(ud ? { kind: ud.kind, no: ud.no, date: ud.date, customerId: ud.customerId, masterLcNo: ud.masterLcNo, buyer: ud.buyer ?? "", expiry: ud.expiry, note: ud.note ?? "", status: ud.status, masterLcValue: ud.masterLcValue ?? NaN, currency: (ud.currency as In["currency"]) ?? "USD", amendReason: "", amendDate: TODAY, lines: ud.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, value: l.value ?? NaN })) } : blank())
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
   const save = useMutation({
     mutationFn: (v: Out) => (ud ? api.vat.uds.update(ud.id, v) : api.vat.uds.create(v)),
@@ -324,12 +398,15 @@ function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onO
             <Field id="udf-expiry" label={t("field.expiry")} required error={errors.expiry?.message}>{(a) => <Input type="date" {...a} {...register("expiry")} />}</Field>
             <Field id="udf-lc" label={t("field.masterLc")} required error={errors.masterLcNo?.message}>{(a) => <Input autoComplete="off" className="tabular" {...a} {...register("masterLcNo")} />}</Field>
             <Field id="udf-buyer" label={t("field.buyer")} error={errors.buyer?.message}>{(a) => <Input autoComplete="off" {...a} {...register("buyer")} />}</Field>
+            <Field id="udf-lcvalue" label={t("field.masterLcValueUsd")} error={errors.masterLcValue?.message} hint={t("hint.masterLcValue")}>
+              {(a) => <Input type="number" inputMode="decimal" step="0.01" min={0} className="text-right tabular" {...a} {...register("masterLcValue", { valueAsNumber: true })} />}
+            </Field>
             <fieldset className="grid gap-2 sm:col-span-2">
               <legend className="mb-1 text-sm font-medium">{t("field.lines")}<span className="text-destructive" aria-hidden> *</span></legend>
               {lines.fields.map((f, i) => {
                 const le = errors.lines?.[i]
                 return (
-                  <div key={f.id} className="grid grid-cols-[minmax(0,1fr)_8rem_auto] items-start gap-2">
+                  <div key={f.id} className="grid grid-cols-[minmax(0,1fr)_7rem_7rem_auto] items-start gap-2">
                     <Controller control={control} name={`lines.${i}.itemId`} render={({ field }) => (
                       <div className="grid gap-1">
                         <Combobox ariaLabel={t("lineItem", { n: i + 1 })} invalid={!!le?.itemId} value={field.value} onChange={field.onChange} options={itemOptions} placeholder={t("pickItem")} searchPlaceholder={t("searchItem")} empty={tc("noResults")} />
@@ -341,13 +418,27 @@ function UdFormSheet({ value, onOpenChange }: { value: UdRow | "new" | null; onO
                       {usedOf(form.getValues(`lines.${i}.itemId`)) > 0 && <p className="text-right text-xs text-muted-foreground">{t("usedHint", { qty: fmtNum(usedOf(form.getValues(`lines.${i}.itemId`)), locale) })}</p>}
                       {le?.qty?.message && <p role="alert" className="text-xs font-medium text-destructive">{t(`err.${le.qty.message}`)}</p>}
                     </div>
+                    <div className="grid gap-1">
+                      <Input type="number" inputMode="decimal" step="0.01" min={0} placeholder="USD" aria-label={t("lineValue", { n: i + 1 })} aria-invalid={!!le?.value || undefined} className="text-right tabular" {...register(`lines.${i}.value`, { valueAsNumber: true })} />
+                      {le?.value?.message && <p role="alert" className="text-xs font-medium text-destructive">{t(`err.${le.value.message}`)}</p>}
+                    </div>
                     <Button type="button" variant="ghost" size="icon" aria-label={t("removeLine", { n: i + 1 })} disabled={lines.fields.length === 1} onClick={() => lines.remove(i)}><Trash2 /></Button>
                   </div>
                 )
               })}
               {(errors.lines?.message || errors.lines?.root?.message) && <p role="alert" className="text-xs font-medium text-destructive">{t(`err.${errors.lines?.message ?? errors.lines?.root?.message}`)}</p>}
-              <Button type="button" variant="outline" size="sm" className="justify-self-start" onClick={() => lines.append({ itemId: "", qty: 0 })}><Plus /> {t("addLine")}</Button>
+              <p className="text-xs text-muted-foreground">{t("hint.lineValue")}</p>
+              <Button type="button" variant="outline" size="sm" className="justify-self-start" onClick={() => lines.append({ itemId: "", qty: 0, value: NaN })}><Plus /> {t("addLine")}</Button>
             </fieldset>
+            {ud && (
+              <fieldset className="grid gap-3 rounded-md border p-3 sm:col-span-2 sm:grid-cols-[10rem_minmax(0,1fr)]">
+                <legend className="px-1 text-sm font-medium">{t("amend.legend")}</legend>
+                <Field id="udf-amend-date" label={t("amend.date")} error={errors.amendDate?.message}>{(a) => <Input type="date" max={TODAY} {...a} {...register("amendDate")} />}</Field>
+                <Field id="udf-amend-reason" label={t("amend.reason")} required={ud.invoices > 0} error={errors.amendReason?.message} hint={ud.invoices > 0 ? t("amend.reasonHintUsed") : t("amend.reasonHint")}>
+                  {(a) => <Input autoComplete="off" {...a} {...register("amendReason")} />}
+                </Field>
+              </fieldset>
+            )}
             <Field id="udf-status" label={t("field.status")}>
               {(a) => <Controller control={control} name="status" render={({ field }) => (
                 <Select value={field.value} onValueChange={(v) => field.onChange(v as "active" | "closed")} items={[{ value: "active", label: t("statusActive") }, { value: "closed", label: t("state.closed") }]}>

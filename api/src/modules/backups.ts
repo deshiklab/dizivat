@@ -11,12 +11,12 @@ import { Controller, Get, HttpCode, Inject, Injectable, Logger, Param, Post, Req
 import { desc, eq, sql } from "drizzle-orm"
 import type { Response } from "express"
 import { BACKUP_FORMAT, BACKUP_KEEP, BACKUP_SLOTS, backupFileName, backupRef, dhakaDayOf, lastSlot, nextSlot } from "@/lib/backup-schedule"
-import type { BackupRow, BackupStatus, BackupVerify } from "@/lib/types"
+import type { BackupRow, BackupStatus, BackupVerify, RestoreDrill } from "@/lib/types"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { Problem, toIso } from "../common/http"
 import { withStateLock } from "../common/lock"
 import { db } from "../db/client"
-import { backups } from "../db/schema"
+import { backups, meta } from "../db/schema"
 import { mirror } from "../state"
 import { AuditService } from "./audit"
 
@@ -108,7 +108,15 @@ export class BackupsService implements OnModuleInit, OnApplicationShutdown {
     return {
       timezone: "Asia/Dhaka", schedule: [...BACKUP_SLOTS], retention: BACKUP_KEEP, storage: "postgres",
       today: rows.filter((r) => dhakaDayOf(r.at) === today).length, next: nextSlot(), last: rows[0], rows,
+      drill: (await this.drill()) ?? null,
     }
+  }
+
+  /** R6.3: the latest restore drill recorded by `restore.js --record` (meta.restore_drill). */
+  async drill(): Promise<RestoreDrill | undefined> {
+    const [m] = await db.select().from(meta).where(eq(meta.key, "restore_drill"))
+    if (!m) return undefined
+    try { return JSON.parse(m.value) as RestoreDrill } catch { return undefined }
   }
 
   async data(id: string) {

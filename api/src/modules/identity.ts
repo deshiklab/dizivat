@@ -41,11 +41,11 @@ const rawToUser = (r: RawUser): User => toUser({
 export const initialsOf = (name: string) =>
   name.replace(/^(md|mst|mohammad)\.?\s+/i, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?"
 
-/** Readable one-time password, e.g. "Rfx-kemo-4821" — crypto-random now. */
+/** Readable one-time password, e.g. "Kac-kemo-4821" — crypto-random now. */
 export function tempPassword() {
   const c = "bcdfghjkmnpqrstvwxz", v = "aeiou"
   const pick = (s: string) => s[randomInt(s.length)]
-  return `Rfx-${pick(c)}${pick(v)}${pick(c)}${pick(v)}-${randomInt(1000, 10000)}`
+  return `Kac-${pick(c)}${pick(v)}${pick(c)}${pick(v)}-${randomInt(1000, 10000)}`
 }
 
 @Injectable()

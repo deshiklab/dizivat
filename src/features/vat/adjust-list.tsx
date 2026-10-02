@@ -21,6 +21,8 @@ import { ADJUSTMENT_KINDS, ADJUSTMENT_TONE, periodLabel } from "@/lib/r4"
 import type { VatAdjustment } from "@/lib/types"
 import { useR4Actions } from "@/features/r4/r4-actions"
 import { useOnceOpen } from "@/hooks/use-once-open"
+import { SdWindowCard } from "./sd-window"
+import type { SdPreset } from "./adjust-form"
 
 const AdjustSheet = dynamic(() => import("./adjust-sheet").then((m) => m.AdjustSheet), { ssr: false })
 const AdjustForm = dynamic(() => import("./adjust-form").then((m) => m.AdjustForm), { ssr: false })
@@ -28,7 +30,7 @@ const AdjustForm = dynamic(() => import("./adjust-form").then((m) => m.AdjustFor
 const FACETS = ["process", "kind", "period"] as const
 type Facet = (typeof FACETS)[number]
 
-/** Manual VAT adjustments — increasing (note 27) / decreasing (note 32) and SD (38 / 39) — for the Mushak 9.1 return. */
+/** Manual VAT adjustments — increasing (note 27) / decreasing (note 32), SD (38 / 39) and SD on exported inputs (40) — for the Mushak 9.1 return. */
 export function AdjustList() {
   const t = useTranslations("adjust")
   const tp = useTranslations("process")
@@ -41,6 +43,7 @@ export function AdjustList() {
   const [isNew, setNew] = useQueryState("new", parseAsFlag)
   const [viewId, setViewId] = useQueryState("view", parseAsString)
   const [editId, setEditId] = useQueryState("edit", parseAsString)
+  const [preset, setPreset] = React.useState<SdPreset | null>(null)
   const q = useQuery({ queryKey: ["adjustments", params], queryFn: () => api.vat.adjustments.list(params), placeholderData: keepPreviousData })
   const editing = useQuery({ queryKey: ["r4doc", "adjustment", editId], queryFn: () => api.vat.adjustments.get(editId!), enabled: !!editId })
   const actions = useR4Actions("adjustment")
@@ -88,6 +91,7 @@ export function AdjustList() {
         description={q.data ? t("summary", { count: fmtNum(q.data.total, locale), value: fmtCompact(q.data.totals.amount ?? 0, locale), pending: fmtNum(q.data.facets.process?.Created ?? 0, locale) }) : t("subtitle")}
         actions={can("doc.create") ? <Button onClick={() => setNew(true)}><Plus /> {t("new")}</Button> : undefined}
       />
+      <SdWindowCard onClaim={(r) => { setPreset({ purchaseId: r.purchaseId, itemId: r.itemId }); setNew(true) }} />
       <DataTable<VatAdjustment>
         tableId="adjustments" caption={t("title")} columns={columns} data={q.data?.data} total={q.data?.total ?? 0} totals={q.data?.totals}
         loading={q.isLoading} fetching={q.isFetching} error={q.error} onRetry={() => q.refetch()}
@@ -113,7 +117,7 @@ export function AdjustList() {
       />
       {actions.dialog}
       {sheetMounted && <AdjustSheet id={viewId} onOpenChange={(o) => { if (!o) setViewId(null) }} onEdit={(id) => { setViewId(null); setEditId(id) }} />}
-      {formMounted && <AdjustForm open={formOpen} doc={editId ? editing.data : null} onOpenChange={(o) => { if (!o) { setNew(null); setEditId(null) } }} onSaved={(d) => setViewId(d.id)} />}
+      {formMounted && <AdjustForm open={formOpen} doc={editId ? editing.data : null} preset={isNew ? preset : null} onOpenChange={(o) => { if (!o) { setNew(null); setEditId(null); setPreset(null) } }} onSaved={(d) => setViewId(d.id)} />}
     </>
   )
 }

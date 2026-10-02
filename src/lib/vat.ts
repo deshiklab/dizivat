@@ -84,7 +84,7 @@ export function calcCreditLine(orig: Pick<Line, "qty" | "subtotal" | "sd" | "vat
 /**
  * Mushak 4.3 coefficients for ONE unit of output. Each input: gross = qty × (1 + wastage%), value = gross × price.
  * Price = material value + value-addition heads (profit included); unit cost (used to value production) excludes profit.
- * Quantities keep 4 dp (coefficients are small — e.g. 0.0003 kg ink per pouch), money 2 dp.
+ * Quantities keep 4 dp (coefficients are small — e.g. 0.0005 kg thread per kg of fabric), money 2 dp.
  */
 export const round4 = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000
 export function calcBom(inputs: { qty: number; wastagePct: number; price: number }[], costs: { head: string; amount: number }[]) {

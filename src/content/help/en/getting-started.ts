@@ -38,7 +38,7 @@ export default {
       ),
       p("The status bar at the bottom always shows your BIN, the open VAT period and the days left until the return is due."),
       h("About this demo"),
-      note("The public demo runs on realistic **mock data** for a fictitious company (RUPSHA FLEXIPACK LTD). Nothing you do there reaches NBR. Changes are kept only in your browser and can be reset at any time."),
+      note("The public demo runs on realistic **mock data** for a fictitious knit + woven garment exporter (KANCHANJHARA APPAREL COMPOSITE LTD). Nothing you do there reaches NBR. Changes are kept only in your browser and can be reset at any time."),
     ],
   },
 

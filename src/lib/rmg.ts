@@ -5,7 +5,7 @@
  * Bill of Export. Deemed export: a local supply to a 100 % export-oriented factory is zero-rated (note 2) only when
  * all five conditions of NBR's clarification of 9 October 2025 hold — otherwise VAT at 15 % applies.
  */
-import type { SubconProcess, BondRow, ExportInfo, Party, ProceedsState, Sale, UdRecord, UdRow, UdState } from "./types"
+import type { SubconProcess, BondRow, ExportInfo, Party, ProceedsState, Sale, UdAmendment, UdBblc, UdRecord, UdRow, UdState } from "./types"
 
 export const EXPORT_CURRENCIES = ["USD", "EUR", "GBP", "BDT"] as const
 
@@ -130,7 +130,53 @@ export function udRow(ud: UdRecord, sales: Sale[], today: string): UdRow {
   const state: UdState = ud.status === "closed" ? "closed" : lines.some((l) => l.remaining < -1e-9) ? "over" : daysLeft < 0 ? "expired"
     : lines.length && lines.every((l) => l.remaining <= 1e-9) ? "exhausted" : usedPct >= UD_WARN_PCT ? "warn" : "ok"
   const invoices = new Set(lines.flatMap((l) => l.uses.map((x) => x.saleId))).size
-  return { ...ud, lines, usedPct, state, invoices, daysLeft }
+  return { ...ud, lines, usedPct, state, invoices, daysLeft, bblc: udBblc(ud, sales) }
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100
+
+/**
+ * R6.3: back-to-back LCs opened against a UD — read from the deemed-export invoices that cite it (their LC no. is the
+ * BB-LC the exporter opened in our favour; fcValue its value) — compared with the values the UD permits. Approved
+ * invoices count; drafts are listed but not counted.
+ */
+export function udBblc(ud: UdRecord, sales: Sale[]): UdBblc {
+  const permitted = r2(ud.lines.reduce((a, l) => a + (l.value ?? 0), 0))
+  const by = new Map<string, UdBblc["lcs"][number]>()
+  for (const s of sales) {
+    if (s.process === "Cancelled" || !s.export?.deemed || s.customerId !== ud.customerId || norm(s.export.udNo) !== norm(ud.no)) continue
+    const key = s.export.lcNo || "—"
+    const r = by.get(key) ?? { lcNo: key, lcDate: s.export.lcDate || undefined, value: 0, invoices: 0, drafts: 0 }
+    if (s.process === "Approved") { r.value = r2(r.value + (s.export.fcValue ?? 0)); r.invoices++ } else r.drafts++
+    by.set(key, r)
+  }
+  const lcs = [...by.values()].sort((a, b) => (a.lcDate ?? "").localeCompare(b.lcDate ?? ""))
+  const used = r2(lcs.reduce((a, l) => a + l.value, 0))
+  const pct = permitted ? Math.round((used / permitted) * 1000) / 10 : 0
+  const state: UdBblc["state"] = !permitted ? "none" : used > permitted + 0.005 ? "over" : pct >= UD_WARN_PCT ? "warn" : "ok"
+  return { currency: ud.currency ?? "USD", permitted, used, remaining: r2(permitted - used), pct, state, lcs }
+}
+
+/**
+ * R6.3: the amendment a change of UD lines / LC value amounts to (null when quantities, values and LC value are
+ * unchanged). Lines added or removed show as from 0 / to 0.
+ */
+export function udAmendment(ud: UdRecord, next: UdRecord["lines"], masterLcValue: number | undefined, meta: { reason: string; date: string; by: string }): Omit<UdAmendment, "at"> | null {
+  const ids = [...new Set([...ud.lines.map((l) => l.itemId), ...next.map((l) => l.itemId)])]
+  const lines: UdAmendment["lines"] = []
+  for (const id of ids) {
+    const a = ud.lines.find((l) => l.itemId === id), b = next.find((l) => l.itemId === id)
+    const qtyFrom = a?.qty ?? 0, qtyTo = b?.qty ?? 0, valueFrom = a?.value, valueTo = b?.value
+    if (qtyFrom === qtyTo && (valueFrom ?? null) === (valueTo ?? null)) continue
+    const x = (b ?? a)!
+    lines.push({ itemId: id, name: x.name, uom: x.uom, qtyFrom, qtyTo, ...(valueFrom != null || valueTo != null ? { valueFrom: valueFrom ?? 0, valueTo: valueTo ?? 0 } : {}) })
+  }
+  const lcChanged = (ud.masterLcValue ?? null) !== (masterLcValue ?? null)
+  if (!lines.length && !lcChanged) return null
+  return {
+    no: (ud.amendments?.length ?? 0) + 1, date: meta.date, reason: meta.reason, by: meta.by, lines,
+    ...(lcChanged ? { masterLcValueFrom: ud.masterLcValue ?? 0, masterLcValueTo: masterLcValue ?? 0 } : {}),
+  }
 }
 
 /** Bond licence watch-list (own licence + every exporter customer), warning BOND_WARN_DAYS before expiry. */

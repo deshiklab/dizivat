@@ -9,13 +9,13 @@ export const DEMO_PASSWORD = "demo1234"
 
 const SEEDED = "2025-07-01T03:00:00.000Z"
 const seedUsers = (): User[] => [
-  { id: "u1", username: "arif", name: "Arif Hossain", designation: "Shift-In-Charge", initials: "AH", email: "arif@rupsha-flexipack.example", mobile: "01700-555101", department: "Factory — Kaliakair", role: "approver", active: true, createdAt: SEEDED },
-  { id: "u2", username: "farzana", name: "Farzana Akter", designation: "Accounts Executive", initials: "FA", email: "farzana@rupsha-flexipack.example", mobile: "01700-555102", department: "Head office — Banani", role: "approver", active: true, createdAt: SEEDED },
-  { id: "u3", username: "kamal", name: "Md. Kamal Uddin", designation: "Store Officer", initials: "KU", email: "kamal@rupsha-flexipack.example", mobile: "01700-555103", department: "Factory — Kaliakair", role: "operator", active: true, createdAt: SEEDED },
+  { id: "u1", username: "arif", name: "Arif Hossain", designation: "Shift-In-Charge", initials: "AH", email: "arif@kanchanjhara-apparel.example", mobile: "01700-555101", department: "Factory — Konabari", role: "approver", active: true, createdAt: SEEDED },
+  { id: "u2", username: "farzana", name: "Farzana Akter", designation: "Accounts Executive", initials: "FA", email: "farzana@kanchanjhara-apparel.example", mobile: "01700-555102", department: "Head office — Gulshan", role: "approver", active: true, createdAt: SEEDED },
+  { id: "u3", username: "kamal", name: "Md. Kamal Uddin", designation: "Store Officer", initials: "KU", email: "kamal@kanchanjhara-apparel.example", mobile: "01700-555103", department: "Factory — Konabari", role: "operator", active: true, createdAt: SEEDED },
   { id: "u4", username: "auditor", name: "Sabbir Rahman", designation: "VAT Consultant", initials: "SR", email: "sabbir.audit@example.com", mobile: "01700-555104", department: "External", role: "viewer", active: true, createdAt: "2026-01-12T04:00:00.000Z" },
-  { id: "u5", username: "admin", name: "System Administrator", designation: "IT", initials: "SA", email: "it@rupsha-flexipack.example", mobile: "01700-555105", department: "Head office — Banani", role: "admin", active: true, createdAt: SEEDED },
+  { id: "u5", username: "admin", name: "System Administrator", designation: "IT", initials: "SA", email: "it@kanchanjhara-apparel.example", mobile: "01700-555105", department: "Head office — Gulshan", role: "admin", active: true, createdAt: SEEDED },
   // A former employee: kept for the audit trail (account disabled)
-  { id: "u6", username: "jewel", name: "Jewel Mia", designation: "Store Assistant", initials: "JM", email: "jewel@rupsha-flexipack.example", mobile: "01700-555106", department: "Factory — Kaliakair", role: "operator", active: false, createdAt: SEEDED, lastSignInAt: "2026-03-30T09:12:00.000Z" },
+  { id: "u6", username: "jewel", name: "Jewel Mia", designation: "Store Assistant", initials: "JM", email: "jewel@kanchanjhara-apparel.example", mobile: "01700-555106", department: "Factory — Konabari", role: "operator", active: false, createdAt: SEEDED, lastSignInAt: "2026-03-30T09:12:00.000Z" },
 ]
 
 interface UserStore {
@@ -38,12 +38,12 @@ export const findUser = (id: string) => users.find((u) => u.id === id)
 export const findUserByName = (name: string) => users.find((u) => u.name === name)
 export const passwordOf = (uid: string) => userStore.passwords[uid] ?? DEMO_PASSWORD
 
-/** Readable one-time password, e.g. "Rfx-kemo-4821" (letters + digits, 13 chars). */
+/** Readable one-time password, e.g. "Kac-kemo-4821" (letters + digits, 13 chars). */
 export function tempPassword() {
   const c = "bcdfghjkmnpqrstvwxz", v = "aeiou"
   const pick = (s: string) => s[Math.floor(Math.random() * s.length)]
   const word = pick(c) + pick(v) + pick(c) + pick(v)
-  return `Rfx-${word}-${String(Math.floor(1000 + Math.random() * 9000))}`
+  return `Kac-${word}-${String(Math.floor(1000 + Math.random() * 9000))}`
 }
 
 /** "Md. Kamal Uddin" → "KU" (honorifics skipped). */

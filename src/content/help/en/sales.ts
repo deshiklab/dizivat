@@ -52,11 +52,11 @@ export default {
 
   "service-sales": {
     title: "Service sales",
-    summary: "Invoice services such as job work, cylinders or design on Mushak 6.3, with no stock movement.",
-    keywords: ["service", "job work", "cylinder", "design", "service code", "6.3", "vds", "service sale"],
+    summary: "Invoice services such as dyeing, knitting or print job work, samples or testing on Mushak 6.3, with no stock movement.",
+    keywords: ["service", "job work", "dyeing", "knitting", "sample", "service code", "6.3", "vds", "service sale"],
     body: [
       h("When to use it"),
-      p("Use [Service sales](/sales/services) for supplies that are not goods from stock, for example job work, printing cylinders or artwork. They print on the same Mushak 6.3 but move no stock and carry no SD."),
+      p("Use [Service sales](/sales/services) for supplies that are not goods from stock, for example dyeing or knitting job work, sample development or lab testing. They print on the same Mushak 6.3 but move no stock and carry no SD."),
       h("Create a service sale"),
       steps(
         "Open [Service sales](/sales/services) and click **New service sale**.",

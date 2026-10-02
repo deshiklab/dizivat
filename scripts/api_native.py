@@ -231,6 +231,36 @@ def run():
         dup = subprocess.run(["psql", DB_URL, "-At", "-c", f"insert into backups (kind, slot, by, size, sha256, tables, data) select 'scheduled', slot, 'x', 1, 'x', '{{}}', '\\x00' from backups where kind = 'scheduled' limit 1"], capture_output=True, text=True)
         check(dup.returncode != 0, "R6.2: only one scheduled backup per slot (unique index)")
 
+    # R6.3: RMG demo company, SD on exported inputs + penalty (compat), restore drill into a fresh database
+    print("R6.3: RMG company, note 40, penalty, restore drill")
+    co = arif.get(f"{BASE}/company").json()
+    check("KANCHANJHARA" in co.get("name", "").upper() and co.get("bin") == "004937518-0102", f"R6.3: demo company is {co.get('name')}")
+    sde = arif.get(f"{BASE}/vat/sd-eligible").json()
+    check(any(r["purchaseId"] == "p95" and r["state"] == "lapsed" for r in sde.get("rows", [])) and sde.get("totals", {}).get("claimable", 0) > 0, "R6.3: SD six-month register served from PostgreSQL")
+    q = arif.get(f"{BASE}/vat/penalty", params={"period": "2026-08", "vat": 100000, "sd": 0, "paidOn": "2026-11-20", "filedOn": "2026-11-20"}).json()
+    check(q.get("result", {}).get("total") == 13000, "R6.3: penalty quote (3 months × 1 % + Tk 10,000)")
+    if DB_URL:
+        restore_js = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "api", "dist", "restore.js")
+        target = DB_URL.split("?")[0].rsplit("/", 1)[0] + f"/dizivat_drill_{TAG}"
+        t0 = time.time()
+        rp = subprocess.run(["node", restore_js, "--source", DB_URL, "--id", bid, "--target", target, "--create", "--admin-password", f"Drill-{TAG}-pw", "--boot", "--drop-after", "--record", "--report", f"/tmp/drill_{TAG}.json"],
+                            capture_output=True, text=True, timeout=600, env={**os.environ, "DRILL_BY": "api_native"})
+        rep = json.load(open(f"/tmp/drill_{TAG}.json")) if os.path.exists(f"/tmp/drill_{TAG}.json") else {}
+        check(rp.returncode == 0 and rep.get("ok") is True, f"R6.3: restore drill of {bid} passed in {time.time() - t0:.1f} s ({rep.get('tables')} tables, {rep.get('rows')} rows){'' if rp.returncode == 0 else ' — ' + (rp.stderr or rp.stdout)[-300:]}")
+        check(rep.get("auditChain") == "ok" and rep.get("boot") == "ok" and not rep.get("mismatches"), "R6.3: drill verified counts, audit chain and a sign-in on the restored copy")
+        check(psql(f"select count(*) from pg_database where datname = 'dizivat_drill_{TAG}'") == "0", "R6.3: --drop-after removed the drill database")
+        dr = admin.get(f"{BASE}/backups").json().get("drill") or {}
+        check(dr.get("ok") is True and dr.get("backupId") == bid and dr.get("by") == "api_native", "R6.3: GET /backups shows the recorded drill")
+        t2 = DB_URL.split("?")[0].rsplit("/", 1)[0] + f"/dizivat_twice_{TAG}"
+        first = subprocess.run(["node", restore_js, "--source", DB_URL, "--target", t2, "--create"], capture_output=True, text=True, timeout=300)
+        again = subprocess.run(["node", restore_js, "--source", DB_URL, "--target", t2], capture_output=True, text=True, timeout=300)
+        same = subprocess.run(["node", restore_js, "--source", DB_URL, "--target", DB_URL], capture_output=True, text=True, timeout=120)
+        psql(f"drop database if exists dizivat_twice_{TAG}")
+        check(first.returncode == 0 and again.returncode == 1 and "not empty" in again.stderr + again.stdout and same.returncode == 1,
+              "R6.3: restore refuses a database that already holds data (and the source itself)")
+    else:
+        skipped("restore drill (DATABASE_URL not set)")
+
     # re-baseline: the R6.2 block above adds audit events for this run's tag (officer, access log, backups)
     before_ids = sorted(e["id"] for e in arif.get(f"{BASE}/audit", params={"q": TAG, "size": 50}).json()["data"])
     if RESTART:

@@ -728,19 +728,43 @@ export interface VdsEntry {
 export interface VdsEligible { id: string; no: string; challanNo: string; date: string; partyId: string; partyName: string; value: number; vat: number; withheld: number; remaining: number }
 
 /** Manual VAT adjustment feeding Mushak 9.1 notes 27 (increase), 32 (decrease) or the SD notes 38/39. */
-export type AdjustmentKind = "otherIncrease" | "otherDecrease" | "sdIncrease" | "sdDecrease"
+export type AdjustmentKind = "otherIncrease" | "otherDecrease" | "sdIncrease" | "sdDecrease" | "sdExport"
+/**
+ * R6.3: supplementary duty paid on an input (import or local purchase) that went into goods exported within six
+ * months of the purchase — a decreasing adjustment of SD in Mushak 9.1 note 40.
+ */
+export interface SdExportLink {
+  purchaseId: string; purchaseNo: string; purchaseDate: string; vendorName: string; boeNo?: string
+  itemId: string; itemName: string; uom: string; purchasedQty: number; qty: number
+  /** SD paid on the whole purchased quantity of the line */
+  sdPaid: number
+  saleId: string; saleNo: string; saleDate: string; customerName: string
+  /** last export date that still qualifies: purchase date + 6 months */
+  deadline: string
+}
+/** One SD-paid purchase line and how much of it has been claimed against exports (the six-month window register). */
+export interface SdEligibleRow {
+  purchaseId: string; purchaseNo: string; purchaseDate: string; vendorName: string; boeNo?: string; mode: string
+  itemId: string; name: string; uom: string; qty: number; sd: number
+  claimedQty: number; claimed: number; remainingQty: number; remaining: number
+  deadline: string; daysLeft: number; state: "open" | "expiring" | "lapsed" | "claimed"
+}
+export interface SdEligibleExport { saleId: string; invoiceNo: string; date: string; customerName: string; expNo?: string; currency?: string; fcValue?: number; subtotal: number }
+export interface SdEligible { rows: SdEligibleRow[]; exports: SdEligibleExport[]; totals: { open: number; expiring: number; lapsed: number; claimable: number; lapsedUnclaimed: number } }
 export interface VatAdjustment {
   id: string
   /** VA-MMYY#### */
   no: string
   kind: AdjustmentKind
   /** 9.1 note the amount lands in */
-  note: 27 | 32 | 38 | 39
+  note: 27 | 32 | 38 | 39 | 40
   issueDate: string
   taxPeriod: string
   amount: number
   description: string
   reference?: string
+  /** R6.3: kind "sdExport" — the SD-paid input and the export invoice it went into */
+  sdExport?: SdExportLink
   process: Process
   issuedBy: string
   createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
@@ -871,7 +895,22 @@ export interface SubForm { period: string; note: number; rows: SubFormRow[]; tot
 
 /** Utilization Declaration (BGMEA / BKMEA) or Utilization Permission (customs) of an exporter customer: the inputs
  *  it may procure duty/VAT-free for one export order. Deemed exports must fit inside an active UD's quantities. */
-export interface UdLine { itemId: string; name: string; hsCode: string; uom: string; qty: number }
+export interface UdLine {
+  itemId: string; name: string; hsCode: string; uom: string; qty: number
+  /** R6.3: value the UD permits for this input (UD currency, usually USD) — the ceiling for back-to-back LCs */
+  value?: number
+}
+/** R6.3: one UD amendment (BGMEA/BKMEA amendment certificate) — what changed, when and why. */
+export interface UdAmendment {
+  no: number; date: string; reason: string; by: string; at: string
+  lines: { itemId: string; name: string; uom: string; qtyFrom: number; qtyTo: number; valueFrom?: number; valueTo?: number }[]
+  masterLcValueFrom?: number; masterLcValueTo?: number
+}
+/** R6.3: back-to-back LCs received against a UD (from the deemed-export invoices that cite it) vs the UD values. */
+export interface UdBblc {
+  currency: string; permitted: number; used: number; remaining: number; pct: number; state: "ok" | "warn" | "over" | "none"
+  lcs: { lcNo: string; lcDate?: string; value: number; invoices: number; drafts: number }[]
+}
 export interface UdRecord {
   id: string; no: string; date: string; kind: "UD" | "UP"
   customerId: string; customerName: string; customerBin: string
@@ -880,12 +919,16 @@ export interface UdRecord {
   lines: UdLine[]
   status: "active" | "closed"
   note?: string
+  /** R6.3: export LC (garment order) value and the UD currency */
+  masterLcValue?: number; currency?: string
+  /** R6.3: amendment history, oldest first */
+  amendments?: UdAmendment[]
   createdBy: string; createdAt: string; updatedAt?: string; history?: HistoryEntry[]
 }
 export interface UdUse { saleId: string; invoiceNo: string; date: string; qty: number; process: Process }
 export type UdLineUsage = UdLine & { used: number; remaining: number; pct: number; uses: UdUse[] }
 export type UdState = "ok" | "warn" | "exhausted" | "over" | "expired" | "closed"
-export type UdRow = Omit<UdRecord, "lines"> & { lines: UdLineUsage[]; usedPct: number; state: UdState; invoices: number; daysLeft: number }
+export type UdRow = Omit<UdRecord, "lines"> & { lines: UdLineUsage[]; usedPct: number; state: UdState; invoices: number; daysLeft: number; bblc: UdBblc }
 /** Bond licence watch-list: the company's own licence and every exporter customer's. */
 export interface BondRow { kind: "own" | "customer"; partyId?: string; name: string; licenceNo: string; expiry: string; daysLeft: number | null; state: "valid" | "expiring" | "expired" | "missing" }
 export interface UdRegister { rows: UdRow[]; bonds: BondRow[]; totals: { active: number; warn: number; over: number; expired: number } }
@@ -909,7 +952,27 @@ export interface BackupRow {
 export interface BackupStatus {
   timezone: string; schedule: string[]; retention: number; storage: "postgres" | "memory"
   today: number; next: string; last?: BackupRow; rows: BackupRow[]
+  /** R6.3: the latest restore drill (backup restored into a fresh database and verified) */
+  drill?: RestoreDrill | null
 }
+/** R6.3: result of a backup-restore drill (api/dist/restore.js --record). */
+export interface RestoreDrill {
+  at: string; ok: boolean; backupId?: string; backupAt?: string; sha256: string; target: string; ms: number
+  tables: number; rows: number; documents: number; auditChain: "ok" | "broken" | "skipped"; boot: "ok" | "failed" | "skipped"
+  mismatches: string[]; by: string
+}
+
+/** R6.3: late payment interest (§127) and late-return penalty for one tax period. */
+export interface PenaltyInput { period: string; vat: number; sd: number; paidOn: string; filedOn?: string; latePenalty?: number }
+export interface PenaltyResult {
+  period: string; dueDate: string; paidOn: string; filedOn?: string
+  daysLate: number; months: number; chargedMonths: number; capped: boolean; ratePct: number; maxMonths: number
+  vat: number; sd: number; interestVat: number; interestSd: number; lateFiling: boolean; penaltyLate: number; total: number
+  refs: { interest: string; penalty: string }
+}
+export interface PenaltyExposure { asOf: string; rows: PenaltyExposureRow[]; total: number; periodsAtRisk: number }
+export interface PenaltyQuote { input: PenaltyInput; result: PenaltyResult; basis: { status: "submitted" | "draft" | "none"; payableVat: number; payableSd: number; depositedVat: number; depositedSd: number; shortVat: number; shortSd: number; submittedOn?: string } }
+export interface PenaltyExposureRow { period: string; dueDate: string; status: "submitted" | "draft" | "none"; submittedOn?: string; shortVat: number; shortSd: number; lateFiling: boolean; result: PenaltyResult }
 export interface BackupVerify { id: string; ok: boolean; sha256: string; size: number; checkedAt: string }
 
 export type ImportEntity = "items" | "customers" | "vendors"
