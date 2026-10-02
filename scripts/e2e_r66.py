@@ -370,6 +370,7 @@ async def main():
             await kp.get_by_test_id("am-desc").fill("Export-linked local sale invoice S-0826 omitted from note 4")
             await kp.get_by_test_id("am-add").click()
             await kp.get_by_test_id("am-note-0").select_option("4")
+            await expect(kp.get_by_test_id("am-from-0")).not_to_have_text("…")
             frm = float(digits(await kp.get_by_test_id("am-from-0").inner_text()))
             await kp.get_by_test_id("am-to-0").fill(f"{frm + 50000:.2f}")
             await kp.get_by_test_id("am-expl-0").fill("Invoice S-0826 VAT 50,000 omitted")

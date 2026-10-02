@@ -434,7 +434,7 @@ function AmendFormDialog({ open, onOpenChange, edit, initialPeriod, rows }: { op
             <legend className="mb-1 text-sm font-medium">{t("amend.corrections")}</legend>
             {errors.corrections && <p role="alert" className="text-xs text-destructive">{errors.corrections}</p>}
             {lines.map((c, i) => renderLine(c, i))}
-            {lines.length < AMEND_MAX_LINES && <Button type="button" size="sm" variant="outline" className="justify-self-start" onClick={addLine} disabled={!v.period} data-testid="am-add"><Plus /> {t("amend.addLine")}</Button>}
+            {lines.length < AMEND_MAX_LINES && <Button type="button" size="sm" variant="outline" className="justify-self-start" onClick={addLine} disabled={!v.period || !base} data-testid="am-add"><Plus /> {t("amend.addLine")}</Button>}
           </fieldset>
           <div className="grid gap-1">
             <label className="flex items-start gap-2 text-sm" htmlFor="am-noaudit">
@@ -470,7 +470,7 @@ function AmendFormDialog({ open, onOpenChange, edit, initialPeriod, rows }: { op
         <Field id={`am-field-${i}`} label={t("amend.column")}>
           {(a) => <select className={selectCls} value={c.field} {...a} onChange={(e) => { const field = e.target.value as AmendField; setLine(i, { field, to: base ? String(noteValue(base, c.note, field)) : c.to }) }}>{fieldsOf(c.note).map((f) => <option key={f} value={f}>{t(`field.${f}`)}</option>)}</select>}
         </Field>
-        <div className="text-xs"><span className="text-muted-foreground">{t("amend.asFiled")}</span><span className="block h-9 content-center text-right text-sm tabular" data-testid={`am-from-${i}`}>{fmtNum(from, locale, 2)}</span></div>
+        <div className="text-xs"><span className="text-muted-foreground">{t("amend.asFiled")}</span><span className="block h-9 content-center text-right text-sm tabular" data-testid={`am-from-${i}`}>{base ? fmtNum(from, locale, 2) : "…"}</span></div>
         <Field id={`am-to-${i}`} label={t("amend.corrected")}>
           {(a) => <Input type="number" inputMode="decimal" step="0.01" min={0} className="text-right tabular" value={c.to} data-testid={`am-to-${i}`} onChange={(e) => setLine(i, { to: e.target.value })} {...a} />}
         </Field>
