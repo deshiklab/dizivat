@@ -8,6 +8,7 @@ import { AlertTriangle, ClipboardCheck, Download, FileStack, Hourglass, Landmark
 import { Checkbox } from "@/components/ui/checkbox"
 import { BondUdsTab } from "@/features/vat/bond-uds"
 import { ClaimFromSelection, ClaimPill, ClaimsTab } from "@/features/vat/drawback-claims"
+import { PROCEEDS_TONE } from "@/features/vat/proceeds"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -42,6 +43,7 @@ const qty = (n: number, locale: string) => fmtNum(n, locale, 3)
  */
 export function BondRegisterPage() {
   const t = useTranslations("bond")
+  const tp = useTranslations("proceeds")
   const locale = useLocale()
   const [tab, setTab] = useQueryState("tab", parseAsString.withDefault("register"))
   const [from, setFrom] = useQueryState("from", parseAsString.withDefault(""))
@@ -223,7 +225,8 @@ export function BondRegisterPage() {
                         )}</td>
                         <td className="px-3 py-2"><Link href={`/sales/${r.saleId}`} className="font-medium text-primary tabular hover:underline">{r.invoiceNo}</Link>
                           <span className="block text-xs text-muted-foreground tabular">{fmtDate(r.exportDate, locale)}{r.billNo ? ` · ${r.billNo}` : ""}{r.deemed ? ` · ${t("db.deemed")}` : ""}</span>
-                          <span className="block text-xs text-muted-foreground">{r.customerName}</span></td>
+                          <span className="block text-xs text-muted-foreground">{r.customerName}</span>
+                          {r.proceeds && r.proceeds !== "realised" && <span className="mt-0.5 block" data-testid={`drawback-proceeds-${r.saleId}`}><Pill tone={PROCEEDS_TONE[r.proceeds]}>{tp(`state.${r.proceeds}`)}</Pill></span>}</td>
                         <td className="px-3 py-2">
                           <details>
                             <summary className="cursor-pointer text-sm">{t("db.inputsSummary", { n: r.inputs.length })}</summary>

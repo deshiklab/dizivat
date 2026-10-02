@@ -6,9 +6,10 @@
  * export: draft → filed (DEDO reference) → sanctioned (possibly less than claimed, with the reason) → paid; a filed
  * claim can also be rejected, which frees its exports to be claimed again while their window is open.
  */
+import { proceedsSummary } from "./proceeds"
 import { daysBetween } from "./sd-export"
 import { round2 } from "./vat"
-import type { ClaimStatus, DrawbackClaim, DrawbackClaimLine, DrawbackClaimList, DrawbackClaimRow, DrawbackRow } from "./types"
+import type { ClaimStatus, DrawbackClaim, DrawbackClaimLine, DrawbackClaimList, DrawbackClaimRow, DrawbackRow, Sale } from "./types"
 
 export const CLAIM_MAX_EXPORTS = 30
 
@@ -44,17 +45,19 @@ export type ClaimAction = "file" | "sanction" | "pay" | "reject"
 /** The status each action needs. */
 export const ACTION_FROM: Record<ClaimAction, ClaimStatus[]> = { file: ["draft"], sanction: ["filed"], pay: ["sanctioned"], reject: ["filed"] }
 
-export function claimRow(c: DrawbackClaim, today: string): DrawbackClaimRow {
+/** R6.6: `sales` adds the export proceeds (PRC) of each export on the claim. */
+export function claimRow(c: DrawbackClaim, today: string, sales: Sale[] = []): DrawbackClaimRow {
   const deadline = c.lines.map((l) => l.deadline).sort()[0] ?? ""
   return {
     ...c, deadline, daysLeft: deadline ? daysBetween(today, deadline) : 0,
+    proceeds: proceedsSummary(c.lines.map((l) => l.saleId), sales, today),
     disallowed: c.sanctioned != null && (c.status === "sanctioned" || c.status === "paid") ? round2(c.claimed - c.sanctioned) : 0,
   }
 }
 
 const ORDER: Record<ClaimStatus, number> = { draft: 0, filed: 1, sanctioned: 2, paid: 3, rejected: 4 }
-export function claimList(claims: DrawbackClaim[], today: string, status?: string): DrawbackClaimList {
-  const all = claims.map((c) => claimRow(c, today))
+export function claimList(claims: DrawbackClaim[], today: string, status?: string, sales: Sale[] = []): DrawbackClaimList {
+  const all = claims.map((c) => claimRow(c, today, sales))
   const rows = all.filter((r) => !status || r.status === status)
     .sort((a, b) => ORDER[a.status] - ORDER[b.status] || (a.createdAt < b.createdAt ? 1 : -1))
   const sum = (xs: DrawbackClaimRow[], f: (r: DrawbackClaimRow) => number) => round2(xs.reduce((a, r) => a + f(r), 0))

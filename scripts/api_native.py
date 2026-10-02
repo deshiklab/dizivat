@@ -291,6 +291,27 @@ def run():
     fr = arif.post(f"{BASE}/vat/drawback-claims/{claim_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"DEDO/N/{TAG}"}) if claim_id else None
     check(fr is not None and fr.status_code == 200 and fr.json().get("status") == "filed", "R6.5: a draft drawback claim is filed with DEDO")
 
+    # R6.6: bank PRC file batches + Mushak 9.3 / 9.4 applications (compat), persisted in PostgreSQL
+    print("R6.6: PRC batches, return applications")
+    pv = arif.get(f"{BASE}/vat/proceeds").json()
+    check(pv.get("outstanding", {}).get("count", 0) >= 1 and any(b.get("no") == "PB-09260004" and b.get("status") == "reversed" for b in pv.get("batches", [])), "R6.6: proceeds overview + seeded batches served from PostgreSQL")
+    target = next((o for o in pv.get("open", []) if o.get("outstandingFc", 0) >= 2), None)
+    prc_no = f"PRC/N/{TAG}".upper()
+    pb = arif.post(f"{BASE}/vat/proceeds/batches", json={"fileName": f"native-{TAG}.csv", "rows": [{"line": 2, "date": "2026-09-25", "prcNo": prc_no, "currency": target["currency"], "fcAmount": 1, "rate": target["rate"],
+                                                         "allocations": [{"saleId": target["saleId"], "fcAmount": 1, "basis": "manual"}]}]}) if target else None
+    pb_id = pb.json().get("id") if pb is not None and pb.status_code == 201 else None
+    check(pb_id is not None, f"R6.6: a bank-file batch posts (HTTP {pb.status_code if pb is not None else '-'})")
+    check(arif.post(f"{BASE}/vat/proceeds/match", json={"rows": [{"line": 2, "date": "2026-09-25", "prcNo": prc_no, "currency": "USD", "fcAmount": 1, "rate": 122}]}).json().get("rows", [{}])[0].get("state") == "duplicate", "R6.6: the posted PRC is a duplicate on re-import")
+    lfs = arif.get(f"{BASE}/vat/late-filings").json()
+    check({"lf1", "lf2"} <= {r["id"] for r in lfs.get("rows", [])}, "R6.6: seeded Mushak 9.3 applications served")
+    am_id = None
+    for per in ("2026-06", "2026-05", "2026-04", "2026-02", "2026-01"):
+        r = arif.post(f"{BASE}/vat/return-amendments", json={"period": per, "reasonKind": "clerical", "description": f"Native check {TAG} — transposed digits", "noAudit": True,
+                                                            "corrections": [{"note": 1, "field": "value", "to": 1234.56, "explanation": "Transposed digits"}]})
+        if r.status_code == 201: am_id = r.json()["id"]; break
+    fr = arif.post(f"{BASE}/vat/return-amendments/{am_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"NBR/N/{TAG}"}) if am_id else None
+    check(fr is not None and fr.status_code == 200 and fr.json().get("status") == "filed", "R6.6: a Mushak 9.4 application is created and filed")
+
     # re-baseline: the R6.2 block above adds audit events for this run's tag (officer, access log, backups)
     before_ids = sorted(e["id"] for e in arif.get(f"{BASE}/audit", params={"q": TAG, "size": 50}).json()["data"])
     if RESTART:
@@ -316,6 +337,12 @@ def run():
         c_after = arif.get(f"{BASE}/vat/drawback-claims/{claim_id}").json() if claim_id else {}
         check((u_after.get("settlement") or {}).get("bondRef") == f"CBC/N/{TAG}" and c_after.get("status") == "filed" and c_after.get("dedoRef") == f"DEDO/N/{TAG}",
               "R6.5: UD settlement and filed claim survive a restart")
+        b_after = arif.get(f"{BASE}/vat/proceeds/batches/{pb_id}").json() if pb_id else {}
+        a_after = arif.get(f"{BASE}/vat/return-amendments/{am_id}").json() if am_id else {}
+        check(b_after.get("status") == "posted" and b_after.get("lines", [{}])[0].get("prcNo") == prc_no and a_after.get("status") == "filed" and a_after.get("filedRef") == f"NBR/N/{TAG}",
+              "R6.6: PRC batch and filed 9.4 application survive a restart")
+        rv = arif.post(f"{BASE}/vat/proceeds/batches/{pb_id}/reverse", json={"date": "2026-09-25", "reason": f"Native reversal {TAG}"}) if pb_id else None
+        check(rv is not None and rv.status_code == 200 and rv.json().get("status") == "reversed", "R6.6: the batch reverses after a restart")
         bl = admin.get(f"{BASE}/backups").json()
         check(any(x["id"] == bid for x in bl.get("rows", [])), "R6.2: backups survive a restart")
         v2 = arif.get(f"{BASE}/audit/verify").json()

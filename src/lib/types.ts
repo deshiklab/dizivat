@@ -158,7 +158,9 @@ export interface ExportInfo {
 }
 
 /** R6.2: one bank realisation of export proceeds — Proceeds Realisation Certificate (PRC). */
-export interface Realisation { id: string; date: string; bank: string; prcNo: string; fcAmount: number; rate: number; bdt: number; note?: string; by: string; at: string }
+export interface Realisation { id: string; date: string; bank: string; prcNo: string; fcAmount: number; rate: number; bdt: number; note?: string; by: string; at: string
+  /** R6.6: posted from a bank PRC file (one PRC may be split over several invoices of the same buyer / LC) */
+  batchId?: string }
 
 export interface Purchase extends DocBase {
   invoiceNo: string
@@ -259,6 +261,8 @@ export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "custome
   | "ud" | "backup" | "access" | "import"
   /** R6.5 */
   | "bondUd" | "drawbackClaim"
+  /** R6.6 */
+  | "prcBatch" | "lateFiling" | "returnAmendment"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
@@ -835,12 +839,16 @@ export interface VatReturn {
   createdAt: string; updatedAt?: string; history?: HistoryEntry[]
 }
 export type VatReturnRow = VatReturn & { due: string; netPayable: number; deposited: number; closing: number; late: boolean }
-export interface ReturnView extends VatReturnRow { computation: ReturnComputation; live: boolean; notStarted?: boolean }
+export interface ReturnView extends VatReturnRow { computation: ReturnComputation; live: boolean; notStarted?: boolean
+  /** R6.6: Mushak 9.3 / 9.4 applications for the period */
+  applications?: { late?: { id: string; no: string; state: LateFilingState; effectiveDate?: string }; amendments: { id: string; no: string; state: AmendmentState; direction: AmendDirection }[] } }
 /** One line of a 9.1 sub-form (the source documents behind a note). */
 export interface SubFormRow { date: string; ref: string; refId?: string; href?: string; party?: string; bin?: string; value: number; sd?: number; vat: number; note?: string }
 
 /** Tax period status for the compliance centre and the period lock. */
-export interface TaxPeriod { period: string; due: string; status: "open" | "draft" | "submitted" | "overdue"; returnId?: string; submittedAt?: string; locked: boolean }
+export interface TaxPeriod { period: string; due: string; status: "open" | "draft" | "submitted" | "overdue"; returnId?: string; submittedAt?: string; locked: boolean
+  /** R6.6: late filing allowed to this date (approved / deemed Mushak 9.3) */
+  extendedTo?: string }
 
 export interface VatSettings { zoneCode: string; updatedAt?: string; updatedBy?: string; /** R6: business profile (segment, AT class, filing category, bond, holidays) */ profile?: VatProfile }
 
@@ -971,12 +979,16 @@ export interface RestoreDrill {
 }
 
 /** R6.3: late payment interest (§127) and late-return penalty for one tax period. */
-export interface PenaltyInput { period: string; vat: number; sd: number; paidOn: string; filedOn?: string; latePenalty?: number }
+export interface PenaltyInput { period: string; vat: number; sd: number; paidOn: string; filedOn?: string; latePenalty?: number
+  /** R6.6: filing date allowed by an approved / deemed Mushak 9.3 extension — no late-return penalty up to it (interest still runs from the due date, s.65) */
+  extendedTo?: string }
 export interface PenaltyResult {
   period: string; dueDate: string; paidOn: string; filedOn?: string
   daysLate: number; months: number; chargedMonths: number; capped: boolean; ratePct: number; maxMonths: number
   vat: number; sd: number; interestVat: number; interestSd: number; lateFiling: boolean; penaltyLate: number; total: number
   refs: { interest: string; penalty: string }
+  /** R6.6: Mushak 9.3 extension taken into account */
+  extendedTo?: string
 }
 export interface PenaltyExposure { asOf: string; rows: PenaltyExposureRow[]; total: number; periodsAtRisk: number }
 export interface PenaltyQuote { input: PenaltyInput; result: PenaltyResult; basis: { status: "submitted" | "draft" | "none"; payableVat: number; payableSd: number; depositedVat: number; depositedSd: number; shortVat: number; shortSd: number; submittedOn?: string } }
@@ -1056,6 +1068,8 @@ export interface DrawbackRow {
   state: "open" | "expiring" | "lapsed"
   /** R6.5: the drawback claim this export is on (rejected claims do not count) */
   claim?: { id: string; no: string; status: ClaimStatus }
+  /** R6.6: export proceeds (PRC) of the export */
+  proceeds?: ProceedsState
 }
 
 export interface BondRegister {
@@ -1139,7 +1153,7 @@ export interface UdGarmentProgress {
   exports: { saleId: string; invoiceNo: string; date: string; qty: number; deemed: boolean }[]
 }
 export type BondUdState = "inProgress" | "ready" | "settled"
-export type BondUdWarning = "excessImport" | "noCoefficient" | "draftExports" | "expired" | "overShipped"
+export type BondUdWarning = "excessImport" | "noCoefficient" | "draftExports" | "expired" | "overShipped" | "proceedsPending"
 export type BondUdRow = Omit<BondUd, "inputs"> & {
   inputs: BondUdInput[]
   lines: UdStatementLine[]
@@ -1154,6 +1168,8 @@ export type BondUdRow = Omit<BondUd, "inputs"> & {
   dutyOnBalance: number
   /** export lines whose garment has no approved BOM on the export date */
   noCoefficient: { saleId: string; invoiceNo: string; itemId: string; name: string }[]
+  /** R6.6: export proceeds of the UD's approved exports (PRC) */
+  proceeds: ExportProceedsSummary
 }
 export interface BondUdRegister {
   rows: BondUdRow[]
@@ -1183,8 +1199,132 @@ export type DrawbackClaimRow = DrawbackClaim & {
   deadline: string; daysLeft: number
   /** claimed − sanctioned on a sanctioned / paid claim */
   disallowed: number
+  /** R6.6: export proceeds of each export on the claim (PRC numbers to attach) */
+  proceeds: ExportProceedsSummary
 }
 export interface DrawbackClaimList {
   rows: DrawbackClaimRow[]
   totals: { draft: number; pending: number; sanctioned: number; refunded: number; disallowed: number; rejected: number }
+}
+
+/* ── R6.6 — export proceeds matching (bank PRC file) and Mushak 9.3 / 9.4 ──────────────────────────────────── */
+
+/** Proceeds of a set of exports: per invoice, its state and the PRCs realised against it. */
+export interface ExportProceedsSummary {
+  exports: number; realised: number; pending: number; overdue: number
+  lines: { saleId: string; invoiceNo: string; currency?: string; fcValue: number; realisedFc: number; state: ProceedsState; prcNos: string[] }[]
+}
+
+/** One row of the bank's export-proceeds (PRC) file, as read from the spreadsheet. */
+export interface PrcFileRow {
+  line: number; date: string; prcNo: string; bank: string; currency: string; fcAmount: number; rate: number
+  expNo?: string; lcNo?: string; invoiceRef?: string; remitter?: string
+}
+/** How a row found its invoice: EXP number, invoice number, LC number (FIFO over the LC's invoices) or the amount alone. */
+export type PrcBasis = "exp" | "invoice" | "lc" | "amount" | "manual"
+export type PrcRowState = "matched" | "partial" | "split" | "excess" | "ambiguous" | "unmatched" | "duplicate" | "invalid"
+export interface PrcAllocation { saleId: string; invoiceNo: string; customer: string; fcAmount: number; outstandingFc: number; basis: PrcBasis }
+export interface PrcCandidate { saleId: string; invoiceNo: string; customer: string; date: string; currency: string; outstandingFc: number; lcNo?: string; expNo?: string }
+export type PrcProblem = "date" | "future" | "amount" | "rate" | "currency" | "prcNo" | "duplicatePrc" | "duplicateInFile" | "currencyMismatch" | "beforeInvoice" | "noOpenExport" | "excess" | "ambiguous"
+export interface PrcMatchRow extends PrcFileRow { state: PrcRowState; allocations: PrcAllocation[]; unallocated: number; problems: PrcProblem[]; candidates: PrcCandidate[]; bdt: number }
+export interface PrcMatchResult {
+  rows: PrcMatchRow[]
+  totals: { rows: number; postable: number; matched: number; review: number; skipped: number; bdt: number; byCurrency: { currency: string; fc: number }[] }
+}
+export interface PrcBatchLine {
+  line: number; prcNo: string; date: string; bank: string; currency: string; fcAmount: number; rate: number; bdt: number
+  expNo?: string; lcNo?: string; invoiceRef?: string; remitter?: string
+  allocations: { saleId: string; invoiceNo: string; customer: string; fcAmount: number; basis: PrcBasis; realisationId: string }[]
+}
+export interface PrcBatch {
+  id: string; no: string; fileName: string; status: "posted" | "reversed"
+  lines: PrcBatchLine[]
+  /** rows of the file left out (unmatched / duplicates / not ticked) */
+  skipped: number
+  invoices: number; fcTotals: { currency: string; fc: number }[]; bdt: number
+  reversedOn?: string; reverseReason?: string
+  createdBy: string; createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+export interface ProceedsOverview {
+  asOf: string
+  outstanding: { count: number; bdt: number }; overdue: { count: number; bdt: number }; dueSoon: { count: number; bdt: number }; realisedFy: { count: number; bdt: number }
+  /** outstanding by days to the 120-day limit */
+  ageing: { bucket: "overdue" | "d30" | "d60" | "later"; count: number; bdt: number }[]
+  open: (PrcCandidate & { due: string; daysLeft: number; state: ProceedsState; fcValue: number; rate: number })[]
+  batches: Omit<PrcBatch, "lines" | "history">[]
+}
+
+/** Mushak 9.3 — application to file a return late (s.65, rule 48). */
+export type LateFilingReason = "systemFailure" | "disaster" | "illness" | "documents" | "other"
+export type LateFilingStatus = "draft" | "filed" | "approved" | "rejected"
+export type LateFilingState = LateFilingStatus | "deemed"
+export interface LateFiling {
+  id: string; no: string; period: string; reasonKind: LateFilingReason; reason: string
+  /** the filing date asked for (after the due date, at most 1 month after it) */
+  requestedDate: string
+  status: LateFilingStatus
+  filedOn?: string; filedRef?: string
+  decidedOn?: string; commissionerRef?: string; grantedDate?: string; rejectReason?: string
+  createdBy: string; createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+export type LateFilingRow = LateFiling & {
+  due: string; maxDate: string; applyBy: string
+  state: LateFilingState
+  /** deemed approved when the Commissioner has not decided within 7 days of filing */
+  deemedOn?: string
+  /** filing date the return may use without the late-return penalty (approved / deemed) */
+  effectiveDate?: string
+  returnStatus: "none" | "draft" | "submitted"; returnSubmittedOn?: string
+  /** submitted inside the extension (no late-return penalty) */
+  withinExtension?: boolean
+}
+
+/** Mushak 9.4 — application to amend a submitted return (s.66, rule 49). */
+export type AmendReason = "clerical" | "underpaid" | "overpaid" | "other"
+export type AmendmentStatus = "draft" | "filed" | "approved" | "rejected" | "amended"
+export type AmendmentState = AmendmentStatus | "deemed"
+export type AmendDirection = "increase" | "decrease" | "none"
+export type AmendField = "value" | "sd" | "vat" | "amount"
+export interface AmendCorrection { note: number; field: AmendField; from: number; to: number; explanation: string }
+export interface AmendEffect {
+  netVatFrom: number; netVatTo: number; netSdFrom: number; netSdTo: number
+  deltaVat: number; deltaSd: number; direction: AmendDirection
+  /** increase: interest (s.127) from the original due date to the payment date, and the total to deposit */
+  interestVat: number; interestSd: number; months: number; paidOn?: string; toPay: number
+  /** decrease: decreasing adjustment allowed in a later period (VAT note 32, SD note 39) */
+  decreaseVat: number; decreaseSd: number
+}
+export interface ReturnAmendment {
+  id: string; no: string; period: string; reasonKind: AmendReason; description: string
+  corrections: AmendCorrection[]
+  /** declaration: no VAT audit / enquiry has started for the period (s.66 / rule 49) */
+  noAudit: boolean
+  /** 1 = amends the original return; 2 = amends the first amended return, … */
+  revision: number
+  status: AmendmentStatus
+  filedOn?: string; filedRef?: string
+  decidedOn?: string; commissionerRef?: string; rejectReason?: string
+  /** decrease: the tax period the Commissioner allows the decreasing adjustment in */
+  adjustPeriod?: string
+  amended?: {
+    date: string; ackNo: string
+    payment?: { challanNo: string; date: string; amount: number }
+    adjustmentIds?: string[]
+    effect: AmendEffect
+    computation: ReturnComputation
+  }
+  createdBy: string; createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+export type ReturnAmendmentRow = ReturnAmendment & {
+  original: { submissionDate: string; ackNo?: string; type: VatReturnType; netVat: number; netSd: number; payableVat: number; payableSd: number }
+  effect: AmendEffect
+  state: AmendmentState
+  /** applications are accepted up to 4 years after the return was submitted */
+  applyBy: string
+  /** decrease: deemed approved when the Commissioner has not decided within 30 days of filing */
+  deemedOn?: string
+  /** tax computation of the return being amended, corrections applied (interest / payment once filed) */
+  computation: ReturnComputation
+  /** the figures being amended (the submitted return, or the previous amended return) */
+  base: ReturnComputation
 }

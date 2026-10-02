@@ -122,6 +122,9 @@ jobs:
       - name: E2E — R6.5 (own UD settlement + duty-drawback claims)
         working-directory: scripts
         run: python e2e_r65.py
+      - name: E2E — R6.6 export proceeds PRC file + Mushak 9.3 and 9.4
+        working-directory: scripts
+        run: python e2e_r66.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

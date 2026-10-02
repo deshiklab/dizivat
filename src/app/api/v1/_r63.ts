@@ -7,6 +7,7 @@ import { db } from "@/lib/mock/db"
 import { delay } from "@/lib/mock/query"
 import { computeReturn } from "@/lib/mock/vat-return"
 import { penaltyCalc } from "@/lib/penalty"
+import { extensionFor } from "@/lib/return-apps"
 import { periodOf } from "@/lib/r4"
 import type { PenaltyExposure, PenaltyExposureRow, PenaltyQuote } from "@/lib/types"
 import { json, problem, withAuth } from "./_lib"
@@ -39,9 +40,10 @@ export const penaltyRoute = withAuth(null, async (req) => {
     const rows: PenaltyExposureRow[] = []
     for (const p of taxPeriods()) {
       const b = basisOf(p.period)
-      const result = penaltyCalc({ period: p.period, vat: b.shortVat, sd: b.shortSd, paidOn: TODAY, filedOn: b.submittedOn }, db.vatSettings)
-      // a period not yet due owes nothing today; one not filed yet is late once its due date has passed
-      if (TODAY <= result.dueDate && b.status !== "submitted") { result.lateFiling = false; result.penaltyLate = 0; result.total = result.interestVat + result.interestSd }
+      const extendedTo = extensionFor(p.period, db.lateFilings, db.vatSettings, TODAY)
+      const result = penaltyCalc({ period: p.period, vat: b.shortVat, sd: b.shortSd, paidOn: TODAY, filedOn: b.submittedOn, extendedTo }, db.vatSettings)
+      // a period not yet due (or still inside an approved 9.3 extension) owes no penalty today; one not filed yet is late once that date has passed
+      if (TODAY <= (extendedTo ?? result.dueDate) && b.status !== "submitted") { result.lateFiling = false; result.penaltyLate = 0; result.total = result.interestVat + result.interestSd }
       rows.push({ period: p.period, dueDate: result.dueDate, status: b.status, submittedOn: b.submittedOn, shortVat: b.shortVat, shortSd: b.shortSd, lateFiling: result.lateFiling, result })
     }
     rows.reverse()
@@ -67,7 +69,8 @@ export const penaltyRoute = withAuth(null, async (req) => {
   const vat = num("vat"), sd = num("sd"), latePenalty = num("latePenalty"), paidOn = day("paidOn"), filedOn = day("filedOn")
   if (Object.keys(errors).length) return problem(422, "Validation failed", errors)
   const basis = basisOf(period)
-  const input = { period, vat: vat ?? basis.shortVat, sd: sd ?? basis.shortSd, paidOn: paidOn ?? TODAY, filedOn: filedOn ?? basis.submittedOn, latePenalty }
+  const extendedTo = extensionFor(period, db.lateFilings, db.vatSettings, TODAY)
+  const input = { period, vat: vat ?? basis.shortVat, sd: sd ?? basis.shortSd, paidOn: paidOn ?? TODAY, filedOn: filedOn ?? basis.submittedOn, latePenalty, ...(extendedTo ? { extendedTo } : {}) }
   if (input.paidOn < `${period}-01`) return problem(422, "Validation failed", { paidOn: ["beforePeriodEnd"] })
   const out: PenaltyQuote = { input, result: penaltyCalc(input, db.vatSettings), basis }
   return json(out)

@@ -13,6 +13,7 @@
  * stock across all UDs; a duty-paid clearance at settlement leaves the bond register too (see bond.ts).
  */
 import { bomOn } from "./bond"
+import { proceedsSummary } from "./proceeds"
 import { daysBetween } from "./sd-export"
 import { round2 } from "./vat"
 import type { Bom, BondUd, BondUdRegister, BondUdRow, BondUdWarning, Purchase, Sale, UdGarmentProgress, UdSettlementLine, UdStatementLine } from "./types"
@@ -112,10 +113,14 @@ export function bondUdRow(ud: BondUd, src: UdSource, today: string): BondUdRow {
   if (!st && drafts) warnings.push("draftExports")
   if (!st && daysLeft < 0) warnings.push("expired")
   if (garmentsProgress.some((g) => g.shipped > g.ordered + EPS)) warnings.push("overShipped")
+  // R6.6: the Bond Commissionerate settles a UD on the export documents incl. the PRCs — flag exports still unrealised
+  const proceeds = proceedsSummary(shipped.map((x) => x.id), src.sales, today)
+  if (!st && state === "ready" && proceeds.pending) warnings.push("proceedsPending")
   return {
     ...ud, lines, garmentsProgress, shippedPct, state, daysLeft, warnings, drafts,
     dutyOnBalance: st ? 0 : round2(live.lines.reduce((a, l) => a + l.dutyOnBalance, 0)),
     noCoefficient: live.noCoefficient,
+    proceeds,
   }
 }
 

@@ -50,7 +50,10 @@ export const REGISTRY = {
   "duty-drawback": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["drawback-claims", "bond-consumption-register", "sd-on-exported-inputs"] },
   "ud-settlement": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["bond-consumption-register", "drawback-claims", "rmg-exports-and-uds"] },
   "drawback-claims": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["duty-drawback", "ud-settlement"] },
-  "interest-and-penalties": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "treasury-tr6"] },
+  "interest-and-penalties": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "treasury-tr6", "late-filing-9-3"] },
+  "export-proceeds-prc": { category: "nbrVat", routes: ["/vat/proceeds"], related: ["rmg-exports-and-uds", "drawback-claims", "ud-settlement"] },
+  "late-filing-9-3": { category: "nbrVat", routes: ["/vat/return-applications"], related: ["interest-and-penalties", "vat-return-9-1", "amended-return-9-4"] },
+  "amended-return-9-4": { category: "nbrVat", routes: ["/vat/return-applications"], related: ["late-filing-9-3", "vat-adjustments", "vat-return-9-1"] },
   "vat-settings-and-tariff": { category: "nbrVat", routes: ["/vat/settings", "/vat/tariff"], related: ["items-and-hs-codes", "vat-return-9-1"] },
 
   "customers-and-vendors": { category: "masterData", routes: ["/master/customers", "/master/vendors"], related: ["sales-invoices", "local-purchases"] },

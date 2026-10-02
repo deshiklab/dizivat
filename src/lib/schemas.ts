@@ -679,3 +679,79 @@ export const claimActionInput = z.object({
   reason: z.string().trim().max(300).optional().default(""),
 })
 export type ClaimActionInputT = z.input<typeof claimActionInput>
+
+/* ── R6.6 — export proceeds matching (bank PRC file), Mushak 9.3 / 9.4 ───────────────────────────────────── */
+
+const optRef = z.string().trim().max(60).optional()
+/** One row of the bank's PRC file as read in the browser (checked by the matcher, not rejected here). */
+export const prcRowInput = z.object({
+  line: z.number().int().min(1).max(100_000),
+  date: z.string().trim().max(20),
+  prcNo: z.string().trim().max(40),
+  bank: z.string().trim().max(80).optional().default(""),
+  currency: z.string().trim().max(3),
+  fcAmount: z.number().finite(),
+  rate: z.number().finite(),
+  expNo: optRef, lcNo: optRef, invoiceRef: optRef, remitter: z.string().trim().max(80).optional(),
+})
+export const prcMatchInput = z.object({
+  fileName: z.string().trim().max(120).optional().default(""),
+  rows: z.array(prcRowInput).min(1, "required").max(500, "tooMany"),
+})
+export type PrcMatchInputT = z.input<typeof prcMatchInput>
+export const prcPostInput = z.object({
+  fileName: z.string().trim().min(1, "required").max(120),
+  rows: z.array(prcRowInput.extend({
+    allocations: z.array(z.object({ saleId: z.string().min(1).max(40), fcAmount: z.number().finite(), basis: z.enum(["exp", "invoice", "lc", "amount", "manual"]) })).max(30),
+  })).min(1, "required").max(500, "tooMany"),
+  skipped: z.number().int().min(0).max(500).optional().default(0),
+})
+export type PrcPostInputT = z.input<typeof prcPostInput>
+export const prcReverseInput = z.object({ date: isoDate, reason: z.string().trim().min(5, "required").max(300) })
+export type PrcReverseInputT = z.input<typeof prcReverseInput>
+
+const periodField = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "required")
+/** Mushak 9.3 — application to file a return late. */
+export const lateFilingInput = z.object({
+  period: periodField,
+  reasonKind: z.enum(["systemFailure", "disaster", "illness", "documents", "other"]),
+  reason: z.string().trim().min(10, "minReason").max(500),
+  requestedDate: isoDate,
+})
+export type LateFilingInputT = z.input<typeof lateFilingInput>
+export const lateActionInput = z.object({
+  action: z.enum(["file", "approve", "reject"]),
+  date: isoDate,
+  ref: z.string().trim().max(60).optional().default(""),
+  grantedDate: isoDate.optional(),
+  reason: z.string().trim().max(300).optional().default(""),
+})
+export type LateActionInputT = z.input<typeof lateActionInput>
+
+/** Mushak 9.4 — application to amend a submitted return. */
+export const amendmentInput = z.object({
+  period: periodField,
+  reasonKind: z.enum(["clerical", "underpaid", "overpaid", "other"]),
+  description: z.string().trim().min(10, "minReason").max(1000),
+  noAudit: z.boolean().refine((v) => v, "noAudit"),
+  corrections: z.array(z.object({
+    note: z.number().int().min(1).max(68),
+    field: z.enum(["value", "sd", "vat", "amount"]),
+    to: z.number({ error: "required" }).finite().min(0, "min0").max(1e12),
+    explanation: z.string().trim().min(3, "required").max(300),
+  })).min(1, "corrMin").max(20),
+})
+export type AmendmentInputT = z.input<typeof amendmentInput>
+export const amendActionInput = z.object({
+  action: z.enum(["file", "approve", "reject", "amend"]),
+  date: isoDate,
+  ref: z.string().trim().max(60).optional().default(""),
+  reason: z.string().trim().max(300).optional().default(""),
+  /** approve (decrease): tax period of the decreasing adjustment */
+  adjustPeriod: periodField.optional(),
+  /** amend (increase): the treasury deposit of the difference + interest */
+  challanNo: z.string().trim().max(40).optional().default(""),
+  challanDate: isoDate.optional(),
+  amount: z.number().positive("positive").optional(),
+})
+export type AmendActionInputT = z.input<typeof amendActionInput>

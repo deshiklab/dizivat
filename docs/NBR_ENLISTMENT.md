@@ -16,7 +16,7 @@ Branch `r6-enlistment-rmg`, version **0.12.0** (R6.3). The git tag `v0.9.1` mark
 |---|---|---|---|
 | 1 | Comply with the VAT & SD Act 2012, the Rules and orders | Rules engine with effective-dated parameters (`src/lib/rules.ts`, below); Mushak forms per the 2019 rules and the 2024 9.1 layout | ✅ ongoing |
 | 2 | Automated generation and printing of the return, purchase book, sales book and current account | 9.1 return builder with note drill-down; Mushak 6.1 / 6.2 books; party statements; PDF + print on every form | ✅ |
-| 3 | Statutory forms | 4.3, 6.1, 6.2, **6.2.1** (purchase-sales book of traded goods), 6.3 (local / export / service), 6.4 (contractual batches + subcontracting register), **6.5** (transfer challan print), 6.6, 6.7, 6.8, 6.10, 9.1, TR-6 | ✅ R6.2 (9.3 / 9.4 not in scope) |
+| 3 | Statutory forms | 4.3, 6.1, 6.2, **6.2.1** (purchase-sales book of traded goods), 6.3 (local / export / service), 6.4 (contractual batches + subcontracting register), **6.5** (transfer challan print), 6.6, 6.7, 6.8, 6.10, 9.1, TR-6, **9.3** (late-return application), **9.4** (amendment application → 9.1 type C) | ✅ R6.2; 9.3 / 9.4 R6.6 |
 | 4 | **Tamper protection** — records must not be altered or deleted unnoticed | Audit trail is **append-only in the database** (triggers) and **hash-chained** (SHA-256); integrity check in the UI and the API (§2) | ✅ R6.1 |
 | 5 | **VAT officials must have access for audit** | **VAT officer** role: read-only, audit trail and exports, **time-boxed** (access-until date, max 90 days, enforced at sign-in and on every request) and **every read logged** in the audit trail (§5) | ✅ R6.2 |
 | 6 | **At least two backups of transaction data a day** | **Two scheduled backups a day** (02:00 and 14:00 Asia/Dhaka) plus on demand: gzip JSON snapshot of every table with its SHA-256, last 30 kept, verify and download in *Master data › Backups* (§6). A **restore drill** proves a backup restores into a fresh database (§8). Neon point-in-time recovery on top | ✅ R6.2 / R6.3 |
@@ -150,8 +150,18 @@ past weekends and holidays). Every input can be changed for a what-if; buttons o
 interest or penalty. An **exposure** list shows each period that owes interest or a penalty today. Rates live in the
 effective-dated rules table. API: `GET /api/v1/vat/penalty`.
 
-## 10. Next
+## 10. Mushak 9.3 / 9.4 (R6.6)
+
+- **9.3 — late return (s.65, rule 48(1)):** applied for within 7 days after the tax period, for at most one month past the
+  due date; filed → approved / rejected, deemed approved after 7 days. The approved date replaces the due date for the
+  late-return penalty (note 43); interest (§127, notes 41 / 42) still runs from the original due date.
+- **9.4 — amended return (s.66, rule 49(2)):** within 4 years of the original submission, before any audit; corrected
+  source notes recompute the return. Increases are paid with interest (no penalty); decreases (deemed approved after 30
+  days) become a decreasing adjustment in a later open period. The amended return is filed as 9.1 type C.
+- Both forms print / download as PDF with an audit trail. API: `/api/v1/vat/late-filings`, `/api/v1/vat/return-amendments`.
+  See [RMG.md §8](RMG.md#8-r66--export-proceeds-from-the-banks-prc-file-mushak-93-and-94).
+
+## 11. Next
 
 1. Transaction import (sales, purchases) and an e-VAT filing export once NBR publishes the format.
-2. 9.3 / 9.4 (late and corrected returns) if NBR requires them for enlistment.
-3. Off-site copy of the backups (object storage) and a scheduled monthly drill on the live service.
+2. Off-site copy of the backups (object storage) and a scheduled monthly drill on the live service.

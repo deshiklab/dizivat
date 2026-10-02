@@ -23,6 +23,7 @@
  * of Entry first); exports already on a drawback claim are shown with it and no longer count as claimable. VAT and AT are already input credit in the return, SD on exported inputs goes
  * through 9.1 note 40 and AIT is an income-tax advance — none of them is counted here.
  */
+import { proceedsOf } from "./rmg"
 import { addMonths, daysBetween } from "./sd-export"
 import { calcImportLine, round2 } from "./vat"
 import type { Bom, BondItemRow, BondLot, BondRegister, BondRow, BondUd, DrawbackClaim, DrawbackRow, Item, Line, OpeningEntry, Purchase, Sale } from "./types"
@@ -255,6 +256,9 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     r.state = r.daysLeft < 0 ? "lapsed" : r.daysLeft <= DRAWBACK_EXPIRING_DAYS ? "expiring" : "open"
     const c = claimOf(src.drawbackClaims, r.saleId)
     if (c) r.claim = { id: c.id, no: c.no, status: c.status }
+    // R6.6: proceeds (PRC) of the export
+    const sale = src.sales.find((x) => x.id === r.saleId)
+    if (sale?.export) { const p = proceedsOf(sale.export, sale.issueDate, to); if (p.state !== "na") r.proceeds = p.state }
     return r
   }).filter((r) => r.total > 0).sort((a, b) => (a.exportDate < b.exportDate ? 1 : a.exportDate > b.exportDate ? -1 : a.saleId.localeCompare(b.saleId)))
   const sum = (xs: DrawbackRow[]) => round2(xs.reduce((a, r) => a + r.total, 0))

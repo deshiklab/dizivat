@@ -1,4 +1,4 @@
-# RMG (ready-made garments) — VAT features (R6 / R6.2 / R6.3 / R6.4 / R6.5)
+# RMG (ready-made garments) — VAT features (R6 / R6.2 / R6.3 / R6.4 / R6.5 / R6.6)
 
 DiziVAT's main customer segment is the garment industry. That covers two kinds of business:
 
@@ -225,7 +225,68 @@ DBK-03260003 (sanctioned, awaiting refund), DBK-04260004 (rejected — its expor
 DBK-07260006 (filed), DBK-09260007 (draft). Still unclaimed: S-03260019 (window closes today) and the June jeans
 shipment S-06260012 (৳ 804,310.70).
 
-## 8. Still planned
+## 8. R6.6 — export proceeds from the bank's PRC file; Mushak 9.3 and 9.4
 
-1. Export proceeds matched automatically from the bank's PRC file.
-2. Drawback at the flat (schedule) rate and DEDO's electronic submission once it is available.
+### 8.1 Export proceeds (`/vat/proceeds`)
+
+Bangladesh Bank requires export proceeds to be repatriated within **four months (120 days) of shipment**; the AD bank
+credits them, reports online and issues a **PRC** (proceeds realisation certificate), which is needed for incentives,
+drawback and tax. R6.2 let a user record a PRC on one invoice; R6.6 reads the bank's file.
+
+- **Outstanding:** tiles for outstanding / overdue / due in 30 days / realised this fiscal year, an ageing bar
+  (overdue, ≤ 30, ≤ 60, later) and the open list (EXP / LC, outstanding in FC and taka, days left). CSV.
+- **Import a bank file** (CSV or XLSX; template download; up to 500 rows). Each row is matched, in order, by **EXP
+  number → invoice number → LC number → exact outstanding amount of one invoice**. Bulk credits on one LC are spread
+  FIFO across its invoices. Rows come back as matched / partial / split / excess / ambiguous / unmatched / duplicate /
+  invalid with the reason; suggestions (★) for unmatched rows. Amounts can be edited and invoices added before posting.
+  A PRC number the system already has is a duplicate. Nothing is saved until **Post**.
+- **Posting** creates one realisation per allocation (taka at the file's rate) as a **batch** (`PB-MMYY####`) with
+  its own page and history. The server re-validates everything (known PRC, currency, before invoice, over the
+  outstanding amount, over the row amount). An approver can **reverse** a batch (reason required); its realisations
+  are removed and its PRC numbers can be imported again.
+- **Feeds the bond side:** own UDs and drawback claims list each export's realisation (pills + PRC numbers) and warn
+  while proceeds are unrealised or overdue. The drawback view shows the state per export.
+
+### 8.2 Mushak 9.3 — application to file a return late (s.65, rule 48(1))
+
+- Apply **within 7 days after the tax period ends**, for a date after the due date (15th of the next month) and **at
+  most one month** later. One live application per period; not once the return is submitted.
+- Draft → **filed** (operator) → **approved** (with a granted date ≤ requested) or **rejected** (reason) by an
+  approver. If the Commissioner does not decide within **7 days** the application shows as **deemed approved**.
+- Effect: inside the allowed extension the **late-return penalty (note 43) is waived**; **interest (§127, 1 % a month,
+  notes 41 / 42) still runs** from the original due date. The penalty calculator and the compliance centre use the
+  extension. Printable Mushak 9.3 (PDF); the return page shows the application and links to apply.
+
+### 8.3 Mushak 9.4 — application to amend a submitted return (s.66, rule 49(2))
+
+- Reasons: clerical error, tax underpaid, tax overpaid, other (not forgery). Within **4 years** of the original
+  submission; the applicant declares that **no audit / enquiry** has started. Missed decreasing-adjustment / input-credit
+  time limits cannot be revived by an amendment (those notes cannot be increased).
+- The user enters corrected **source notes** of the 9.1 (as filed → corrected, with an explanation); the totals, net
+  tax, payable and closing balance are recomputed and compared with the latest version of the return.
+- **Net tax up:** after approval the difference is paid **with interest** from the original due date (no penalty);
+  the amended return needs the challan, and a deposit below difference + interest is refused. Interest goes to note 41 /
+  42 of the amended computation.
+- **Net tax down:** the Commissioner decides within **30 days**, otherwise it is **deemed approved**; the reduction is
+  taken as an approved **decreasing adjustment** (note 32 VAT / 39 SD) in a later open tax period.
+- After approval the **amended return (9.1 type C, "Amended Return (Section 66)")** is filed with its own
+  acknowledgement number; later amendments start from it. Printable Mushak 9.4 (PDF).
+
+### 8.4 Demo data (seed r6.6)
+
+| Record | State |
+|---|---|
+| PB-05260001, PB-06260002, PB-08260003 | Posted bank files (older realisations, incl. the part payment on S-05260016) |
+| PB-09260004 | Reversed 19 Sep 2026 (PRC/26/051877 — wrong invoice) |
+| LF-01260001 (Dec 2025) | Rejected — the Dec 2025 return was filed late and paid the penalty |
+| LF-09260002 (Sep 2026) | Filed, awaiting the Commissioner (deemed approved after 1 Oct) |
+| AM-05260001 (Mar 2026) | Amended — ৳ 48,750 underpaid + ৳ 975 interest deposited |
+| AM-09260002 (Jul 2026) | Filed — ৳ 27,000 decrease, deemed approved after 10 Oct |
+
+The demonstration bank file (*Use sample file*) is built from what is open today: one row each by EXP, invoice (short
+by bank charges), LC and amount, an amount-only row that needs a manual pick, and a known PRC (duplicate).
+
+## 9. Still planned
+
+1. Drawback at the flat (schedule) rate and DEDO's electronic submission once it is available.
+2. Bank file formats per AD bank (column mapping presets) and direct bank feeds.

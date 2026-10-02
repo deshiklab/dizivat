@@ -27,6 +27,7 @@ import { periodEnd, periodLabel, RETURN_NOTES, RETURN_PARTS, RETURN_SECTION } fr
 import type { ReturnNote, ReturnView, TaxPeriod } from "@/lib/types"
 import { useR4Refresh } from "@/features/r4/r4-actions"
 import { useOnceOpen } from "@/hooks/use-once-open"
+import { ReturnAppsBanner } from "@/features/vat/return-apps"
 
 const ReturnForm = dynamic(() => import("./return-form").then((m) => m.ReturnForm), { ssr: false })
 const SubFormSheet = dynamic(() => import("./subform-sheet").then((m) => m.SubFormSheet), { ssr: false })
@@ -128,6 +129,9 @@ export function ReturnPage() {
             )}
             {!submitted && draft && !r.submissionDate && ended && <p role="status" className="rounded-lg border border-warning/40 bg-warning-soft p-3 text-sm">{t("needDate")}</p>}
             {!submitted && c.drafts > 0 && <p role="status" className="rounded-lg border p-3 text-sm text-muted-foreground">{t("draftsNote", { n: fmtNum(c.drafts, locale) })}</p>}
+
+            {/* R6.6: Mushak 9.3 / 9.4 applications for the period */}
+            <ReturnAppsBanner period={r.period} submitted={submitted} overdue={p?.status === "overdue"} apps={r.applications} />
 
             {/* key figures */}
             <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">

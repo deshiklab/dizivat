@@ -7,6 +7,8 @@ import type { RealisationInput, UdInput } from "../schemas"
 import type { UdFit } from "../rmg"
 import type { BondUdRegister, BondUdRow, DrawbackClaimList, DrawbackClaimRow } from "../types"
 import type { BondUdInputT, ClaimActionInputT, SettleInputT } from "../schemas"
+import type { LateFilingRow, PrcBatch, PrcMatchResult, ProceedsOverview, ReturnAmendmentRow } from "../types"
+import type { AmendActionInputT, AmendmentInputT, LateActionInputT, LateFilingInputT, PrcMatchInputT, PrcPostInputT, PrcReverseInputT } from "../schemas"
 import { appPathname, appUrl } from "../base-path"
 
 /**
@@ -277,6 +279,37 @@ export const api = {
       create: (b: { saleIds: string[]; note?: string }) => req<DrawbackClaimRow>("/vat/drawback-claims", { method: "POST", body: JSON.stringify(b) }),
       remove: (id: string) => req<{ ok: true; id: string }>(`/vat/drawback-claims/${id}`, { method: "DELETE" }),
       action: (id: string, b: ClaimActionInputT) => req<DrawbackClaimRow>(`/vat/drawback-claims/${id}/action`, { method: "POST", body: JSON.stringify(b) }),
+    },
+    /** R6.6 (RMG): export proceeds — bank PRC file matching, batches, ageing */
+    proceeds: {
+      overview: () => req<ProceedsOverview>("/vat/proceeds"),
+      csvUrl: () => `${BASE}/vat/proceeds?format=csv`,
+      sampleUrl: () => `${BASE}/vat/proceeds/sample`,
+      match: (b: PrcMatchInputT) => req<PrcMatchResult>("/vat/proceeds/match", { method: "POST", body: JSON.stringify(b) }),
+      batches: () => req<{ rows: PrcBatch[] }>("/vat/proceeds/batches"),
+      batch: (id: string) => req<PrcBatch>(`/vat/proceeds/batches/${encodeURIComponent(id)}`),
+      post: (b: PrcPostInputT) => req<PrcBatch>("/vat/proceeds/batches", { method: "POST", body: JSON.stringify(b) }),
+      reverse: (id: string, b: PrcReverseInputT) => req<PrcBatch>(`/vat/proceeds/batches/${encodeURIComponent(id)}/reverse`, { method: "POST", body: JSON.stringify(b) }),
+    },
+    /** R6.6: Mushak 9.3 — applications to file a return late (s.65) */
+    lateFilings: {
+      list: (status?: string) => req<{ rows: LateFilingRow[]; totals: { pending: number; allowed: number; rejected: number } }>(`/vat/late-filings${qs({ status })}`),
+      csvUrl: () => `${BASE}/vat/late-filings?format=csv`,
+      get: (id: string) => req<LateFilingRow>(`/vat/late-filings/${encodeURIComponent(id)}`),
+      create: (b: LateFilingInputT) => req<LateFilingRow>("/vat/late-filings", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: LateFilingInputT) => req<LateFilingRow>(`/vat/late-filings/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true; id: string }>(`/vat/late-filings/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      action: (id: string, b: LateActionInputT) => req<LateFilingRow>(`/vat/late-filings/${encodeURIComponent(id)}/action`, { method: "POST", body: JSON.stringify(b) }),
+    },
+    /** R6.6: Mushak 9.4 — applications to amend a submitted return (s.66) */
+    amendments: {
+      list: (status?: string) => req<{ rows: ReturnAmendmentRow[]; totals: { pending: number; toFile: number; amended: number; paid: number } }>(`/vat/return-amendments${qs({ status })}`),
+      csvUrl: () => `${BASE}/vat/return-amendments?format=csv`,
+      get: (id: string) => req<ReturnAmendmentRow>(`/vat/return-amendments/${encodeURIComponent(id)}`),
+      create: (b: AmendmentInputT) => req<ReturnAmendmentRow>("/vat/return-amendments", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: AmendmentInputT) => req<ReturnAmendmentRow>(`/vat/return-amendments/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true; id: string }>(`/vat/return-amendments/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      action: (id: string, b: AmendActionInputT) => req<ReturnAmendmentRow>(`/vat/return-amendments/${encodeURIComponent(id)}/action`, { method: "POST", body: JSON.stringify(b) }),
     },
     /** R6.3: §127 interest + late-return penalty — exposure (no period) or a what-if quote for one period */
     penaltyExposure: () => req<PenaltyExposure>("/vat/penalty"),

@@ -26,6 +26,7 @@ import { Pill, type Tone } from "@/components/common/status-badge"
 import { useCan } from "@/components/auth/me-provider"
 import { RecordHistory } from "@/features/audit/record-history"
 import { UdSettlementStatement } from "@/features/vat/ud-settlement-statement"
+import { ProceedsList } from "@/features/vat/prc-matching"
 import { Link } from "@/i18n/navigation"
 import { api, ApiError } from "@/lib/api/client"
 import { TODAY } from "@/lib/company"
@@ -152,7 +153,7 @@ export function BondUdDetailPage({ id }: { id: string }) {
         {u.state === "inProgress" && <p role="note" className="rounded-md border bg-card p-3 text-sm text-muted-foreground">{t("notReady", { pct: fmtNum(u.shippedPct, locale, 1), date: fmtDate(u.expiry, locale) })}</p>}
         {u.warnings.length > 0 && (
           <ul className="grid gap-1 rounded-md border border-warning/60 bg-warning/10 p-3 text-sm" aria-label={t("warnings")} data-testid="bud-warnings">
-            {u.warnings.map((w) => <li key={w} className="flex gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden /> {t(`warnLong.${w}`, { drafts: u.drafts, date: fmtDate(u.expiry, locale) })}</li>)}
+            {u.warnings.map((w) => <li key={w} className="flex gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden /> {t(`warnLong.${w}`, { drafts: u.drafts, date: fmtDate(u.expiry, locale), pending: u.proceeds?.pending ?? 0, overdue: u.proceeds?.overdue ?? 0 })}</li>)}
           </ul>
         )}
         <section aria-labelledby="bud-ship-h" className="grid gap-2 rounded-lg border bg-card p-4">
@@ -165,6 +166,7 @@ export function BondUdDetailPage({ id }: { id: string }) {
             </div>
           ))}
         </section>
+        {u.proceeds && <ProceedsList p={u.proceeds} note={t("proceedsNote")} />}
         {s && (
           <section aria-labelledby="bud-set-h" className="grid gap-1 rounded-lg border border-success/50 bg-card p-4 text-sm" data-testid="bud-settlement">
             <h2 id="bud-set-h" className="flex items-center gap-2 text-sm font-semibold"><BadgeCheck className="size-4 text-success" aria-hidden /> {t("settledTitle", { date: fmtDate(s.date, locale) })}</h2>

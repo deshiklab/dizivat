@@ -1,4 +1,5 @@
 import { vdsCertificateDue } from "@/lib/rules"
+import { amendmentRow, extensionFor, lateFilingRow } from "@/lib/return-apps"
 /**
  * R4 mock API — Accounting (money accounts, receipts, payments, statements, config) and NBR VAT
  * (treasury deposits / TR-6, VDS / Mushak 6.6, VAT adjustments, Mushak 9.1 returns, compliance centre, period lock).
@@ -77,7 +78,7 @@ interface Life<T extends LifeDoc, F> {
   filter?: (rows: T[], sp: URLSearchParams) => T[]
 }
 
-function nextNo(prefix: string, entity: AuditEntity, list: { no: string }[], date: string) {
+export function nextNo(prefix: string, entity: AuditEntity, list: { no: string }[], date: string) {
   const key = `${prefix}-${date.slice(5, 7)}${date.slice(2, 4)}`
   const used = [...list.map((d) => d.no), ...auditStore.events.filter((e) => e.entity === entity).map((e) => e.ref)]
   const n = used.reduce((m, no) => (no.startsWith(key) ? Math.max(m, Number(no.slice(key.length)) || 0) : m), 0) + 1
@@ -686,8 +687,10 @@ export function taxPeriods(): TaxPeriod[] {
   return periodsBetween(FIRST_RETURN, CURRENT).map((p) => {
     const r = findReturn(p)
     const due = returnDue(p, db.vatSettings)
-    const status = r?.status === "submitted" ? "submitted" : r ? "draft" : TODAY > due ? "overdue" : "open"
-    return { period: p, due, status, returnId: r?.id, submittedAt: r?.submissionDate, locked: r?.status === "submitted" }
+    // R6.6: an approved / deemed Mushak 9.3 extension keeps an unfiled period "open" up to the allowed date
+    const extendedTo = extensionFor(p, db.lateFilings, db.vatSettings, TODAY)
+    const status = r?.status === "submitted" ? "submitted" : r ? "draft" : TODAY > (extendedTo ?? due) ? "overdue" : "open"
+    return { period: p, due, status, returnId: r?.id, submittedAt: r?.submissionDate, locked: r?.status === "submitted", ...(extendedTo ? { extendedTo } : {}) }
   })
 }
 function returnView(period: string): ReturnView | null {
@@ -695,10 +698,20 @@ function returnView(period: string): ReturnView | null {
   if (!r) {
     if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return null
     const computation = computeReturn(db, period)
-    return { id: period, period, type: "original", activities: true, status: "draft", manual: EMPTY_MANUAL, createdAt: "", due: returnDue(period, db.vatSettings), netPayable: computation.payableVat, deposited: computation.depositedVat, closing: computation.closingVat, late: false, computation, live: true, notStarted: true }
+    return { id: period, period, type: "original", activities: true, status: "draft", manual: EMPTY_MANUAL, createdAt: "", due: returnDue(period, db.vatSettings), netPayable: computation.payableVat, deposited: computation.depositedVat, closing: computation.closingVat, late: false, computation, live: true, notStarted: true, applications: applicationsOf(period) }
   }
   const computation = r.snapshot ?? computeReturn(db, period, r.manual)
-  return { ...returnRow(r), computation, live: !r.snapshot }
+  return { ...returnRow(r), computation, live: !r.snapshot, applications: applicationsOf(period) }
+}
+/** R6.6: the period's Mushak 9.3 (latest that is not refused) and 9.4 applications. */
+function applicationsOf(period: string): NonNullable<ReturnView["applications"]> {
+  const ret = findReturn(period)
+  const lf = [...(db.lateFilings ?? [])].reverse().find((x) => x.period === period && x.status !== "rejected")
+  const lr = lf ? lateFilingRow(lf, ret, db.vatSettings, TODAY) : undefined
+  return {
+    ...(lr ? { late: { id: lr.id, no: lr.no, state: lr.state, effectiveDate: lr.effectiveDate } } : {}),
+    amendments: ret ? (db.returnAmendments ?? []).filter((a) => a.period === period).map((a) => { const x = amendmentRow(a, ret, db.returnAmendments, db.vatSettings, TODAY); return { id: x.id, no: x.no, state: x.state, direction: x.effect.direction } }) : [],
+  }
 }
 function refundProblem(period: string, manual: VatReturn["manual"]) {
   if (!manual.refund) return null

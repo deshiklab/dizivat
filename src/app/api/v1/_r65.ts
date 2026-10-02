@@ -146,7 +146,7 @@ const nextClaimNo = () => `DBK-${TODAY.slice(5, 7)}${TODAY.slice(2, 4)}${String(
 /** GET /vat/drawback-claims — ?status=, ?format=csv (one row per export). */
 export const claimsGet = withAuth(null, async (req) => {
   const sp = new URL(req.url).searchParams
-  const list = claimList(db.drawbackClaims, TODAY, sp.get("status") || undefined)
+  const list = claimList(db.drawbackClaims, TODAY, sp.get("status") || undefined, db.sales)
   if (sp.get("format") === "csv") {
     const rows = list.rows.flatMap((c) => c.lines.map((l) => ({ ...l, no: c.no, status: c.status, claimed: c.claimed, filedOn: c.filedOn ?? "", dedoRef: c.dedoRef ?? "", sanctioned: c.sanctioned ?? "", paid: c.paid ?? "", paidOn: c.paidOn ?? "" })))
     return csvResponse(toCSV(rows, [
@@ -175,12 +175,12 @@ export const claimsPost = withAuth("doc.create", async (req, _ctx, user) => {
   }
   db.drawbackClaims.push(claim)
   recordAudit({ at, actor: user, entity: "drawbackClaim", entityId: claim.id, ref: claim.no, action: "created", note: `${lines.length} export(s) · ৳ ${claim.claimed.toFixed(2)}` })
-  return json(claimRow(claim, TODAY), { status: 201 })
+  return json(claimRow(claim, TODAY, db.sales), { status: 201 })
 })
 
 export const claimGet = withAuth<Ctx>(null, async (_req, { params }) => {
   const c = await findClaim(params)
-  return c ? json(claimRow(c, TODAY)) : problem(404, "Claim not found")
+  return c ? json(claimRow(c, TODAY, db.sales)) : problem(404, "Claim not found")
 })
 
 /** DELETE /vat/drawback-claims/:id — drafts only (the number lives on in the audit trail). */
@@ -238,5 +238,5 @@ export const claimAction = withAuth<Ctx>("doc.create", async (req, { params }, u
   const action: HistoryEntry["action"] = d.action === "file" ? "submitted" : d.action === "reject" ? "cancelled" : d.action === "pay" ? "edited" : "approved"
   const at = push(c, user.name, action, note)
   recordAudit({ at, actor: user, entity: "drawbackClaim", entityId: c.id, ref: c.no, action, note })
-  return json(claimRow(c, TODAY))
+  return json(claimRow(c, TODAY, db.sales))
 })

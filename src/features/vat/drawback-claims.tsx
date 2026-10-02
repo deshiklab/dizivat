@@ -22,6 +22,7 @@ import { useConfirm } from "@/components/common/confirm"
 import { useCan } from "@/components/auth/me-provider"
 import { RecordHistory } from "@/features/audit/record-history"
 import { ClaimStatement } from "@/features/vat/claim-statement"
+import { ProceedsList } from "@/features/vat/prc-matching"
 import { Link, useRouter } from "@/i18n/navigation"
 import { api, ApiError } from "@/lib/api/client"
 import { DRAWBACK_MONTHS } from "@/lib/bond"
@@ -193,6 +194,7 @@ export function ClaimDetailPage({ id }: { id: string }) {
           <span className="font-medium">{c.rejectReason ? t("rejectedOn", { date: fmtDate(c.rejectedOn!, locale) }) : t("disallowedWhy")}</span> {c.rejectReason ?? c.disallowedReason}
         </p>
       )}
+      {c.proceeds && <div className="no-print mb-4"><ProceedsList p={c.proceeds} note={t("proceedsNote")} /></div>}
       <Tabs value={tab} onValueChange={(v) => setTab(v as string)}>
         <TabsList className="no-print mb-4">
           <TabsTrigger value="statement"><FileText className="size-4" aria-hidden /> {t("tabStatement")}</TabsTrigger>

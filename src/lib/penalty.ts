@@ -35,11 +35,14 @@ export function penaltyCalc(i: PenaltyInput, settings?: Pick<VatSettings, "profi
   const interestVat = r2((vat * ratePct * chargedMonths) / 100)
   const interestSd = r2((sd * ratePct * chargedMonths) / 100)
   const filedOn = i.filedOn ? i.filedOn.slice(0, 10) : undefined
-  const lateFiling = (filedOn ?? paidOn) > dueDate
+  // R6.6: an approved / deemed Mushak 9.3 extension allows filing up to its date without the late-return penalty
+  const extendedTo = i.extendedTo && i.extendedTo > dueDate ? i.extendedTo.slice(0, 10) : undefined
+  const lateFiling = (filedOn ?? paidOn) > (extendedTo ?? dueDate)
   const penaltyLate = lateFiling ? r2(Math.max(0, i.latePenalty ?? rule("penalty.lateReturn", dueDate))) : 0
   return {
     period: i.period, dueDate, paidOn, filedOn, daysLate, months, chargedMonths, capped: months > maxMonths, ratePct, maxMonths,
     vat, sd, interestVat, interestSd, lateFiling, penaltyLate, total: r2(interestVat + interestSd + penaltyLate),
     refs: { interest: ruleRow("interest.monthlyPct", dueDate)?.ref ?? "§127", penalty: ruleRow("penalty.lateReturn", dueDate)?.ref ?? "§85" },
+    ...(extendedTo ? { extendedTo } : {}),
   }
 }

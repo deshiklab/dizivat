@@ -58,7 +58,9 @@
     "udRegister": "UD / bond register",
     "dataImport": "Data import",
     "backups": "Backups",
-    "bondRegister": "Bond consumption register"
+    "bondRegister": "Bond consumption register",
+    "exportProceeds": "Export proceeds (PRC)",
+    "returnApps": "Return applications (9.3 / 9.4)"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -1328,7 +1330,10 @@
       "access": "Officer access",
       "import": "Data import",
       "bondUd": "Own UD / UP",
-      "drawbackClaim": "Drawback claim"
+      "drawbackClaim": "Drawback claim",
+      "prcBatch": "Bank PRC file",
+      "lateFiling": "Mushak 9.3 application",
+      "returnAmendment": "Mushak 9.4 application"
     },
     "facet": {
       "entity": "Record type",
@@ -4095,14 +4100,16 @@
       "noCoefficient": "Export without a BOM",
       "draftExports": "Draft exports",
       "expired": "Expired",
-      "overShipped": "Shipped beyond the order"
+      "overShipped": "Shipped beyond the order",
+      "proceedsPending": "Proceeds unrealised"
     },
     "warnLong": {
       "excessImport": "More was imported than the UD permits — the excess attracts full duty unless the UD is amended.",
       "noCoefficient": "An export under this UD has no approved BOM on its date, so its input consumption is not counted.",
       "draftExports": "{drafts, plural, one {# draft export invoice quotes} other {# draft export invoices quote}} this UD — approve or cancel before settlement.",
       "expired": "The UD expired on {date}; settle it with the Bond Commissionerate.",
-      "overShipped": "More garments were shipped than the order lists."
+      "overShipped": "More garments were shipped than the order lists.",
+      "proceedsPending": "{pending, plural, one {# export under this UD has} other {# exports under this UD have}} proceeds not yet realised{overdue, plural, =0 {} one { (# past the 120-day limit)} other { (# past the 120-day limit)}} — the Bond Commissionerate settles against the PRCs."
     },
     "issuer": {
       "BGMEA": "BGMEA",
@@ -4192,7 +4199,8 @@
       "atLeastOneLine": "Add at least one line",
       "min0": "Cannot be negative"
     },
-    "crumb": "UD settlement"
+    "crumb": "UD settlement",
+    "proceedsNote": "Settlement is done on the export documents, including the bank's PRC for each export."
   },
   "claims": {
     "error": "Could not load the drawback claims",
@@ -4303,6 +4311,455 @@
       "aboveSanctioned": "Cannot exceed the amount sanctioned",
       "required": "Required"
     },
-    "crumb": "Drawback claims"
+    "crumb": "Drawback claims",
+    "proceedsNote": "DEDO pays drawback only on exports whose proceeds are realised — attach the PRCs."
+  },
+  "prc": {
+    "intro": "Match the bank's export-proceeds file (PRC) to export invoices by EXP, invoice or LC number, and follow what is still to realise within {days} days of shipment.",
+    "csv": "Open proceeds CSV",
+    "template": "Bank file template",
+    "error": "Could not load export proceeds",
+    "tot": {
+      "outstanding": "Outstanding",
+      "overdue": "Past {days} days",
+      "dueSoon": "Due in 30 days",
+      "realisedFy": "Realised this fiscal year"
+    },
+    "invoices": "{n, plural, =0 {no invoices} one {# invoice} other {# invoices}}",
+    "tab": {
+      "open": "Outstanding",
+      "import": "Import bank file",
+      "batches": "Bank files"
+    },
+    "ageing": "Ageing to the 120-day limit",
+    "bucket": {
+      "overdue": "Past the limit",
+      "d30": "Due within 30 days",
+      "d60": "Due in 31–60 days",
+      "later": "Due later"
+    },
+    "openTable": "Exports with proceeds outstanding",
+    "col": {
+      "invoice": "Invoice",
+      "buyer": "Buyer",
+      "refs": "EXP / LC",
+      "value": "Invoice value",
+      "outstanding": "Outstanding",
+      "due": "Realise by",
+      "state": "Status",
+      "post": "Post",
+      "prc": "PRC",
+      "fileRefs": "References in the file",
+      "amount": "Amount",
+      "allocations": "Allocated to",
+      "batch": "Bank file",
+      "file": "File",
+      "invoicesN": "Invoices",
+      "fc": "Foreign currency",
+      "bdt": "BDT value"
+    },
+    "noExp": "No EXP number",
+    "daysOver": "{n, plural, one {# day over} other {# days over}}",
+    "daysLeft": "{n, plural, =0 {due today} one {# day left} other {# days left}}",
+    "allRealised": "All export proceeds are realised",
+    "note": "Bangladesh Bank requires export proceeds to be repatriated within {days} days (4 months) of shipment; the AD bank issues a PRC for each realisation. Drawback and UD settlement need the PRCs.",
+    "missing": "The file has no column for: {cols}. Use the template headings.",
+    "field": {
+      "date": "Date",
+      "prcNo": "PRC No",
+      "bank": "Bank",
+      "currency": "Currency",
+      "fcAmount": "FC Amount",
+      "rate": "Rate",
+      "expNo": "EXP No",
+      "lcNo": "LC No",
+      "invoiceRef": "Invoice No",
+      "remitter": "Remitter"
+    },
+    "noRows": "The file has no data rows.",
+    "tooMany": "At most {max} rows per file.",
+    "unreadable": "The file could not be read. Use CSV or Excel (.xlsx).",
+    "posted": "{no} posted — {n, plural, one {# PRC} other {# PRCs}} realised",
+    "readOnly": "Your role can view proceeds but not import bank files.",
+    "fileTitle": "Bank file",
+    "choose": "Choose file…",
+    "useSample": "Try a sample file",
+    "matching": "Matching…",
+    "fileHint": "CSV or Excel export of the bank's PRC / realisation report",
+    "summary": "{rows, plural, one {# row} other {# rows}}: {matched} matched, {review} to review, {skipped} skipped.",
+    "previewTable": "Bank file rows and their matches",
+    "toPost": "{n, plural, =0 {Nothing selected} one {# PRC to post} other {# PRCs to post}} · Tk {amount}",
+    "discard": "Discard",
+    "post": "Post realisations",
+    "importNote": "Matching order: EXP number, then invoice number, then LC (oldest invoice first), then an exact outstanding amount. Rows to review are not ticked — pick or adjust the invoices, then tick them. Nothing is saved until you post.",
+    "postOne": "Post PRC {no}",
+    "line": "Row {n}",
+    "ref": {
+      "exp": "EXP",
+      "invoice": "Inv.",
+      "lc": "LC",
+      "none": "No reference"
+    },
+    "notPosted": "Not posted",
+    "basis": {
+      "exp": "by EXP",
+      "invoice": "by invoice",
+      "lc": "by LC",
+      "amount": "by amount",
+      "manual": "picked"
+    },
+    "allocAmount": "Amount allocated to {no}",
+    "removeAlloc": "Remove {no}",
+    "addInvoice": "Add an invoice to PRC {no}",
+    "pickSuggested": "Add invoice ({n} suggested ★)",
+    "pickInvoice": "Add invoice…",
+    "over": "Over-allocated by {amount}",
+    "unallocated": "Unallocated: {amount}",
+    "state": {
+      "matched": "Matched",
+      "partial": "Part-realised",
+      "split": "Split over invoices",
+      "excess": "More than outstanding",
+      "ambiguous": "Several candidates",
+      "unmatched": "No match",
+      "duplicate": "Already recorded",
+      "invalid": "Invalid row"
+    },
+    "problem": {
+      "date": "Date is missing or not a date",
+      "future": "Date is after today",
+      "amount": "Amount is missing or not positive",
+      "rate": "Exchange rate is missing or not positive",
+      "currency": "Currency is missing or not a foreign currency",
+      "prcNo": "PRC number is missing",
+      "duplicatePrc": "This PRC is already recorded in DiziVAT",
+      "duplicateInFile": "The PRC appears twice in the file",
+      "currencyMismatch": "Invoice is in another currency",
+      "beforeInvoice": "Realised before the invoice date",
+      "noOpenExport": "No open export matches the references — pick the invoice",
+      "excess": "Amount is more than the invoices' outstanding — the excess stays unallocated",
+      "ambiguous": "Several open invoices fit — check the suggestion"
+    },
+    "err": {
+      "date": "Date is missing or not a date",
+      "future": "Date is after today",
+      "amount": "Amount is missing or not positive",
+      "rate": "Exchange rate is missing or not positive",
+      "currency": "Currency is missing or not a foreign currency",
+      "prcNo": "PRC number is missing",
+      "duplicatePrc": "This PRC is already recorded in DiziVAT",
+      "duplicateInFile": "The PRC appears twice in the file",
+      "currencyMismatch": "Invoice is in another currency",
+      "beforeInvoice": "Realised before the invoice date",
+      "noOpenExport": "No open export matches the references — pick the invoice",
+      "excess": "Amount is more than the invoices' outstanding — the excess stays unallocated",
+      "ambiguous": "Several open invoices fit — check the suggestion",
+      "nothingToPost": "Tick at least one row with an invoice",
+      "duplicate": "Already recorded",
+      "notOpen": "The invoice has no proceeds outstanding",
+      "positive": "Must be more than 0",
+      "exceedsOutstanding": "More than the invoice's outstanding",
+      "overAllocated": "Allocated more than the PRC amount",
+      "afterToday": "Cannot be after today",
+      "beforePosted": "Before the batch was posted",
+      "required": "Required"
+    },
+    "batchesTable": "Bank files posted",
+    "skippedN": "{n, plural, one {# row skipped} other {# rows skipped}}",
+    "batchState": {
+      "posted": "Posted",
+      "reversed": "Reversed"
+    },
+    "noBatches": "No bank files yet",
+    "noBatchesHint": "Import the bank's PRC file to record realisations in bulk.",
+    "back": "Back to bank files",
+    "batchNotFound": "Bank file not found",
+    "crumbBatches": "Bank files",
+    "batchTitle": "Bank file {no}",
+    "batchSub": "{file} · {n, plural, one {# PRC} other {# PRCs}} · posted by {by} on {date}",
+    "reverse": "Reverse",
+    "reversedOn": "Reversed on {date}:",
+    "batchSummary": "Batch totals",
+    "tabLines": "PRCs",
+    "tabHistory": "History",
+    "linesTable": "PRCs in this file",
+    "reversedToast": "{no} reversed",
+    "reverseTitle": "Reverse {no}?",
+    "reverseBody": "Removes the {n, plural, one {# realisation} other {# realisations}} this file posted; the invoices show the proceeds outstanding again. The batch stays on record.",
+    "reverseDate": "Reversal date",
+    "reverseReason": "Reason",
+    "pl": {
+      "title": "Export proceeds",
+      "summary": "{realised} of {n} realised",
+      "open": "Open export proceeds"
+    }
+  },
+  "rapp": {
+    "intro": "Mushak 9.3 — permission to file a return late (s.65); Mushak 9.4 — permission to file an amended return (s.66).",
+    "tab": {
+      "late": "Late filing (9.3)",
+      "amend": "Amendment (9.4)"
+    },
+    "error": "Could not load the applications",
+    "csv": "CSV",
+    "late": {
+      "tot": {
+        "pending": "Awaiting decision",
+        "allowed": "Allowed / deemed",
+        "rejected": "Refused"
+      },
+      "new": "New 9.3 application",
+      "table": "Mushak 9.3 applications",
+      "empty": "No late-filing applications",
+      "emptyHint": "Apply within 7 days after the tax period ends if the return cannot be filed by the 15th.",
+      "note": "Apply within {apply} days after the end of the tax period. The Commissioner may allow up to one month from the due date and decides within {decide} days — otherwise the application is deemed approved. Permission waives the late-return penalty (note 43) up to the allowed date; interest (notes 41 / 42) still runs from the due date.",
+      "editTitle": "Edit {no}",
+      "newTitle": "Mushak 9.3 — apply to file late",
+      "formBody": "Ask the Commissioner for more time to submit the return. Payment is still due on the due date.",
+      "requested": "File by (requested)",
+      "window": "After {due}, up to {max}",
+      "pastApplyBy": "The application window closed on {date}; the Commissioner can refuse an application made late.",
+      "detailTitle": "Mushak 9.3 {no}",
+      "detailSub": "Tax period {period} · return due {due}",
+      "maxDate": "Can be allowed up to {date}",
+      "allowed": "Allowed to",
+      "deemedHint": "Deemed approved — no decision by {date}",
+      "effect": "The return can be submitted up to {date} without the late-return penalty. Interest runs on tax paid after the due date.",
+      "effectWithin": "The return was submitted on {date}, inside the permission — no late-return penalty.",
+      "effectSubmitted": "The return was submitted on {date}, after the allowed date — the late-return penalty applies.",
+      "grantedHint": "At most the date asked for ({date})"
+    },
+    "col": {
+      "app": "Application",
+      "period": "Tax period",
+      "due": "Due date",
+      "requested": "Requested",
+      "filed": "Filed",
+      "return": "Return",
+      "status": "Status",
+      "corrections": "Notes corrected",
+      "deltaVat": "Net VAT change",
+      "deltaSd": "Net SD change",
+      "effect": "Effect"
+    },
+    "lateReason": {
+      "systemFailure": "Online system failure",
+      "disaster": "Natural disaster / calamity",
+      "illness": "Illness or death",
+      "documents": "Records not available",
+      "other": "Other reasonable cause"
+    },
+    "allowedTo": "Allowed to {date}",
+    "applyBy": "Apply by {date}",
+    "returnStatus": {
+      "none": "Not started",
+      "draft": "Draft",
+      "submitted": "Submitted"
+    },
+    "lateState": {
+      "draft": "Draft",
+      "filed": "Awaiting decision",
+      "approved": "Approved",
+      "deemed": "Deemed approved",
+      "rejected": "Refused"
+    },
+    "deemedAfter": "Deemed approved after {date}",
+    "saved": "{no} saved",
+    "created": "{no} created as a draft",
+    "deleted": "{no} deleted",
+    "reasonKind": "Reason",
+    "reasonDetail": "Explanation",
+    "minChars": "At least {n} characters",
+    "saveDraft": "Save draft",
+    "back": "Back to applications",
+    "notFound": "Application not found",
+    "edit": "Edit",
+    "lateAction": {
+      "file": "Mark as filed",
+      "approve": "Record approval",
+      "reject": "Record refusal"
+    },
+    "deleteTitle": "Delete {no}?",
+    "deleteBody": "The draft is removed; its number stays in the audit trail.",
+    "delete": "Delete",
+    "summary": "Summary",
+    "refused": "Refused on {date}:",
+    "openReturn": "Open the return",
+    "tabForm93": "Mushak 9.3",
+    "tabForm94": "Mushak 9.4",
+    "tabHistory": "History",
+    "tabComputation": "Amended computation",
+    "lateDone": {
+      "file": "{no} filed",
+      "approve": "{no} approved",
+      "reject": "{no} refused"
+    },
+    "lateDialog": {
+      "file": {
+        "title": "File {no}",
+        "body": "Record the date the application was submitted to the Commissioner — at the latest {applyBy}.",
+        "date": "Filed on",
+        "ref": "Receipt / reference no."
+      },
+      "approve": {
+        "title": "Approval of {no}",
+        "body": "Record the Commissioner's permission and the date allowed.",
+        "date": "Decided on",
+        "ref": "Commissioner's reference"
+      },
+      "reject": {
+        "title": "Refusal of {no}",
+        "body": "Record the Commissioner's refusal. The late-return penalty then applies.",
+        "date": "Decided on",
+        "ref": "Commissioner's reference"
+      }
+    },
+    "rejectReason": "Reason given",
+    "err": {
+      "outOfRange": "Choose a period from the first return to the current month",
+      "alreadySubmitted": "The return for this period is already submitted",
+      "duplicate": "There is already an open application for this period",
+      "notAfterDue": "Must be after the due date",
+      "beyondMonth": "At most one month after the due date",
+      "afterToday": "Cannot be after today",
+      "afterApplyBy": "Past the last day to apply (7 days after the period)",
+      "beforePrevious": "Before the previous step",
+      "aboveRequested": "Later than the date asked for",
+      "required": "Required",
+      "notSubmitted": "Only a submitted return can be amended",
+      "tooLate": "More than 4 years after the return was submitted",
+      "notAmendable": "This note cannot be amended here",
+      "unchanged": "Same as the figure filed",
+      "beforeReturn": "Before the return was submitted",
+      "adjustPeriod": "Choose a later, unsubmitted tax period",
+      "belowDue": "Less than the difference plus interest",
+      "minReason": "At least 10 characters",
+      "noAudit": "Confirm the declaration",
+      "corrMin": "Add at least one correction",
+      "min0": "Cannot be negative",
+      "positive": "Must be more than 0"
+    },
+    "amend": {
+      "tot": {
+        "pending": "Awaiting decision",
+        "toFile": "Amended return to file",
+        "amended": "Amended"
+      },
+      "new": "New 9.4 application",
+      "table": "Mushak 9.4 applications",
+      "empty": "No amendment applications",
+      "emptyHint": "Found an error in a submitted return? Apply to amend it.",
+      "note": "Within {years} years of submitting the return and before any audit or enquiry starts. Not for an input credit or decreasing adjustment whose time limit has passed. If the tax decreases the Commissioner decides within {days} days, otherwise it is deemed approved; if it increases, pay the difference with interest — no penalty.",
+      "editTitle": "Edit {no}",
+      "newTitle": "Mushak 9.4 — apply to amend a return",
+      "formBody": "List each Mushak 9.1 figure to correct with the right amount. Allowed within {years} years of submission.",
+      "description": "What went wrong",
+      "corrections": "Corrections",
+      "addLine": "Add correction",
+      "declaration": "I declare that no VAT audit, investigation or enquiry has started for this period and that the error was not discovered by a VAT officer.",
+      "notFor": "An amendment cannot claim input tax credit or a decreasing adjustment after its time limit.",
+      "note91": "Mushak 9.1 note",
+      "column": "Column",
+      "asFiled": "As filed",
+      "corrected": "Correct figure",
+      "removeLine": "Remove correction {n}",
+      "explanation": "Explanation",
+      "detailTitle": "Mushak 9.4 {no}",
+      "detailSub": "Return {period} · submitted {date} · ack. {ack}",
+      "deemedHint": "Deemed approved — no decision by {date}",
+      "doneNote": "Amended return (9.1 type C) filed on {date} — ack. {ack}.",
+      "donePaid": "Tk {amount} deposited under challan {challan} on {date}.",
+      "doneAdjusted": "Decreasing adjustment posted in {period}.",
+      "viewAdjustments": "View adjustments",
+      "nextIncrease": "Next: deposit Tk {amount} (difference + interest) and file the amended return.",
+      "nextDecrease": "Next: file the amended return; the decrease is taken as a decreasing adjustment in the allowed period.",
+      "amendedCol": "Amended"
+    },
+    "amendReason": {
+      "clerical": "Clerical / computational error",
+      "underpaid": "Tax under-declared",
+      "overpaid": "Tax over-declared",
+      "other": "Other error or omission"
+    },
+    "revision": "Amendment no. {n}",
+    "noteN": "Note {n}",
+    "toPay": "To pay",
+    "decreaseAdj": "Decreasing adjustment",
+    "inPeriod": "in {period}",
+    "noChange": "No change in tax",
+    "amendState": {
+      "draft": "Draft",
+      "filed": "Awaiting decision",
+      "approved": "Approved",
+      "deemed": "Deemed approved",
+      "rejected": "Refused",
+      "amended": "Amended"
+    },
+    "field": {
+      "value": "Value",
+      "sd": "SD",
+      "vat": "VAT",
+      "amount": "Amount"
+    },
+    "amendAction": {
+      "file": "Mark as filed",
+      "approve": "Record approval",
+      "reject": "Record refusal",
+      "amend": "File amended return"
+    },
+    "fromTo": "{from} → {to}",
+    "toPayInterest": "To pay incl. interest",
+    "interestHint": "Interest Tk {amount} ({months, plural, one {# month} other {# months}} to {date})",
+    "decreaseHint": "After the Commissioner's decision (within {days} days)",
+    "amendDone": {
+      "file": "{no} filed",
+      "approve": "{no} approved",
+      "reject": "{no} refused",
+      "amend": "Amended return filed for {no}"
+    },
+    "amendDialog": {
+      "file": {
+        "title": "File {no}",
+        "body": "Record the date the application was submitted to the Commissioner.",
+        "date": "Filed on",
+        "ref": "Receipt / reference no."
+      },
+      "approve": {
+        "title": "Approval of {no}",
+        "body": "Record the Commissioner's permission. For a decrease, the tax period of the decreasing adjustment.",
+        "date": "Decided on",
+        "ref": "Commissioner's reference"
+      },
+      "reject": {
+        "title": "Refusal of {no}",
+        "body": "Record the Commissioner's refusal.",
+        "date": "Decided on",
+        "ref": "Commissioner's reference"
+      },
+      "amend": {
+        "title": "Amended return for {no}",
+        "bodyIncrease": "Deposit the difference with interest (Tk {amount} if paid today) and record the treasury challan. The return is filed as type C (section 66).",
+        "bodyDecrease": "The return is filed as type C (section 66) and the decrease is posted as an approved decreasing adjustment (VAT note 32 / SD note 39).",
+        "date": "Filed on",
+        "ref": "NBR acknowledgement no."
+      }
+    },
+    "adjustPeriod": "Decreasing adjustment in",
+    "adjustHint": "A later tax period whose return is not yet submitted",
+    "challanNo": "Treasury challan no.",
+    "challanDate": "Deposit date",
+    "challanHint": "Interest is worked out to this date",
+    "deposited": "Amount deposited (Tk)",
+    "depositHint": "At least Tk {amount}",
+    "banner": {
+      "late": "Mushak 9.3 {no}:",
+      "lateAllowed": "return allowed up to {date} without the late-return penalty.",
+      "amend": "Mushak 9.4 {no}:",
+      "overdue": "The return is overdue — the late-return penalty and interest apply.",
+      "canApply": "Cannot file by the due date? Apply for permission by {date}.",
+      "applyLate": "Apply (Mushak 9.3)",
+      "amendHint": "Found an error in this return?",
+      "applyAmend": "Apply to amend (Mushak 9.4)"
+    }
   }
 }

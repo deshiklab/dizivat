@@ -19,7 +19,7 @@ export function StatusFooter() {
       <span>{company.name} · {t("bin")} <span className="tabular font-medium text-foreground">{company.bin}</span></span>
       <span className="flex items-center gap-1"><CalendarClock className="size-3.5" /> {t("vatPeriod")}: <span className="font-medium text-foreground">{fmtDate(TODAY, locale, "MMMM yyyy")}</span></span>
       <span>{t("returnDue", { date: fmtDate(due, locale), days: fmtNum(days, locale) })}</span>
-      <span className="ml-auto">{t("buildInfo", { version: process.env.NEXT_PUBLIC_APP_VERSION ?? "", release: "R6.5" })} · {process.env.NEXT_PUBLIC_DATA_MODE === "postgres" ? t("liveData") : t("mockData")}</span>
+      <span className="ml-auto">{t("buildInfo", { version: process.env.NEXT_PUBLIC_APP_VERSION ?? "", release: "R6.6" })} · {process.env.NEXT_PUBLIC_DATA_MODE === "postgres" ? t("liveData") : t("mockData")}</span>
       <Credit className="basis-full text-center lg:basis-auto lg:text-right" linkClassName="text-foreground" />
     </footer>
   )
