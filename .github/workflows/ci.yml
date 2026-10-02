@@ -119,6 +119,9 @@ jobs:
       - name: E2E — R6.4 (bond consumption register + BoE ageing + duty drawback + bonded imports)
         working-directory: scripts
         run: python e2e_r64.py
+      - name: E2E — R6.5 (own UD settlement + duty-drawback claims)
+        working-directory: scripts
+        run: python e2e_r65.py
       - name: Accessibility (axe)
         working-directory: scripts
         run: python a11y.py

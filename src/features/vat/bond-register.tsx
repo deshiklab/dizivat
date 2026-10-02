@@ -4,7 +4,10 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { AlertTriangle, Download, Hourglass, Landmark, PackageSearch, ShieldAlert, ShieldCheck, Undo2 } from "lucide-react"
+import { AlertTriangle, ClipboardCheck, Download, FileStack, Hourglass, Landmark, PackageSearch, ShieldAlert, ShieldCheck, Undo2 } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { BondUdsTab } from "@/features/vat/bond-uds"
+import { ClaimFromSelection, ClaimPill, ClaimsTab } from "@/features/vat/drawback-claims"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -25,7 +28,7 @@ const ROW_TONE: Record<BondItemRow["state"], Tone> = { ok: "success", shortfall:
 const LOT_TONE: Record<BondLot["state"], Tone> = { open: "success", expiring: "warning", extension: "warning", overdue: "danger", cleared: "neutral" }
 const DB_TONE: Record<DrawbackRow["state"], Tone> = { open: "success", expiring: "warning", lapsed: "danger" }
 const LIC_TONE: Record<BondRow["state"], Tone> = { valid: "success", expiring: "warning", expired: "danger", missing: "danger" }
-const TABS = ["register", "boe", "drawback"] as const
+const TABS = ["register", "boe", "drawback", "uds", "claims"] as const
 type TabKey = (typeof TABS)[number]
 
 const qty = (n: number, locale: string) => fmtNum(n, locale, 3)
@@ -34,7 +37,8 @@ const qty = (n: number, locale: string) => fmtNum(n, locale, 3)
  * R6.4 (RMG) — bond consumption register. Inputs warehoused under the customs bond (IM-7 Bills of Entry and go-live
  * carry-forwards) against their consumption in exports through the input–output coefficient (BOM / Mushak 4.3);
  * each Bill of Entry aged against the 24-month bonding period; duty drawback on duty-paid inputs that went into
- * exports. ?tab=register|boe|drawback, ?from=, ?to=
+ * exports. R6.5: our own UDs / UP and their settlement (?tab=uds) and drawback claims (?tab=claims).
+ * ?tab=register|boe|drawback|uds|claims, ?from=, ?to=
  */
 export function BondRegisterPage() {
   const t = useTranslations("bond")
@@ -48,13 +52,14 @@ export function BondRegisterPage() {
   const q = useQuery({ queryKey: ["bond", from, to], queryFn: () => api.vat.bond.get(range), placeholderData: keepPreviousData })
   const d = q.data
   const active = (TABS as readonly string[]).includes(tab) ? (tab as TabKey) : "register"
-  const csvView = active === "boe" ? "lots" : active
+  const csvView = active === "boe" ? "lots" : active === "drawback" ? "drawback" : "register"
+  const [picked, setPicked] = React.useState<string[]>([])
   const lotsAttention = d ? d.totals.lotsExpiring + d.totals.lotsExtension + d.totals.lotsOverdue : 0
 
   return (
     <>
       <PageHeader title={t("title")} description={t("subtitle")}
-        actions={<Button variant="outline" render={<a href={api.vat.bond.csvUrl(csvView, range)} download={`bond-${csvView}-${to || TODAY}.csv`} />}><Download /> {t(`csv.${csvView}`)}</Button>} />
+        actions={active === "uds" || active === "claims" ? undefined : <Button variant="outline" render={<a href={api.vat.bond.csvUrl(csvView, range)} download={`bond-${csvView}-${to || TODAY}.csv`} />}><Download /> {t(`csv.${csvView}`)}</Button>} />
       {q.isLoading ? <Skeleton className="h-96" /> : q.error ? <EmptyState title={t("error")} hint={q.error.message} /> : d && (
         <div className="grid gap-4">
           <section aria-label={t("licence.title")} className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border bg-card p-4" data-testid="bond-licence">
@@ -100,6 +105,8 @@ export function BondRegisterPage() {
               <TabsTrigger value="register">{t("tab.register")} <span className="ml-1 text-xs text-muted-foreground tabular">{fmtNum(d.rows.length, locale)}</span></TabsTrigger>
               <TabsTrigger value="boe">{t("tab.boe")}{lotsAttention > 0 && <Hourglass className="ml-1 size-3.5 text-warning" aria-label={t("boeAttention")} />}</TabsTrigger>
               <TabsTrigger value="drawback">{t("tab.drawback")} <span className="ml-1 text-xs text-muted-foreground tabular">{fmtNum(d.drawback.rows.length, locale)}</span></TabsTrigger>
+              <TabsTrigger value="uds"><ClipboardCheck className="size-3.5" aria-hidden /> {t("tab.uds")}</TabsTrigger>
+              <TabsTrigger value="claims"><FileStack className="size-3.5" aria-hidden /> {t("tab.claims")}</TabsTrigger>
             </TabsList>
 
             <TabsContent value="register" className="grid gap-3">
@@ -126,6 +133,7 @@ export function BondRegisterPage() {
                           {qty(r.bondedUsed, locale)}
                           {r.exportUse > 0 && <span className="block text-xs text-muted-foreground">{t("reg.metBy", { total: qty(r.exportUse, locale), paid: qty(r.fromDutyPaid, locale), local: qty(r.fromLocal, locale) })}</span>}
                           {r.unsourced > 0 && <span className="block text-xs text-warning">{t("reg.unsourced", { qty: qty(r.unsourced, locale) })}</span>}
+                          {r.clearedOut > 0 && <span className="block text-xs text-muted-foreground" data-testid={`bond-cleared-${r.itemId}`}>{t("reg.clearedOut", { qty: qty(r.clearedOut, locale) })}</span>}
                         </td>
                         <td className="px-3 py-2 text-right font-medium tabular">{qty(r.closing, locale)}</td>
                         <td className="px-3 py-2 text-right tabular">
@@ -165,9 +173,9 @@ export function BondRegisterPage() {
                             ? <Link href={`/purchases/${l.docId}`} className="text-primary underline underline-offset-2">{l.docNo}</Link>
                             : <Link href="/purchases/opening" className="text-primary underline underline-offset-2">{t("boe.carried", { no: l.docNo })}</Link>}</span>
                         </td>
-                        <td className="px-3 py-2">{l.name}<span className="block text-xs text-muted-foreground">{l.uom}</span></td>
+                        <td className="px-3 py-2">{l.name}<span className="block text-xs text-muted-foreground">{l.uom}{l.udNo ? <> · {l.udId ? <Link href={`/vat/bond-consumption/uds/${l.udId}`} className="text-primary tabular underline underline-offset-2">{l.udNo}</Link> : <span className="tabular">{l.udNo}</span>}</> : null}</span></td>
                         <td className="px-3 py-2 text-right tabular">{qty(l.qty, locale)}</td>
-                        <td className="px-3 py-2 text-right tabular">{qty(l.consumed, locale)}</td>
+                        <td className="px-3 py-2 text-right tabular">{qty(l.consumed, locale)}{l.cleared > 0 && <span className="block text-xs text-muted-foreground">{t("boe.cleared", { qty: qty(l.cleared, locale) })}</span>}</td>
                         <td className="px-3 py-2 text-right font-medium tabular">{qty(l.balance, locale)}</td>
                         <td className="px-3 py-2 text-right"><Money value={l.dutyOnBalance} /><span className="block text-xs text-muted-foreground">{t("boe.of")} <Money value={l.dutyForegone} muted0={false} /></span></td>
                         <td className="whitespace-nowrap px-3 py-2 tabular">
@@ -186,17 +194,20 @@ export function BondRegisterPage() {
             </TabsContent>
 
             <TabsContent value="drawback" className="grid gap-3">
-              <dl className="grid gap-3 sm:grid-cols-3">
+              <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-md border bg-card p-3"><dt className="text-xs text-muted-foreground">{t("db.claimable")}</dt><dd className="mt-1 text-lg font-semibold"><Money value={d.drawback.totals.claimable} /></dd></div>
                 <div className={cn("rounded-md border bg-card p-3", d.drawback.totals.expiring ? "border-warning/60" : "")}><dt className="text-xs text-muted-foreground">{t("db.expiring", { days: DRAWBACK_EXPIRING_DAYS })}</dt><dd className="mt-1 text-lg font-semibold"><Money value={d.drawback.totals.expiring} /></dd></div>
                 <div className={cn("rounded-md border bg-card p-3", d.drawback.totals.lapsed ? "border-destructive/50" : "")}><dt className="text-xs text-muted-foreground">{t("db.lapsed")}</dt><dd className="mt-1 text-lg font-semibold"><Money value={d.drawback.totals.lapsed} /></dd></div>
+                <div className="rounded-md border bg-card p-3"><dt className="text-xs text-muted-foreground">{t("db.claimed")}</dt><dd className="mt-1 text-lg font-semibold"><Money value={d.drawback.totals.claimed} /></dd></div>
               </dl>
+              <ClaimFromSelection rows={d.drawback.rows} selected={picked.filter((id) => d.drawback.rows.some((r) => r.saleId === id && !r.claim && r.state !== "lapsed"))} onClear={() => setPicked([])} />
               <div className="overflow-x-auto rounded-lg border bg-card" tabIndex={0} role="region" aria-label={t("db.table")}>
                 <table className="w-full min-w-[960px] text-sm">
                   <caption className="sr-only">{t("db.table")}</caption>
                   <thead><tr className="border-b bg-muted/50 text-left text-xs text-muted-foreground">
+                    <th scope="col" className="w-10 px-3 py-2 font-medium"><span className="sr-only">{t("db.pick")}</span></th>
                     <th scope="col" className="px-3 py-2 font-medium">{t("db.export")}</th>
-                    <th scope="col" className="w-[34%] px-3 py-2 font-medium">{t("db.inputs")}</th>
+                    <th scope="col" className="w-[30%] px-3 py-2 font-medium">{t("db.inputs")}</th>
                     <th scope="col" className="px-3 py-2 text-right font-medium">{t("db.cd")}</th>
                     <th scope="col" className="px-3 py-2 text-right font-medium">{t("db.rd")}</th>
                     <th scope="col" className="px-3 py-2 text-right font-medium">{t("db.total")}</th>
@@ -206,6 +217,10 @@ export function BondRegisterPage() {
                   <tbody>
                     {d.drawback.rows.length ? d.drawback.rows.map((r) => (
                       <tr key={r.saleId} className="border-b align-top last:border-0" data-testid={`drawback-${r.saleId}`}>
+                        <td className="px-3 py-2">{!r.claim && r.state !== "lapsed" && (
+                          <Checkbox aria-label={t("db.pickOne", { no: r.invoiceNo })} checked={picked.includes(r.saleId)} data-testid={`drawback-pick-${r.saleId}`}
+                            onCheckedChange={(v) => setPicked((xs) => (v ? [...xs, r.saleId] : xs.filter((x) => x !== r.saleId)))} />
+                        )}</td>
                         <td className="px-3 py-2"><Link href={`/sales/${r.saleId}`} className="font-medium text-primary tabular hover:underline">{r.invoiceNo}</Link>
                           <span className="block text-xs text-muted-foreground tabular">{fmtDate(r.exportDate, locale)}{r.billNo ? ` · ${r.billNo}` : ""}{r.deemed ? ` · ${t("db.deemed")}` : ""}</span>
                           <span className="block text-xs text-muted-foreground">{r.customerName}</span></td>
@@ -220,15 +235,18 @@ export function BondRegisterPage() {
                         <td className="px-3 py-2 text-right"><Money value={r.cd} /></td>
                         <td className="px-3 py-2 text-right"><Money value={r.rd} /></td>
                         <td className="px-3 py-2 text-right font-medium"><Money value={r.total} /></td>
-                        <td className="whitespace-nowrap px-3 py-2 tabular">{fmtDate(r.deadline, locale)}<span className={cn("block text-xs", r.state === "lapsed" ? "text-destructive" : r.state === "expiring" ? "text-warning" : "text-muted-foreground")}>{r.daysLeft < 0 ? t("daysAgo", { days: -r.daysLeft }) : t("daysLeft", { days: r.daysLeft })}</span></td>
-                        <td className="px-3 py-2"><Pill tone={DB_TONE[r.state]}>{t(`db.state.${r.state}`)}</Pill></td>
+                        <td className="whitespace-nowrap px-3 py-2 tabular">{fmtDate(r.deadline, locale)}<span className={cn("block text-xs", r.claim ? "text-muted-foreground" : r.state === "lapsed" ? "text-destructive" : r.state === "expiring" ? "text-warning" : "text-muted-foreground")}>{r.daysLeft < 0 ? t("daysAgo", { days: -r.daysLeft }) : t("daysLeft", { days: r.daysLeft })}</span></td>
+                        <td className="px-3 py-2">{r.claim ? <ClaimPill claim={r.claim} /> : <Pill tone={DB_TONE[r.state]}>{t(`db.state.${r.state}`)}</Pill>}</td>
                       </tr>
-                    )) : <tr><td colSpan={7} className="px-3 py-10"><EmptyState icon={Undo2} title={t("db.empty")} hint={t("db.emptyHint")} /></td></tr>}
+                    )) : <tr><td colSpan={8} className="px-3 py-10"><EmptyState icon={Undo2} title={t("db.empty")} hint={t("db.emptyHint")} /></td></tr>}
                   </tbody>
                 </table>
               </div>
               <p className="text-xs text-muted-foreground">{t("db.note", { months: DRAWBACK_MONTHS })}</p>
             </TabsContent>
+
+            <TabsContent value="uds"><BondUdsTab /></TabsContent>
+            <TabsContent value="claims"><ClaimsTab /></TabsContent>
           </Tabs>
         </div>
       )}

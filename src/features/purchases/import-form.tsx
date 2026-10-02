@@ -64,19 +64,21 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
   const foreign = vendors.filter((v) => v.mode === "Foreign")
   // R6: advance tax follows the company's importer class (manufacturer 2 % / commercial importer 7.5 %), not the tariff row
   const { data: vatSettings } = useQuery({ queryKey: ["vat-settings"], queryFn: () => api.vat.settings() })
+  // R6.5: our own UDs / UP still open — a bonded import is brought in against one of them
+  const { data: bondUds } = useQuery({ queryKey: ["bondUds"], queryFn: () => api.vat.bondUds.register(), staleTime: 60_000 })
 
   const form = useForm<In, unknown, Out>({
     resolver: zodResolver(importInput), mode: "onTouched",
     defaultValues: initial ? {
       vendorId: initial.vendorId, issueDate: initial.issueDate, challanNo: initial.challanNo, challanDate: initial.challanDate, method: initial.method,
       discount: initial.discount, paid: initial.paid, issuedBy: initial.issuedBy, designation: initial.designation, narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "", category: "goods",
-      boe: { lcNo: initial.boe?.lcNo ?? "", lcDate: initial.boe?.lcDate ?? "", customsHouse: initial.boe?.customsHouse ?? "301", origin: initial.boe?.origin ?? "", cnfFirm: initial.boe?.cnfFirm ?? "", receiveAddress: initial.boe?.receiveAddress ?? "", bonded: initial.boe?.bonded ?? false },
+      boe: { lcNo: initial.boe?.lcNo ?? "", lcDate: initial.boe?.lcDate ?? "", customsHouse: initial.boe?.customsHouse ?? "301", origin: initial.boe?.origin ?? "", cnfFirm: initial.boe?.cnfFirm ?? "", receiveAddress: initial.boe?.receiveAddress ?? "", bonded: initial.boe?.bonded ?? false, udNo: initial.boe?.udNo ?? "" },
       lines: initial.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, usd: l.duty?.usd ?? 0, usdRate: l.duty?.usdRate ?? 122, av: l.duty && round2(l.duty.usd * l.duty.usdRate) !== l.duty.av ? l.duty.av : undefined, price: 0,
         cdRate: l.duty?.cdRate ?? 0, rdRate: l.duty?.rdRate ?? 0, sdRate: l.sdRate, vatRate: l.vatRate, aitRate: l.duty?.aitRate ?? 0, atRate: l.duty?.atRate ?? 0, rebateable: l.rebateable ?? true, vds: false })),
     } : {
       vendorId: "", issueDate: TODAY, challanNo: "", challanDate: TODAY, method: "Transaction", discount: 0, paid: 0, issuedBy: me.user.name, designation: me.user.designation,
       narration: "", process: "Created", branchId: "", category: "goods",
-      boe: { lcNo: "", lcDate: "", customsHouse: "301", origin: "", cnfFirm: "", receiveAddress: "", bonded: false }, lines: [blankLine()],
+      boe: { lcNo: "", lcDate: "", customsHouse: "301", origin: "", cnfFirm: "", receiveAddress: "", bonded: false, udNo: "" }, lines: [blankLine()],
     },
   })
   const { register, control, handleSubmit, setValue, getValues, setError, formState: { errors, isDirty, isSubmitting } } = form
@@ -139,7 +141,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
   const methodItems = (["Transaction", "Bank", "Cheque"] as const).map((v) => ({ value: v, label: tpm(v) }))
   const chItems = CUSTOMS_HOUSES.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))
   const originItems = ORIGIN_COUNTRIES.map((c) => ({ value: c, label: c }))
-  const sel = (name: "boe.customsHouse" | "boe.origin" | "method" | "branchId", label: string, items: { value: string; label: string }[], opts: { required?: boolean; fallback?: string } = {}) => (
+  const sel = (name: "boe.customsHouse" | "boe.origin" | "method" | "branchId" | "boe.udNo", label: string, items: { value: string; label: string }[], opts: { required?: boolean; fallback?: string } = {}) => (
     <Field id={name} label={label} required={opts.required} error={err(name)}>
       {(a) => <Controller control={control} name={name} render={({ field }) => (
         <Select value={(field.value as string) || opts.fallback || ""} onValueChange={(v) => { field.onChange(v); field.onBlur() }} items={items}>
@@ -184,6 +186,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
                 <Controller control={control} name="boe.bonded" render={({ field }) => <Switch id="boe-bonded" checked={!!field.value} onCheckedChange={field.onChange} aria-describedby="boe-bonded-hint" />} />
                 <div className="grid gap-0.5"><label htmlFor="boe-bonded" className="text-sm font-medium">{t("field.bonded")}</label><p id="boe-bonded-hint" className="text-xs text-muted-foreground">{t("hint.bonded")}</p></div>
               </div>
+              {bonded && sel("boe.udNo", t("field.udNo"), [{ value: "", label: t("noUd") }, ...(bondUds?.rows ?? []).filter((u) => !u.settlement || u.no === initial?.boe?.udNo).map((u) => ({ value: u.no, label: `${u.no} · ${u.masterLcNo}` }))])}
             </CardContent>
           </Card>
 

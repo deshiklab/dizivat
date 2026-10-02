@@ -182,6 +182,7 @@ function ExportCard({ s }: { s: Sale }) {
       [trm("udNo"), e.udNo ? `${e.udNo}${e.udDate ? ` · ${fmtDate(e.udDate, locale)}` : ""}` : "—"],
       [trm("exporterBond"), e.exporterBond || buyer.data?.bondLicenseNo || "—"],
     ] as [string, string][] : [[trm("expNo"), e.expNo || "—"]] as [string, string][]),
+    ...(e.ownUdNo ? [[trm("ownUdNo"), e.ownUdNo]] as [string, string][] : []),
     [trm("fcValue"), e.fcValue ? `${e.currency ?? ""} ${fmtNum(e.fcValue, locale, 2)}${e.exchangeRate ? ` @ ${fmtNum(e.exchangeRate, locale, 2)}${bdt ? ` = Tk ${fmtNum(bdt, locale, 2)}` : ""}` : ""}` : "—"],
     ...(!e.deemed ? [
       [t("export.billNo"), `${e.billNo} · ${e.billDate ? fmtDate(e.billDate, locale) : "—"}`], [t("export.customsHouse"), customsHouseName(e.customsHouse)],

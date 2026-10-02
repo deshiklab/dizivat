@@ -46,8 +46,10 @@ export const REGISTRY = {
   "rmg-exports-and-uds": { category: "nbrVat", routes: ["/vat/export-compliance", "/vat/ud-register"], related: ["exports", "sales-invoices"] },
   "sd-on-exported-inputs": { category: "nbrVat", routes: ["/vat/adjustments"], related: ["vat-adjustments", "vat-return-9-1"] },
   "ud-amendments-and-bblc": { category: "nbrVat", routes: ["/vat/ud-register"], related: ["rmg-exports-and-uds", "exports"] },
-  "bond-consumption-register": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["duty-drawback", "rmg-exports-and-uds", "local-purchases"] },
-  "duty-drawback": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["bond-consumption-register", "sd-on-exported-inputs"] },
+  "bond-consumption-register": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["duty-drawback", "ud-settlement", "rmg-exports-and-uds", "local-purchases"] },
+  "duty-drawback": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["drawback-claims", "bond-consumption-register", "sd-on-exported-inputs"] },
+  "ud-settlement": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["bond-consumption-register", "drawback-claims", "rmg-exports-and-uds"] },
+  "drawback-claims": { category: "nbrVat", routes: ["/vat/bond-consumption"], related: ["duty-drawback", "ud-settlement"] },
   "interest-and-penalties": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "treasury-tr6"] },
   "vat-settings-and-tariff": { category: "nbrVat", routes: ["/vat/settings", "/vat/tariff"], related: ["items-and-hs-codes", "vat-return-9-1"] },
 

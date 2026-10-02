@@ -16,7 +16,7 @@ type Kind = "sale" | "purchase"
  * Validates a purchase body for any variant (R2). The vendor decides the schema: Foreign → import (Bill of Entry,
  * USD lines, duty rates); `category: "service"` → service-code lines. Returns the parsed data or a problem Response.
  */
-export function parsePurchase(body: unknown): Response | { data: z.output<typeof purchaseInput> | z.output<typeof importInput>; vendor: Party } {
+export function parsePurchase(body: unknown, self?: Purchase): Response | { data: z.output<typeof purchaseInput> | z.output<typeof importInput>; vendor: Party } {
   const vid = (body as { vendorId?: unknown } | null)?.vendorId
   const vendor = db.vendors.find((x) => x.id === vid && x.active !== false)
   const isImport = vendor?.mode === "Foreign" && (body as { category?: string }).category !== "service"
@@ -28,6 +28,14 @@ export function parsePurchase(body: unknown): Response | { data: z.output<typeof
   const bad = (d.category === "service" ? unknownServices(d.lines) : unknownItems(d.lines, "buyable")) ?? unknownBranch(d.branchId)
   if (bad) return problem(422, "Validation failed", bad)
   if (isImport && (d as z.output<typeof importInput>).boe.lcDate > d.challanDate) return problem(422, "Validation failed", { "boe.lcDate": ["lcAfterBoe"] })
+  // R6.5: bonded imports may name our own UD / UP — on file and not settled yet (unless already on it)
+  const boe = isImport ? (d as z.output<typeof importInput>).boe : undefined
+  const ud = boe?.bonded ? boe.udNo?.trim().toUpperCase() : ""
+  if (ud) {
+    const u = db.bondUds.find((x) => x.no.toUpperCase() === ud)
+    if (!u) return problem(422, "Validation failed", { "boe.udNo": ["unknownUd"] })
+    if (u.settlement && self?.boe?.udNo?.toUpperCase() !== ud) return problem(422, "Validation failed", { "boe.udNo": ["settledUd"] })
+  }
   const lock = lockedField(d.issueDate, "issueDate"); if (lock) return lock
   return { data: d, vendor }
 }
@@ -93,7 +101,7 @@ export function docRoutes(k: Kind) {
       addHistory(d, user.name, "edited", undefined, docDiff(before, d))
       if (parsed.data.process === "Approved") approve(k, d, user.name)
     } else {
-      const r = parsePurchase(body)
+      const r = parsePurchase(body, d as Purchase)
       if (r instanceof Response) return r
       if (r.data.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
       if ((r.data.category === "service") !== ((d as Purchase).category === "service")) return problem(409, "A goods purchase cannot become a service purchase (or vice versa).")

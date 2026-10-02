@@ -1,4 +1,4 @@
-import type { UdRecord, AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BondUd, DrawbackClaim, UdRecord, AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -10,6 +10,7 @@ import { EXTRA_VENDORS, enrichImports, seedDebitNotes, seedMasterItems, seedOpen
 import { EXTRA_CUSTOMERS, enrichCustomers, enrichExports, seedBoms, seedCreditNotes, seedProduction, seedR3Sales } from "./seed-r3"
 import { seedR4 } from "./seed-r4"
 import { seedRealisations, seedUds } from "./seed-r6"
+import { seedBondUds, seedDrawbackClaims } from "./seed-r65"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -20,7 +21,7 @@ interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -30,6 +31,8 @@ interface DB {
   accountingConfig: AccountingConfig; vatSettings: VatSettings
   /** R6.2 (RMG): exporters' UD / UP records */
   uds: UdRecord[]
+  /** R6.5 (RMG): our own UDs / UP (bond settlement) and duty-drawback claims */
+  bondUds: BondUd[]; drawbackClaims: DrawbackClaim[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -102,6 +105,9 @@ function init(): DB {
   // R6.3: SD-paid packing imports (9.1 note 40 — SD on inputs of exported goods)
   seedSdImports(d.purchases, d.vendors, d.items, { id: main, name: mainName })
   seedBondedImports(d.purchases, d.vendors, d.items, { id: main, name: mainName })
+  // R6.5: own UDs / UP (links the bonded BoEs and exports) and the drawback claim history
+  const bondUds = seedBondUds(d.purchases, d.sales, d.items, boms)
+  const drawbackClaims = seedDrawbackClaims({ purchases: d.purchases, sales: d.sales, boms, items: d.items, openings })
   const r4 = seedR4({ sales: d.sales, purchases: d.purchases, creditNotes, debitNotes, customers: d.customers, vendors: d.vendors })
   const r2Docs = [
     ...debitNotes.map((x) => ({ entity: "debitNote" as const, id: x.id, ref: x.no, history: x.history })),
@@ -118,24 +124,26 @@ function init(): DB {
     ...r4.treasury.map((x) => ({ entity: "treasury" as const, id: x.id, ref: x.no, history: x.history })),
     ...r4.returns.map((x) => ({ entity: "vatReturn" as const, id: x.period, ref: `9.1 · ${x.period.slice(5)}-${x.period.slice(0, 4)}`, history: x.history })),
     ...uds.map((x) => ({ entity: "ud" as const, id: x.id, ref: `${x.no} · ${x.customerName}`, history: x.history })),
+    ...bondUds.map((x) => ({ entity: "bondUd" as const, id: x.id, ref: x.no, history: x.history })),
+    ...drawbackClaims.map((x) => ({ entity: "drawbackClaim" as const, id: x.id, ref: x.no, history: x.history })),
   ]
   seedAudit(d.sales, d.purchases, [...transfers, ...damages], r2Docs)
   return {
     ...d, trash: [], units: seedUnits(), transfers, damages, debitNotes, openings, masterItems,
     creditNotes, boms, workOrders, batches, productionConfig: { procedure: "directStock", consumption: "standard" },
     ...r4,
-    uds,
+    uds, bondUds, drawbackClaims,
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
       account: r4.moneyAccounts.length, receipt: r4.moneyDocs.filter((x) => x.kind === "receipt").length, payment: r4.moneyDocs.filter((x) => x.kind === "payment").length,
-      treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length,
+      treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length, bondUd: bondUds.length, claim: drawbackClaims.length,
     },
   }
 }
 
 /** Seeds the global audit log from document histories, recent sign-ins and a few admin events. */
-type R2Doc = { entity: "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "account" | "receipt" | "payment" | "vds" | "adjustment" | "treasury" | "vatReturn" | "ud"; id: string; ref: string; history?: HistoryEntry[] }
+type R2Doc = { entity: "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "account" | "receipt" | "payment" | "vds" | "adjustment" | "treasury" | "vatReturn" | "ud" | "bondUd" | "drawbackClaim"; id: string; ref: string; history?: HistoryEntry[] }
 function seedAudit(sales: Sale[], purchases: Purchase[], stockDocs: StockDoc[], r2Docs: R2Doc[]) {
   if (auditStore.events.length) return
   const raw: Parameters<typeof recordAudit>[0][] = []

@@ -18,12 +18,14 @@
  * Bonding period (SRO, special bonded warehouse / direct exporter): 24 months from the Bill of Entry, extendable by
  * the Commissioner for at most 6 months; after that the duty on the balance is payable.
  * Drawback (DEDO, Mushak-22): customs duty + regulatory duty on imported inputs consumed in an export, claimed
- * within 6 months of the export. VAT and AT are already input credit in the return, SD on exported inputs goes
+ * within 6 months of the export.
+ * R6.5: a UD settlement that clears a left-over balance on payment of duty takes it out of the bond (the UD's own Bills
+ * of Entry first); exports already on a drawback claim are shown with it and no longer count as claimable. VAT and AT are already input credit in the return, SD on exported inputs goes
  * through 9.1 note 40 and AIT is an income-tax advance — none of them is counted here.
  */
 import { addMonths, daysBetween } from "./sd-export"
 import { calcImportLine, round2 } from "./vat"
-import type { Bom, BondItemRow, BondLot, BondRegister, BondRow, DrawbackRow, Item, Line, OpeningEntry, Purchase, Sale } from "./types"
+import type { Bom, BondItemRow, BondLot, BondRegister, BondRow, BondUd, DrawbackClaim, DrawbackRow, Item, Line, OpeningEntry, Purchase, Sale } from "./types"
 
 /**
  * R6.4: a bonded (IM-7) Bill-of-Entry line — the duty stack is assessed as usual but suspended under the bond, so
@@ -56,6 +58,15 @@ export interface BondSource {
   boms: Bom[]
   items: Item[]
   openings: OpeningEntry[]
+  /** R6.5: our own UDs — a settlement that clears a balance on duty takes it out of the bond */
+  bondUds?: BondUd[]
+  /** R6.5: drawback claims — exports on a claim are no longer "claimable" */
+  drawbackClaims?: DrawbackClaim[]
+}
+
+/** R6.5: the active (not rejected) claim an export is on, latest first. */
+export function claimOf(claims: DrawbackClaim[] | undefined, saleId: string): DrawbackClaim | undefined {
+  return (claims ?? []).filter((c) => c.status !== "rejected" && c.lines.some((l) => l.saleId === saleId)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0]
 }
 
 /** Approved BOM (input–output coefficient) of a finished good in force on `date`: latest effective date, then version. */
@@ -73,7 +84,9 @@ type Receipt =
   | { kind: "paid"; date: string; purchase: Purchase; qty: number; cdPer: number; rdPer: number }
   | { kind: "local"; date: string; qty: number }
 type Use = { kind: "use"; date: string; sale: Sale; qty: number }
-type Ev = Receipt | Use
+/** R6.5: bonded balance cleared on payment of duty at a UD settlement (the UD's own Bills of Entry first) */
+type Clear = { kind: "clear"; date: string; qty: number; udNo: string }
+type Ev = Receipt | Use | Clear
 
 function lotState(l: BondLot, asOf: string): BondLot["state"] {
   if (l.balance <= EPS) return "cleared"
@@ -115,7 +128,12 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     p.lines.forEach((l, i) => {
       if (!(l.qty > 0)) return
       if (imp && p.boe?.bonded) {
-        push(l.itemId, { kind: "bonded", date: p.issueDate, lot: newLot("import", p.id, p.invoiceNo, p.boe.no || p.challanNo, p.boe.date || p.challanDate, l.itemId, l.name, l.uom, l.qty, l.duty?.foregone?.total ?? 0, i) })
+        const lot = newLot("import", p.id, p.invoiceNo, p.boe.no || p.challanNo, p.boe.date || p.challanDate, l.itemId, l.name, l.uom, l.qty, l.duty?.foregone?.total ?? 0, i)
+        if (p.boe.udNo) {
+          lot.udNo = p.boe.udNo
+          lot.udId = src.bondUds?.find((u) => u.no.toUpperCase() === p.boe!.udNo!.toUpperCase())?.id
+        }
+        push(l.itemId, { kind: "bonded", date: p.issueDate, lot })
       } else if (imp) {
         push(l.itemId, { kind: "paid", date: p.issueDate, purchase: p, qty: l.qty, cdPer: (l.duty?.cd ?? 0) / l.qty, rdPer: (l.duty?.rd ?? 0) / l.qty })
       } else {
@@ -137,6 +155,13 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     }
   }
 
+  // R6.5: UD settlements — balances cleared on payment of duty leave the bond
+  for (const u of src.bondUds ?? []) {
+    const st = u.settlement
+    if (!st || st.date > to) continue
+    for (const l of st.lines) if (l.dutyPaidQty > 0) push(l.itemId, { kind: "clear", date: st.date, qty: l.dutyPaidQty, udNo: u.no })
+  }
+
   const rows: BondItemRow[] = []
   const lots: BondLot[] = []
   const draw = new Map<string, DrawbackRow>()
@@ -144,12 +169,13 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     const it = itemOf.get(itemId)
     if (!it) continue
     // receipts before consumption on the same day; stable otherwise
-    evs.sort((a, b) => (a.date === b.date ? (a.kind === "use" ? 1 : 0) - (b.kind === "use" ? 1 : 0) : a.date < b.date ? -1 : 1))
+    const out = (e: Ev) => (e.kind === "use" || e.kind === "clear" ? 1 : 0)
+    evs.sort((a, b) => (a.date === b.date ? out(a) - out(b) : a.date < b.date ? -1 : 1))
     const bonded: BondLot[] = []
     const paid: { r: Extract<Receipt, { kind: "paid" }>; left: number }[] = []
     let local = 0
     const row: BondItemRow = {
-      itemId, name: it.name, uom: it.unit, hsCode: it.hsCode, opening: 0, bondedIn: 0, bondedUsed: 0, closing: 0, dutyPaidIn: 0, localIn: 0,
+      itemId, name: it.name, uom: it.unit, hsCode: it.hsCode, opening: 0, bondedIn: 0, bondedUsed: 0, clearedOut: 0, closing: 0, dutyPaidIn: 0, localIn: 0,
       exportUse: 0, fromDutyPaid: 0, fromLocal: 0, unsourced: 0, physical: null, shortfall: 0, dutyPerUnit: 0, dutyOnBalance: 0, dutyAtRisk: 0, state: "ok",
     }
     let ever = false
@@ -158,11 +184,23 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
       if (e.kind === "bonded") { bonded.push(e.lot); ever = true; if (inRange) row.bondedIn += e.lot.qty; else row.opening += e.lot.qty; continue }
       if (e.kind === "paid") { paid.push({ r: e, left: e.qty }); if (inRange) row.dutyPaidIn += e.qty; continue }
       if (e.kind === "local") { local += e.qty; if (inRange) row.localIn += e.qty; continue }
+      if (e.kind === "clear") {
+        let need = e.qty
+        const order = [...bonded.filter((l) => l.udNo === e.udNo), ...bonded.filter((l) => l.udNo !== e.udNo)]
+        for (const l of order) {
+          if (need <= EPS) break
+          const take = Math.min(need, l.qty - l.consumed - l.cleared)
+          if (take <= 0) continue
+          l.cleared += take; need -= take
+          if (inRange) row.clearedOut += take; else row.opening -= take
+        }
+        continue
+      }
       // consumption
       let need = e.qty
       for (const l of bonded) {
         if (need <= EPS) break
-        const take = Math.min(need, l.qty - l.consumed)
+        const take = Math.min(need, l.qty - l.consumed - l.cleared)
         if (take <= 0) continue
         l.consumed += take; need -= take
         if (inRange) row.bondedUsed += take; else row.opening -= take
@@ -181,14 +219,15 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     if (!ever && !consumedInRange) continue
     for (const l of bonded) {
       l.consumed = q3(l.consumed)
-      l.balance = q3(l.qty - l.consumed)
+      l.cleared = q3(l.cleared)
+      l.balance = q3(l.qty - l.consumed - l.cleared)
       l.dutyOnBalance = l.qty ? round2((l.dutyForegone * l.balance) / l.qty) : 0
       l.daysLeft = daysBetween(to, l.dueDate)
       l.state = lotState(l, to)
       lots.push(l)
     }
-    row.opening = q3(row.opening); row.bondedIn = q3(row.bondedIn); row.bondedUsed = q3(row.bondedUsed)
-    row.closing = q3(row.opening + row.bondedIn - row.bondedUsed)
+    row.opening = q3(row.opening); row.bondedIn = q3(row.bondedIn); row.bondedUsed = q3(row.bondedUsed); row.clearedOut = q3(row.clearedOut)
+    row.closing = q3(row.opening + row.bondedIn - row.bondedUsed - row.clearedOut)
     row.dutyPaidIn = q3(row.dutyPaidIn); row.localIn = q3(row.localIn); row.exportUse = q3(row.exportUse)
     row.fromDutyPaid = q3(row.fromDutyPaid); row.fromLocal = q3(row.fromLocal); row.unsourced = q3(row.unsourced)
     row.dutyOnBalance = round2(bonded.reduce((a, l) => a + l.dutyOnBalance, 0))
@@ -199,7 +238,7 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     }
     const overdueDuty = bonded.filter((l) => l.state === "overdue").reduce((a, l) => a + l.dutyOnBalance, 0)
     row.dutyAtRisk = round2(Math.min(row.dutyOnBalance, row.shortfall * row.dutyPerUnit + overdueDuty))
-    row.state = row.shortfall > EPS ? "shortfall" : row.unsourced > EPS ? "overUsed" : !ever || (row.closing <= EPS && row.bondedIn <= EPS && row.bondedUsed <= EPS) ? "idle" : "ok"
+    row.state = row.shortfall > EPS ? "shortfall" : row.unsourced > EPS ? "overUsed" : !ever || (row.closing <= EPS && row.bondedIn <= EPS && row.bondedUsed <= EPS && row.clearedOut <= EPS) ? "idle" : "ok"
     rows.push(row)
   }
   const order = { shortfall: 0, overUsed: 1, ok: 2, idle: 3 }
@@ -214,6 +253,8 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     r.inputs.forEach((x) => { x.qty = q3(x.qty); x.cd = round2(x.cd); x.rd = round2(x.rd) })
     r.daysLeft = daysBetween(to, r.deadline)
     r.state = r.daysLeft < 0 ? "lapsed" : r.daysLeft <= DRAWBACK_EXPIRING_DAYS ? "expiring" : "open"
+    const c = claimOf(src.drawbackClaims, r.saleId)
+    if (c) r.claim = { id: c.id, no: c.no, status: c.status }
     return r
   }).filter((r) => r.total > 0).sort((a, b) => (a.exportDate < b.exportDate ? 1 : a.exportDate > b.exportDate ? -1 : a.saleId.localeCompare(b.saleId)))
   const sum = (xs: DrawbackRow[]) => round2(xs.reduce((a, r) => a + r.total, 0))
@@ -224,7 +265,10 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
     rows, lots,
     drawback: {
       rows: drawRows,
-      totals: { claimable: sum(drawRows.filter((r) => r.state !== "lapsed")), expiring: sum(drawRows.filter((r) => r.state === "expiring")), lapsed: sum(drawRows.filter((r) => r.state === "lapsed")) },
+      totals: {
+        claimable: sum(drawRows.filter((r) => !r.claim && r.state !== "lapsed")), expiring: sum(drawRows.filter((r) => !r.claim && r.state === "expiring")),
+        lapsed: sum(drawRows.filter((r) => !r.claim && r.state === "lapsed")), claimed: sum(drawRows.filter((r) => !!r.claim)),
+      },
     },
     noCoefficient,
     totals: {
@@ -243,7 +287,7 @@ export function bondRegister(src: BondSource, o: BondOptions): BondRegister {
 function newLot(source: BondLot["source"], docId: string, docNo: string, boeNo: string, boeDate: string, itemId: string, name: string, uom: string, qty: number, dutyForegone: number, line = 0): BondLot {
   const dueDate = addMonths(boeDate, BOND_PERIOD_MONTHS)
   return {
-    key: `${docId}|${line}`, source, docId, docNo, boeNo, boeDate, itemId, name, uom, qty, consumed: 0, balance: qty, dutyForegone: round2(dutyForegone), dutyOnBalance: 0,
+    key: `${docId}|${line}`, source, docId, docNo, boeNo, boeDate, itemId, name, uom, qty, consumed: 0, cleared: 0, balance: qty, dutyForegone: round2(dutyForegone), dutyOnBalance: 0,
     dueDate, extendedDue: addMonths(boeDate, BOND_PERIOD_MONTHS + BOND_EXTENSION_MONTHS), daysLeft: 0, state: "open",
   }
 }

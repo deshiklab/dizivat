@@ -1,4 +1,4 @@
-# RMG (ready-made garments) — VAT features (R6 / R6.2 / R6.3 / R6.4)
+# RMG (ready-made garments) — VAT features (R6 / R6.2 / R6.3 / R6.4 / R6.5)
 
 DiziVAT's main customer segment is the garment industry. That covers two kinds of business:
 
@@ -172,7 +172,60 @@ tax, so tax payable and the returns are unchanged.
 API: `GET /vat/bond?from&to[&format=csv&view=register|lots|drawback]`; `POST /purchases` with `boe.bonded: true` — see
 `docs/API.md`.
 
-## 7. Still planned
+## 7. R6.5 — UD bond settlement and duty-drawback claims
 
-1. Drawback claim tracking (Mushak-22 reference, DEDO status) and UD-wise bond settlement.
-2. Export proceeds matched automatically from the bank's PRC file.
+R6.4 showed *where* bonded inputs and drawback stand; R6.5 adds the two workflows that close them out with customs.
+
+### 7.1 Own UDs / UPs and their settlement
+
+A direct exporter imports its bonded inputs against the **UD** (BGMEA / BKMEA) or **UP** (Bond Commissionerate) of each
+export order. The R6.2 UD register holds *customers'* UDs (for our deemed exports); R6.5 adds **our own** UDs / UPs:
+
+- **Bond consumption register › UD settlement** (`/vat/bond-consumption?tab=uds`) — one row per UD: garments ordered vs
+  shipped, inputs brought in / used / left, duty on the balance, state (*in progress*, *ready to settle* once fully
+  shipped or expired, *settled*) and warnings (imports beyond the UD, exports without a BOM, draft exports, expired).
+- Links: a bonded import names the UD under **Imported against our UD / UP** (`boe.udNo`); an export or deemed-export
+  invoice names it under **Shipped under our UD / UP** (`export.ownUdNo`). Unknown or already-settled UDs → 422.
+- **Statement** per input: UD quantity, brought forward (from earlier settlements), imported, consumed (exports ×
+  BOM gross coefficient on the export date), *from other stock* (consumption beyond the UD's own inputs — duty-paid or
+  local), balance, excess import, duty foregone / per unit / on the balance.
+- **Settlement** (`POST /vat/bond-uds/{id}/settle`, approvers): date, Bond Commissionerate reference, payment reference;
+  every balance split between **cleared on duty** and **carried forward** to another open UD that lists the input. The
+  statement is frozen; carried quantities appear as *brought forward* on the receiving UD; the cleared quantity leaves
+  the bond register (the UD's own Bills of Entry first) and shows there as *cleared on duty*.
+- Printable / PDF **settlement statement** (`UD-settlement_<no>.pdf`).
+
+The statement is per UD, as customs settles it; the bond register follows the stock FIFO across UDs, so the two can
+differ for an individual Bill of Entry while agreeing in total.
+
+### 7.2 Duty-drawback claims
+
+- On the **Duty drawback** tab, tick open exports (not lapsed, not already claimed) → **Create claim**: a draft with the
+  CD + RD frozen per export and input, numbered `DBK-MMYY####`.
+- Lifecycle: **draft → filed** (date inside every export's six-month window, DEDO reference) **→ sanctioned** (amount ≤
+  claimed; a reason is required when less) **→ refunded** (amount ≤ sanctioned, payment reference); a filed claim can be
+  **rejected** (reason), which frees its exports to be claimed again while their window is open. Drafts can be deleted.
+- The drawback view shows each export's claim; *claimable / expiring / lapsed* now count only exports not on a claim,
+  plus a new *on drawback claims* total. The **Drawback claims** tab totals drafts, pending, sanctioned, refunded and
+  disallowed (claimed − sanctioned).
+- Printable / PDF **claim statement** — the schedule that goes with the Mushak-22 application (`Drawback-claim_<no>.pdf`).
+
+### 7.3 Demo data (seed r6.5)
+
+| Own UD / UP | Order | Bonded BoE | Exports | State |
+|---|---|---|---|---|
+| BKMEA/UD/2026/02114 | 24,600 polo | C-1022835 compact yarn 10,000 kg | S-03260014, S-05260016 | Settled 15 Sep 2026: 7,025.76 kg consumed, 2,000 kg carried to 03390, 974.24 kg cleared on duty (৳ 121,591.00) |
+| BGMEA/UD/2026/00412 | 11,800 jeans | C-1012264 denim 8,000 m | S-02260017 | Ready (expired); consumption beyond the UD came from duty-paid stock — nothing due |
+| BGMEA/UD/2026/01980 | 9,000 jeans | C-1031147 denim + pocketing | — | In progress; pocketing 500 m beyond the UD |
+| CUS/UP/2026/1187 | 16,000 kg single jersey | C-1036620 combed yarn + elastane | S-09260013 (deemed) | In progress, 31 % shipped |
+| BKMEA/UD/2026/03390 | 30,000 polo | 2,000 kg brought forward | — | In progress |
+
+Claims: DBK-11250001 (refunded, ৳ 2,395.08 disallowed for wastage above the coefficient), DBK-12250002 (refunded),
+DBK-03260003 (sanctioned, awaiting refund), DBK-04260004 (rejected — its export has lapsed since), DBK-05260005 and
+DBK-07260006 (filed), DBK-09260007 (draft). Still unclaimed: S-03260019 (window closes today) and the June jeans
+shipment S-06260012 (৳ 804,310.70).
+
+## 8. Still planned
+
+1. Export proceeds matched automatically from the bank's PRC file.
+2. Drawback at the flat (schedule) rate and DEDO's electronic submission once it is available.

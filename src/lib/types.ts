@@ -153,6 +153,8 @@ export interface ExportInfo {
   exporterBond?: string
   /** R6.2 (RMG): export proceeds realised through the bank (PRC), direct exports and deemed exports alike */
   realisations?: Realisation[]
+  /** R6.5 (RMG): our own UD / UP this shipment is made under — its bonded inputs are settled against it */
+  ownUdNo?: string
 }
 
 /** R6.2: one bank realisation of export proceeds — Proceeds Realisation Certificate (PRC). */
@@ -176,7 +178,7 @@ export interface Purchase extends DocBase {
   boe?: BillOfEntry
 }
 export type PurchaseCategory = "goods" | "service"
-export interface BillOfEntry { no: string; date: string; lcNo: string; lcDate: string; customsHouse: string; origin: string; cnfFirm?: string; receiveAddress?: string; /** R6.4: warehoused under the customs bond (IM-7) — no duty / VAT paid, no input credit; tracked in the bond register */ bonded?: boolean }
+export interface BillOfEntry { no: string; date: string; lcNo: string; lcDate: string; customsHouse: string; origin: string; cnfFirm?: string; receiveAddress?: string; /** R6.4: warehoused under the customs bond (IM-7) — no duty / VAT paid, no input credit; tracked in the bond register */ bonded?: boolean; /** R6.5: own UD / UP the bonded inputs were imported against (settled per UD after export) */ udNo?: string }
 
 export interface Page<T, Totals = Record<string, number>> {
   data: T[]
@@ -255,6 +257,8 @@ export interface ItemLedger {
 export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings"
   /** R6.2 */
   | "ud" | "backup" | "access" | "import"
+  /** R6.5 */
+  | "bondUd" | "drawbackClaim"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
@@ -997,7 +1001,11 @@ export interface BondLot {
   itemId: string; name: string; uom: string
   qty: number
   consumed: number
+  /** R6.5: cleared from the bond on payment of duty (UD settlement) */
+  cleared: number
   balance: number
+  /** R6.5: own UD / UP the Bill of Entry was imported against */
+  udNo?: string; udId?: string
   dutyForegone: number
   /** duty still secured by the bond on the unconsumed balance */
   dutyOnBalance: number
@@ -1016,6 +1024,8 @@ export interface BondItemRow {
   bondedIn: number
   /** export consumption met from bonded stock */
   bondedUsed: number
+  /** R6.5: cleared from the bond on payment of duty when a UD was settled */
+  clearedOut: number
   closing: number
   /** s.114(3): duty-paid imports and local / opening stock received in the range */
   dutyPaidIn: number
@@ -1044,6 +1054,8 @@ export interface DrawbackRow {
   deadline: string
   daysLeft: number
   state: "open" | "expiring" | "lapsed"
+  /** R6.5: the drawback claim this export is on (rejected claims do not count) */
+  claim?: { id: string; no: string; status: ClaimStatus }
 }
 
 export interface BondRegister {
@@ -1051,8 +1063,128 @@ export interface BondRegister {
   licence: BondRow
   rows: BondItemRow[]
   lots: BondLot[]
-  drawback: { rows: DrawbackRow[]; totals: { claimable: number; expiring: number; lapsed: number } }
+  /** claimable / expiring / lapsed: exports not on a claim yet; claimed: on a draft / filed / sanctioned / paid claim (R6.5) */
+  drawback: { rows: DrawbackRow[]; totals: { claimable: number; expiring: number; lapsed: number; claimed: number } }
   /** export lines whose finished good has no approved BOM on the export date (consumption unknown) */
   noCoefficient: { saleId: string; invoiceNo: string; date: string; itemId: string; name: string; qty: number }[]
   totals: { bondedItems: number; dutyOnBalance: number; dutyAtRisk: number; shortfallItems: number; overUsedItems: number; lotsExpiring: number; lotsExtension: number; lotsOverdue: number }
+}
+
+/* ── R6.5 — RMG: own UD / UP bond settlement and duty-drawback claims ─────────────────────────────────────── */
+
+/** Who issued our own UD / UP: BGMEA (woven), BKMEA (knit) or the Customs Bond Commissionerate (UP). */
+export type BondUdIssuer = "BGMEA" | "BKMEA" | "Customs"
+/** An input the UD permits us to import under bond for the order. */
+export interface BondUdInput { itemId: string; name: string; hsCode: string; uom: string; qty: number }
+/** A finished good the order exports. */
+export interface BondUdGarment { itemId: string; name: string; uom: string; qty: number }
+
+/**
+ * Our own UD (BGMEA / BKMEA) or UP (Bond Commissionerate) for one export order: the bonded inputs it permits and the
+ * garments it exports. After the last shipment (or expiry) the Bond Commissionerate settles it: inputs imported against
+ * it vs consumed by its exports through the coefficient; any balance is carried to another UD or cleared on duty.
+ */
+export interface BondUd {
+  id: string; no: string; kind: "UD" | "UP"; issuer: BondUdIssuer; date: string; expiry: string
+  masterLcNo: string; masterLcValue?: number; currency?: string; buyer?: string
+  inputs: BondUdInput[]; garments: BondUdGarment[]
+  note?: string
+  settlement?: UdSettlement
+  createdBy: string; createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+
+/** Settlement statement line — one input of the UD. */
+export interface UdStatementLine {
+  itemId: string; name: string; uom: string; hsCode: string
+  /** quantity the UD permits */
+  permitted: number
+  /** carried in from earlier UDs' settlements */
+  broughtForward: number
+  /** imported under bond against this UD (approved Bills of Entry) */
+  imported: number
+  available: number
+  /** consumed by the UD's exports (export qty × BOM gross coefficient on the export date) */
+  consumed: number
+  /** consumption beyond what the UD brought in — met from duty-paid, local or other bonded stock */
+  fromOtherStock: number
+  /** left over to dispose of at settlement */
+  balance: number
+  /** imports (incl. brought forward) beyond the UD quantity — the excess attracts full duty */
+  excessImport: number
+  dutyForegone: number
+  dutyPerUnit: number
+  dutyOnBalance: number
+  boes: { purchaseId: string; purchaseNo: string; boeNo: string; boeDate: string; qty: number }[]
+  carriedIn: { fromUd: string; qty: number }[]
+  state: "balanced" | "leftover" | "topUp"
+}
+export type UdSettlementLine = UdStatementLine & {
+  /** balance cleared on payment of duty, and balance carried to another of our UDs */
+  dutyPaidQty: number; carryQty: number; carryTo?: string
+  dutyPaid: number
+}
+export interface UdSettlement {
+  date: string
+  /** Bond Commissionerate settlement letter / reference */
+  bondRef: string
+  /** customs payment reference for the duty paid on the cleared balance */
+  paymentRef?: string
+  note?: string
+  lines: UdSettlementLine[]
+  dutyPaid: number
+  by: string; at: string
+}
+export interface UdGarmentProgress {
+  itemId: string; name: string; uom: string; ordered: number; shipped: number; pct: number
+  exports: { saleId: string; invoiceNo: string; date: string; qty: number; deemed: boolean }[]
+}
+export type BondUdState = "inProgress" | "ready" | "settled"
+export type BondUdWarning = "excessImport" | "noCoefficient" | "draftExports" | "expired" | "overShipped"
+export type BondUdRow = Omit<BondUd, "inputs"> & {
+  inputs: BondUdInput[]
+  lines: UdStatementLine[]
+  garmentsProgress: UdGarmentProgress[]
+  shippedPct: number
+  state: BondUdState
+  daysLeft: number
+  warnings: BondUdWarning[]
+  /** draft export invoices quoting the UD (must be approved or cancelled before settlement) */
+  drafts: number
+  /** duty secured on the balance still to settle (0 once settled) */
+  dutyOnBalance: number
+  /** export lines whose garment has no approved BOM on the export date */
+  noCoefficient: { saleId: string; invoiceNo: string; itemId: string; name: string }[]
+}
+export interface BondUdRegister {
+  rows: BondUdRow[]
+  totals: { inProgress: number; ready: number; settled: number; dutyOnBalance: number; dutyPaid: number; carried: number }
+}
+
+/** Duty-drawback claim (DEDO, Mushak-22): one or more exports and the CD + RD on their duty-paid imported inputs. */
+export type ClaimStatus = "draft" | "filed" | "sanctioned" | "paid" | "rejected"
+export interface DrawbackClaimLine {
+  saleId: string; invoiceNo: string; exportDate: string; billNo: string; deemed: boolean; customerName: string; deadline: string
+  inputs: DrawbackRow["inputs"]
+  cd: number; rd: number; total: number
+}
+export interface DrawbackClaim {
+  id: string; no: string; status: ClaimStatus; method: "actual"
+  lines: DrawbackClaimLine[]
+  cd: number; rd: number; claimed: number
+  filedOn?: string; dedoRef?: string
+  sanctionedOn?: string; sanctioned?: number; disallowedReason?: string
+  paidOn?: string; paid?: number; payRef?: string
+  rejectedOn?: string; rejectReason?: string
+  note?: string
+  createdBy: string; createdAt: string; updatedAt?: string; history?: HistoryEntry[]
+}
+export type DrawbackClaimRow = DrawbackClaim & {
+  /** earliest claim deadline among the exports (6 months from export) and days left to it */
+  deadline: string; daysLeft: number
+  /** claimed − sanctioned on a sanctioned / paid claim */
+  disallowed: number
+}
+export interface DrawbackClaimList {
+  rows: DrawbackClaimRow[]
+  totals: { draft: number; pending: number; sanctioned: number; refunded: number; disallowed: number; rejected: number }
 }

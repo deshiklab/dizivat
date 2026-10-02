@@ -66,7 +66,7 @@ async def main():
             assert ink["state"] == "extension" and ink["extendedDue"] == "2027-02-20" and ink["daysLeft"] < 0, ink
             assert lots[("C-1012264", "i5")]["state"] == "cleared" and lots[("C-1012264", "i5")]["balance"] == 0
             for l in reg["lots"]:
-                assert near(l["qty"] - l["consumed"], l["balance"], 0.002), l
+                assert near(l["qty"] - l["consumed"] - l.get("cleared", 0), l["balance"], 0.002), l
                 assert l["dueDate"] == add_months(date.fromisoformat(l["boeDate"]), 24) and l["extendedDue"] == add_months(date.fromisoformat(l["boeDate"]), 30), l
             t = reg["totals"]
             assert t["lotsExpiring"] >= 1 and t["lotsExtension"] >= 1 and t["shortfallItems"] >= 1 and t["dutyAtRisk"] > 0, t
@@ -77,7 +77,7 @@ async def main():
         try:
             rows = {r["itemId"]: r for r in reg["rows"]}
             for r in reg["rows"]:
-                assert near(r["opening"] + r["bondedIn"] - r["bondedUsed"], r["closing"], 0.002), r
+                assert near(r["opening"] + r["bondedIn"] - r["bondedUsed"] - r.get("clearedOut", 0), r["closing"], 0.002), r
                 assert near(r["bondedUsed"] + r["fromDutyPaid"] + r["fromLocal"] + r["unsourced"], r["exportUse"], 0.005), r
                 lot_bal = sum(l["balance"] for l in reg["lots"] if l["itemId"] == r["itemId"])
                 assert near(lot_bal, r["closing"], 0.005), (r["itemId"], lot_bal, r["closing"])
@@ -103,8 +103,9 @@ async def main():
                 assert r["deadline"] == add_months(date.fromisoformat(r["exportDate"]), 6), r
                 exp = "lapsed" if r["deadline"] < TODAY else ("expiring" if r["daysLeft"] <= 30 else "open")
                 assert r["state"] == exp, (r["invoiceNo"], r["state"], exp)
-            assert near(db["totals"]["claimable"], sum(r["total"] for r in db["rows"] if r["state"] != "lapsed"), 0.05)
-            assert near(db["totals"]["lapsed"], sum(r["total"] for r in db["rows"] if r["state"] == "lapsed"), 0.05)
+            # R6.5: exports already on a drawback claim no longer count as claimable / lapsed
+            assert near(db["totals"]["claimable"], sum(r["total"] for r in db["rows"] if r["state"] != "lapsed" and not r.get("claim")), 0.05)
+            assert near(db["totals"]["lapsed"], sum(r["total"] for r in db["rows"] if r["state"] == "lapsed" and not r.get("claim")), 0.05)
             assert db["totals"]["claimable"] > 0 and db["totals"]["lapsed"] > 0 and db["totals"]["expiring"] > 0, db["totals"]
             ok(f"drawback: {len(db['rows'])} exports, CD + RD only, 6-month deadlines; claimable ৳{db['totals']['claimable']:,.2f}, expiring ৳{db['totals']['expiring']:,.2f}, lapsed ৳{db['totals']['lapsed']:,.2f}")
         except Exception as e: fail(3, e)

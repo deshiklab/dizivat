@@ -41,7 +41,7 @@ export function buildSaleFields(d: SaleData, cust: Party) {
     subtotal: t.subtotal, sd: t.sd, vat: t.vat, discount: t.discount, netTotal: t.netTotal,
     paid, due: round2(t.netTotal - paid), issuedBy: d.issuedBy, designation: d.designation, narration: d.narration,
     ...(service ? { category: "service" as const } : {}),
-    ...(exp ? { export: { ...exp, cnfFirm: exp.cnfFirm || undefined, udNo: exp.udNo || undefined, udDate: exp.udDate || undefined, expNo: exp.expNo || undefined, exporterBond: exp.exporterBond || undefined, shippingAddress: exp.shippingAddress || d.deliveryAddress || cust.address } } : {}),
+    ...(exp ? { export: { ...exp, cnfFirm: exp.cnfFirm || undefined, udNo: exp.udNo || undefined, udDate: exp.udDate || undefined, expNo: exp.expNo || undefined, exporterBond: exp.exporterBond || undefined, ownUdNo: exp.ownUdNo?.trim().toUpperCase() || undefined, shippingAddress: exp.shippingAddress || d.deliveryAddress || cust.address } } : {}),
     ...branchFields(d.branchId),
   } satisfies Partial<Sale>
 }
@@ -94,7 +94,7 @@ export function buildPurchaseFields(d: PurchaseData | ImportData, v: Party) {
     rebate: round2(lines.filter((l) => l.rebateable).reduce((a, l) => a + l.vat + (l.duty?.at ?? 0), 0)),
     paid, due: round2(t.netTotal - paid), issuedBy: d.issuedBy, designation: d.designation, narration: d.narration,
     ...(service ? { category: "service" as const } : {}),
-    ...(imp ? { boe: { no: d.challanNo, date: d.challanDate, ...imp.boe, cnfFirm: imp.boe.cnfFirm || undefined, receiveAddress: imp.boe.receiveAddress || undefined, bonded: imp.boe.bonded || undefined } } : {}),
+    ...(imp ? { boe: { no: d.challanNo, date: d.challanDate, ...imp.boe, cnfFirm: imp.boe.cnfFirm || undefined, receiveAddress: imp.boe.receiveAddress || undefined, bonded: imp.boe.bonded || undefined, udNo: (imp.boe.bonded && imp.boe.udNo?.trim().toUpperCase()) || undefined } } : {}),
     ...branchFields(d.branchId),
   } satisfies Partial<Purchase>
 }

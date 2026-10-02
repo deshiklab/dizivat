@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { useFieldArray, useForm, useWatch, Controller } from "react-hook-form"
+import { useFieldArray, useForm, useWatch, Controller, type Control } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import type { z } from "zod"
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -306,6 +306,7 @@ export function SaleForm({ initial, category = "goods", preset }: { initial?: Sa
                 </>) : (
                   <Field id="export.expNo" label={trm("expNo")} error={err("export.expNo")} hint={trm("expHint")}>{(a) => <Input {...a} {...register("export.expNo")} />}</Field>
                 )}
+                <OwnUdField control={control} initial={initial?.export?.ownUdNo} error={err("export.ownUdNo")} />
                 <div className="grid gap-4 sm:grid-cols-3 md:col-span-2">
                   <Field id="export.currency" label={trm("currency")} error={err("export.currency")}>
                     {(a) => <Controller control={control} name="export.currency" render={({ field }) => (
@@ -491,5 +492,22 @@ function LotSelect({ itemId, value, onChange, qty, excludeId, label, invalid }: 
       </Select>
       {lot && qty > lot.available + 1e-9 && <p className="flex items-center gap-1 text-xs text-warning"><AlertTriangle className="size-3" aria-hidden /> {t("lot.over", { qty: fmtNum(lot.available, locale, 2) })}</p>}
     </div>
+  )
+}
+
+/** R6.5: our own UD / UP the shipment is made under (settled per UD after export). */
+function OwnUdField({ control, initial, error }: { control: Control<In, unknown, Out>; initial?: string; error?: string }) {
+  const t = useTranslations("rmg")
+  const { data } = useQuery({ queryKey: ["bondUds"], queryFn: () => api.vat.bondUds.register(), staleTime: 60_000 })
+  const items = [{ value: "", label: t("ownUdNone") }, ...(data?.rows ?? []).filter((u) => !u.settlement || u.no === initial).map((u) => ({ value: u.no, label: `${u.no} · ${u.masterLcNo}` }))]
+  return (
+    <Field id="export.ownUdNo" label={t("ownUdNo")} error={error} hint={t("ownUdHint")}>
+      {(a) => <Controller control={control} name="export.ownUdNo" render={({ field }) => (
+        <Select value={field.value ?? ""} onValueChange={(v) => { field.onChange(v ?? ""); field.onBlur() }} items={items}>
+          <SelectTrigger id={a.id} className="w-full min-w-0 *:data-[slot=select-value]:truncate" aria-invalid={a["aria-invalid"]} aria-describedby={a["aria-describedby"]}><SelectValue placeholder={t("ownUdNone")} /></SelectTrigger>
+          <SelectContent>{items.map((o) => <SelectItem key={o.value || "none"} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+        </Select>
+      )} />}
+    </Field>
   )
 }

@@ -21,7 +21,7 @@ import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, restoreGlobals } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
 
-export const SEED_VERSION = "r6.4.1"
+export const SEED_VERSION = "r6.5"
 
 /**
  * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —

@@ -59,6 +59,13 @@ export function parseSale(body: unknown, self?: Sale): Response | { data: SaleDa
       if (!d.export.deemed && cust.mode !== "Foreign") return invalid({ "export.deemed": ["exportForeignOnly"] })
       if (d.export.lcDate > d.issueDate) return invalid({ "export.lcDate": ["lcAfterInvoice"] })
       if (!d.export.deemed && d.export.billDate && d.export.billDate < d.issueDate) return invalid({ "export.billDate": ["beforeInvoice"] })
+      // R6.5: our own UD / UP — must be on file and not settled yet (unless this invoice was already on it)
+      const own = d.export.ownUdNo?.trim().toUpperCase()
+      if (own) {
+        const u = db.bondUds.find((x) => x.no.toUpperCase() === own)
+        if (!u) return invalid({ "export.ownUdNo": ["unknownUd"] })
+        if (u.settlement && self?.export?.ownUdNo?.toUpperCase() !== own) return invalid({ "export.ownUdNo": ["settledUd"] })
+      }
     }
     const errors: Record<string, string[]> = {}
     d.lines.forEach((l, i) => {

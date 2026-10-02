@@ -357,7 +357,9 @@
     "sdWindow": "The export must be shipped within six months of the purchase.",
     "sdPeriodBeforeExport": "The tax period cannot be before the export.",
     "sdExceeds": "More than the SD-paid quantity still unclaimed.",
-    "sdClaimLapsed": "The six-month window of this purchase has ended — its SD can no longer be claimed."
+    "sdClaimLapsed": "The six-month window of this purchase has ended — its SD can no longer be claimed.",
+    "unknownUd": "No UD / UP with this number is on file — add it under Bond consumption → UD settlement",
+    "settledUd": "This UD / UP is already settled — documents can no longer be added to it"
   },
   "form": {
     "discardTitle": "Discard unsaved changes?",
@@ -1324,7 +1326,9 @@
       "ud": "UD / UP",
       "backup": "Backup",
       "access": "Officer access",
-      "import": "Data import"
+      "import": "Data import",
+      "bondUd": "Own UD / UP",
+      "drawbackClaim": "Drawback claim"
     },
     "facet": {
       "entity": "Record type",
@@ -1640,7 +1644,8 @@
       "origin": "Country of origin",
       "cnfFirm": "C&F agent",
       "receiveAddress": "Receiving address",
-      "bonded": "Imported under bond (IM-7 warehousing entry)"
+      "bonded": "Imported under bond (IM-7 warehousing entry)",
+      "udNo": "Imported against our UD / UP"
     },
     "hint": {
       "lcDate": "On or before the BoE date",
@@ -1663,7 +1668,8 @@
     },
     "auto": "Auto",
     "bondedHint": "Bonded entry: the duty stack is assessed for the bond register only — the landed cost is the assessable value and no input tax is claimed (Mushak 9.1 note 11).",
-    "bondedBadge": "Under bond · duty foregone ৳ {amount}"
+    "bondedBadge": "Under bond · duty foregone ৳ {amount}",
+    "noUd": "Not linked to a UD / UP"
   },
   "debit": {
     "title": "Debit notes",
@@ -3236,7 +3242,7 @@
       "m64": "Subcontracting register",
       "m64Hint": "Inputs at contractors (Mushak 6.4) and overdue returns",
       "bond": "Bond consumption register",
-      "bondHint": "Bonded inputs vs exports, BoE ageing, duty drawback"
+      "bondHint": "Bonded inputs vs exports, UD settlement, drawback claims"
     },
     "vdsIssueBy": "Issue Mushak 6.6 by {date} (3 working days after filing)",
     "pen": {
@@ -3535,7 +3541,10 @@
       "expired": "The UD has expired on the invoice date.",
       "notListed": "{item} is not listed in this UD.",
       "exceeds": "{item}: {qty} exceeds the UD balance of {remaining}."
-    }
+    },
+    "ownUdNo": "Shipped under our UD / UP",
+    "ownUdHint": "The bonded inputs of this order are settled against it after export.",
+    "ownUdNone": "Not linked"
   },
   "subcon": {
     "title": "Subcontracting register",
@@ -3971,7 +3980,9 @@
     "tab": {
       "register": "Register",
       "boe": "Bills of Entry",
-      "drawback": "Duty drawback"
+      "drawback": "Duty drawback",
+      "uds": "UD settlement",
+      "claims": "Drawback claims"
     },
     "reg": {
       "table": "Bond register by input",
@@ -3995,7 +4006,8 @@
       },
       "empty": "No bonded inputs",
       "emptyHint": "Mark an import as \"Imported under bond\" to start the register.",
-      "note": "Consumption = exports (direct and deemed) × the gross quantity of each input in the BOM in force on the export date. Exports use bonded stock first (oldest Bill of Entry first), then duty-paid imports, then local stock. A shortfall means the bond book shows more than the stock on hand — the Bond Commissionerate charges full duty on it at the audit. Duty-paid and local inputs are listed too (s.114(3))."
+      "note": "Consumption = exports (direct and deemed) × the gross quantity of each input in the BOM in force on the export date. Exports use bonded stock first (oldest Bill of Entry first), then duty-paid imports, then local stock. A shortfall means the bond book shows more than the stock on hand — the Bond Commissionerate charges full duty on it at the audit. Duty-paid and local inputs are listed too (s.114(3)).",
+      "clearedOut": "{qty} cleared on duty at UD settlement"
     },
     "boe": {
       "table": "Bonded Bills of Entry",
@@ -4020,7 +4032,8 @@
       },
       "empty": "No bonded Bills of Entry",
       "emptyHint": "Bonded imports and go-live carry-forwards appear here.",
-      "note": "Bonded goods must be exported within {months} months of the Bill of Entry; the Commissioner can extend this by at most {ext} months. A Bill of Entry turns amber {days} days before the end. After the extension the duty on the balance is payable."
+      "note": "Bonded goods must be exported within {months} months of the Bill of Entry; the Commissioner can extend this by at most {ext} months. A Bill of Entry turns amber {days} days before the end. After the extension the duty on the balance is payable.",
+      "cleared": "{qty} cleared on duty"
     },
     "db": {
       "table": "Duty drawback by export",
@@ -4043,7 +4056,253 @@
       },
       "empty": "No drawback",
       "emptyHint": "Exports that consumed duty-paid imported inputs appear here.",
-      "note": "Customs duty and regulatory duty paid on imported inputs that went into an export are refundable as duty drawback: claim on Mushak-22 at the Duty Exemption & Drawback Office (DEDO) within {months} months of the export. VAT and AT are already input credit in the return, SD on exported inputs is taken back through Mushak 9.1 note 40, and AIT is an income-tax advance, so none of them is counted here."
+      "note": "Customs duty and regulatory duty paid on imported inputs that went into an export are refundable as duty drawback: claim on Mushak-22 at the Duty Exemption & Drawback Office (DEDO) within {months} months of the export. VAT and AT are already input credit in the return, SD on exported inputs is taken back through Mushak 9.1 note 40, and AIT is an income-tax advance, so none of them is counted here.",
+      "claimed": "On drawback claims",
+      "pick": "Select",
+      "pickOne": "Select export {no} for a claim"
     }
+  },
+  "budr": {
+    "error": "Could not load the UD settlement register",
+    "intro": "Our own UDs (BGMEA / BKMEA) and UPs (Bond Commissionerate): what each brought in under bond, what its exports consumed and what is left to settle.",
+    "csv": "Settlement CSV",
+    "new": "New UD / UP",
+    "table": "Our UDs and UPs",
+    "tot": {
+      "ready": "Ready to settle",
+      "inProgress": "In progress",
+      "dutyOnBalance": "Duty on balances to settle",
+      "dutyPaid": "Duty paid at settlement ({n, plural, one {# UD} other {# UDs}} settled)"
+    },
+    "col": {
+      "ud": "UD / UP",
+      "shipped": "Shipped",
+      "inputs": "Bonded inputs",
+      "duty": "Duty on balance",
+      "status": "Status"
+    },
+    "expiry": "Expires {date}",
+    "lineSummary": "{imp} in · {used} used · {bal} left {uom}",
+    "excess": "{qty} {uom} imported beyond the UD",
+    "paid": "Duty paid",
+    "state": {
+      "inProgress": "In progress",
+      "ready": "Ready to settle",
+      "settled": "Settled"
+    },
+    "warn": {
+      "excessImport": "Imports beyond the UD",
+      "noCoefficient": "Export without a BOM",
+      "draftExports": "Draft exports",
+      "expired": "Expired",
+      "overShipped": "Shipped beyond the order"
+    },
+    "warnLong": {
+      "excessImport": "More was imported than the UD permits — the excess attracts full duty unless the UD is amended.",
+      "noCoefficient": "An export under this UD has no approved BOM on its date, so its input consumption is not counted.",
+      "draftExports": "{drafts, plural, one {# draft export invoice quotes} other {# draft export invoices quote}} this UD — approve or cancel before settlement.",
+      "expired": "The UD expired on {date}; settle it with the Bond Commissionerate.",
+      "overShipped": "More garments were shipped than the order lists."
+    },
+    "issuer": {
+      "BGMEA": "BGMEA",
+      "BKMEA": "BKMEA",
+      "Customs": "Bond Commissionerate"
+    },
+    "kind": {
+      "UD": "Utilization Declaration (UD)",
+      "UP": "Utilization Permission (UP)"
+    },
+    "empty": "No UDs or UPs yet",
+    "emptyHint": "Add the UD of each export order to settle its bonded inputs after shipment.",
+    "note": "Customs settles each UD after the last shipment (or expiry): inputs imported against it vs its exports × the BOM coefficient. A balance is carried to another UD or cleared on payment of duty; imports beyond the UD quantity attract duty.",
+    "back": "Back to UD settlement",
+    "notFound": "UD / UP not found",
+    "detailSub": "{kind} · {issuer} · export LC {lc} · {buyer}",
+    "edit": "Edit",
+    "settle": "Record settlement",
+    "notReady": "Shipped {pct} % of the order. The UD can be settled after the last shipment or once it expires on {date}.",
+    "warnings": "Warnings",
+    "shipments": "Order and shipments",
+    "deemed": "deemed",
+    "settledTitle": "Settled on {date}",
+    "settledRef": "Bond Commissionerate ref. {ref} · recorded by {by}",
+    "paymentRef": "duty paid under {ref}",
+    "clearedOnDuty": "{qty} {uom} cleared on duty (৳ {amount})",
+    "carriedTo": "{qty} {uom} carried to {to}",
+    "dutyPaidTotal": "Duty paid on settlement:",
+    "tabStatement": "Settlement statement",
+    "tabHistory": "History",
+    "settleTitle": "Settle {no}",
+    "settleBody": "Dispose of every left-over balance: clear it on payment of duty and / or carry it to another of our open UDs that lists the input. The statement is frozen when you save.",
+    "settleBodyNothing": "Nothing is left over — the exports consumed all the inputs brought in under this UD. Record the Bond Commissionerate's settlement.",
+    "settledToast": "{no} settled",
+    "f": {
+      "date": "Settlement date",
+      "bondRef": "Bond Commissionerate reference",
+      "bondRefHint": "Settlement letter / memo number",
+      "lineLegend": "{name} — balance {qty} {uom}",
+      "dutyPaidQty": "Clear on duty",
+      "dutyHint": "Duty ৳ {amount}",
+      "carryQty": "Carry forward",
+      "carryTo": "To UD / UP",
+      "noTargets": "No open UD lists this input",
+      "none": "—",
+      "paymentRef": "Customs payment reference",
+      "dutyTotal": "Duty payable on the cleared balance",
+      "note": "Note",
+      "kind": "Type",
+      "issuer": "Issued by",
+      "no": "UD / UP no.",
+      "masterLc": "Export LC / sales contract",
+      "udDate": "Date",
+      "expiry": "Expiry",
+      "buyer": "Buyer",
+      "lcValue": "Export LC value (USD)",
+      "garments": "Garments to export",
+      "inputs": "Inputs to import under bond",
+      "lineItem": "{what} line {n} item",
+      "lineQty": "{what} line {n} quantity",
+      "removeLine": "Remove {what} line {n}",
+      "addLine": "Add line",
+      "pickItem": "Pick an item",
+      "searchItem": "Search items"
+    },
+    "newTitle": "New UD / UP",
+    "editTitle": "Edit {no}",
+    "formSub": "Our own UD (BGMEA / BKMEA) or UP (Bond Commissionerate) for one export order.",
+    "created": "{no} added",
+    "saved": "{no} saved",
+    "err": {
+      "notReady": "Not ready: settle after the last shipment or once the UD expires",
+      "draftExports": "Draft export invoices quote this UD — approve or cancel them first",
+      "afterToday": "Cannot be after today",
+      "beforeUd": "Cannot be before the UD date",
+      "unknownLine": "Not an input of this UD",
+      "mustEqualBalance": "Cleared + carried must equal the balance",
+      "noBalance": "Nothing is left over on this input",
+      "carryTarget": "Pick another open UD that lists this input",
+      "duplicate": "Already used",
+      "udInUse": "Documents quote this number — it cannot change",
+      "unknownInput": "Pick a raw material, consumable or packing item",
+      "unknownGarment": "Pick a finished good",
+      "expiryBeforeDate": "Expiry cannot be before the date",
+      "required": "Required",
+      "positive": "Must be more than 0",
+      "atLeastOneLine": "Add at least one line",
+      "min0": "Cannot be negative"
+    },
+    "crumb": "UD settlement"
+  },
+  "claims": {
+    "error": "Could not load the drawback claims",
+    "selection": "Drawback claim",
+    "selectHint": "Tick open exports to put them on a drawback claim.",
+    "selected": "{n, plural, one {# export} other {# exports}} selected · ৳ {amount}",
+    "clear": "Clear",
+    "create": "Create claim",
+    "created": "Draft claim {no} created",
+    "createFailed": "Could not create the claim: {why}",
+    "filter": "Filter by status",
+    "all": "All",
+    "csv": "Claims CSV",
+    "table": "Drawback claims",
+    "tot": {
+      "draft": "Drafts",
+      "pending": "Filed, awaiting DEDO",
+      "sanctioned": "Sanctioned, awaiting refund",
+      "refunded": "Refunded",
+      "disallowed": "Disallowed by DEDO"
+    },
+    "col": {
+      "claim": "Claim",
+      "exports": "Exports",
+      "claimed": "Claimed",
+      "filed": "Filed",
+      "sanctioned": "Sanctioned",
+      "refunded": "Refunded",
+      "status": "Status"
+    },
+    "status": {
+      "draft": "Draft",
+      "filed": "Filed",
+      "sanctioned": "Sanctioned",
+      "paid": "Refunded",
+      "rejected": "Rejected"
+    },
+    "fileBy": "File by {date} ({days} days)",
+    "lapsedSince": "Window closed {date}",
+    "disallowed": "Disallowed",
+    "empty": "No drawback claims",
+    "emptyHint": "Select open exports on the Duty drawback tab to start a claim.",
+    "note": "Claim within {months} months of each export at the Duty Exemption & Drawback Office (Mushak-22). A rejected claim frees its exports to be claimed again while their window is open.",
+    "back": "Back to claims",
+    "notFound": "Claim not found",
+    "detailTitle": "Drawback claim {no}",
+    "detailSub": "{n, plural, one {# export} other {# exports}} · ৳ {amount} claimed (customs + regulatory duty)",
+    "summary": "Claim summary",
+    "cdRd": "CD ৳ {cd} · RD ৳ {rd}",
+    "rejectedOn": "Rejected on {date}:",
+    "disallowedWhy": "Reason for the disallowance:",
+    "tabStatement": "Claim statement",
+    "tabHistory": "History",
+    "delete": "Delete draft",
+    "deleteTitle": "Delete {no}?",
+    "deleteBody": "The exports go back to the drawback list; the claim number is not reused.",
+    "deleted": "{no} deleted",
+    "action": {
+      "file": "File with DEDO",
+      "sanction": "Record sanction",
+      "pay": "Record refund",
+      "reject": "Record rejection"
+    },
+    "done": {
+      "file": "{no} filed",
+      "sanction": "Sanction recorded on {no}",
+      "pay": "Refund recorded on {no}",
+      "reject": "{no} marked rejected"
+    },
+    "dialog": {
+      "file": {
+        "title": "File {no} with DEDO",
+        "body": "Every export on the claim must still be inside its 6-month window on the filing date.",
+        "date": "Filing date",
+        "ref": "DEDO reference / diary no."
+      },
+      "sanction": {
+        "title": "Sanction of {no}",
+        "body": "Record what the Drawback Office sanctioned. Give the reason if it is less than claimed.",
+        "date": "Sanction date",
+        "ref": "Sanction order no.",
+        "amount": "Sanctioned amount (৳)",
+        "amountHint": "Claimed ৳ {amount}",
+        "reason": "Reason for the disallowed part"
+      },
+      "pay": {
+        "title": "Refund of {no}",
+        "body": "Record the refund received from the Drawback Office.",
+        "date": "Received on",
+        "ref": "Payment / cheque / EFT reference",
+        "amount": "Amount received (৳)"
+      },
+      "reject": {
+        "title": "Rejection of {no}",
+        "body": "Record DEDO's rejection. The exports become claimable again while their window is open.",
+        "date": "Rejection date",
+        "reason": "Reason given by DEDO"
+      }
+    },
+    "err": {
+      "notClaimable": "has no duty-paid inputs to claim",
+      "lapsed": "the 6-month claim window has closed",
+      "alreadyClaimed": "is already on another claim",
+      "duplicate": "is listed twice",
+      "afterToday": "Cannot be after today",
+      "beforePrevious": "Cannot be before the previous step",
+      "aboveClaimed": "Cannot exceed the amount claimed",
+      "aboveSanctioned": "Cannot exceed the amount sanctioned",
+      "required": "Required"
+    },
+    "crumb": "Drawback claims"
   }
 }

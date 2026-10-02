@@ -87,7 +87,7 @@ export function PurchaseDetail({ id }: { id: string }) {
             <CardContent>
               <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 {[[ti("field.boeNo"), p.challanNo], [ti("field.boeDate"), fmtDate(p.challanDate, locale)], [ti("field.lcNo"), p.boe.lcNo], [ti("field.lcDate"), fmtDate(p.boe.lcDate, locale)],
-                  [ti("field.customsHouse"), `${p.boe.customsHouse} — ${customsHouseName(p.boe.customsHouse)}`], [ti("field.origin"), p.boe.origin], [ti("field.cnfFirm"), p.boe.cnfFirm || "—"], [ti("field.receiveAddress"), p.boe.receiveAddress || "—"]].map(([k, v]) => (
+                  [ti("field.customsHouse"), `${p.boe.customsHouse} — ${customsHouseName(p.boe.customsHouse)}`], [ti("field.origin"), p.boe.origin], [ti("field.cnfFirm"), p.boe.cnfFirm || "—"], [ti("field.receiveAddress"), p.boe.receiveAddress || "—"], ...(p.boe.bonded ? [[ti("field.udNo"), p.boe.udNo || "—"]] : [])].map(([k, v]) => (
                   <div key={k}><dt className="text-xs text-muted-foreground">{k}</dt><dd className="tabular">{v}</dd></div>
                 ))}
               </dl>

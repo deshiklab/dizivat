@@ -35,6 +35,8 @@ export const exportInput = z.object({
   fcValue: z.number().min(0, "min0").optional(),
   exchangeRate: z.number().min(0, "min0").max(1000).optional(),
   exporterBond: z.string().trim().max(60).optional(),
+  /** R6.5: our own UD / UP the shipment is made under (bond settlement) */
+  ownUdNo: z.string().trim().max(40).optional(),
 }).superRefine((e, ctx) => {
   if (e.deemed) return
   const need = (k: "customsHouse" | "country" | "billNo" | "shippingAddress") => { if (!e[k]) ctx.addIssue({ code: "custom", path: [k], message: "required" }) }
@@ -111,6 +113,8 @@ export const boeInput = z.object({
   receiveAddress: z.string().trim().max(250).optional().default(""),
   /** R6.4: warehoused under the customs bond (IM-7) — duties suspended, no input credit */
   bonded: z.boolean().optional().default(false),
+  /** R6.5: our own UD / UP the bonded inputs are imported against */
+  udNo: z.string().trim().max(40).optional().default(""),
 })
 export const importInput = purchaseInput.extend({
   lines: z.array(importLineInput).min(1, "atLeastOneLine"),
@@ -618,3 +622,60 @@ export const bulkImportInput = z.object({
   rows: z.array(z.record(z.string(), z.unknown())).min(1, "atLeastOneRow").max(2000, "tooManyRows"),
 })
 export type BulkImportInput = z.input<typeof bulkImportInput>
+
+/* ── R6.5 — own UD / UP bond settlement, duty-drawback claims ─────────────────────────────────────────────── */
+
+const qty3 = z.number({ error: "required" })
+/** Our own UD (BGMEA / BKMEA) or UP (Bond Commissionerate) for one export order. */
+export const bondUdInput = z.object({
+  kind: z.enum(["UD", "UP"]),
+  issuer: z.enum(["BGMEA", "BKMEA", "Customs"]),
+  no: z.string().trim().min(3, "required").max(40),
+  date: isoDate,
+  expiry: isoDate,
+  masterLcNo: z.string().trim().min(3, "required").max(40),
+  masterLcValue: z.number().min(0, "min0").optional().catch(undefined),
+  currency: z.enum(["USD", "EUR", "GBP"]).optional().default("USD"),
+  buyer: z.string().trim().max(80).optional().default(""),
+  note: z.string().trim().max(300).optional().default(""),
+  inputs: z.array(z.object({ itemId: z.string().min(1, "required"), qty: qty3.positive("positive") })).min(1, "atLeastOneLine").max(40),
+  garments: z.array(z.object({ itemId: z.string().min(1, "required"), qty: qty3.positive("positive") })).min(1, "atLeastOneLine").max(20),
+}).superRefine((v, ctx) => {
+  if (v.expiry < v.date) ctx.addIssue({ code: "custom", path: ["expiry"], message: "expiryBeforeDate" })
+  for (const k of ["inputs", "garments"] as const) {
+    const seen = new Set<string>()
+    v[k].forEach((l, i) => { if (seen.has(l.itemId)) ctx.addIssue({ code: "custom", path: [k, i, "itemId"], message: "duplicate" }); seen.add(l.itemId) })
+  }
+})
+export type BondUdInputT = z.input<typeof bondUdInput>
+
+/** Settlement of a UD: every left-over balance cleared on duty and / or carried to another open UD. */
+export const settleInput = z.object({
+  date: isoDate,
+  bondRef: z.string().trim().min(3, "required").max(60),
+  paymentRef: z.string().trim().max(60).optional().default(""),
+  note: z.string().trim().max(300).optional().default(""),
+  lines: z.array(z.object({
+    itemId: z.string().min(1, "required"),
+    dutyPaidQty: qty3.min(0, "min0").optional().default(0),
+    carryQty: qty3.min(0, "min0").optional().default(0),
+    carryTo: z.string().trim().max(40).optional().default(""),
+  })).max(40).optional().default([]),
+})
+export type SettleInputT = z.input<typeof settleInput>
+
+/** New drawback claim: the exports it covers (frozen CD + RD from the drawback view). */
+export const claimInput = z.object({
+  saleIds: z.array(z.string().min(1)).min(1, "atLeastOne").max(30, "tooMany"),
+  note: z.string().trim().max(300).optional().default(""),
+})
+
+/** Moves a claim along: file (DEDO ref) → sanction (amount; reason if less) → pay; or reject a filed claim. */
+export const claimActionInput = z.object({
+  action: z.enum(["file", "sanction", "pay", "reject"]),
+  date: isoDate,
+  ref: z.string().trim().max(60).optional().default(""),
+  amount: z.number().positive("positive").optional(),
+  reason: z.string().trim().max(300).optional().default(""),
+})
+export type ClaimActionInputT = z.input<typeof claimActionInput>

@@ -5,6 +5,8 @@ import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
 import type { BackupRow, BackupStatus, BackupVerify, ImportEntity, ImportResult, Sale as R62Sale, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
 import type { RealisationInput, UdInput } from "../schemas"
 import type { UdFit } from "../rmg"
+import type { BondUdRegister, BondUdRow, DrawbackClaimList, DrawbackClaimRow } from "../types"
+import type { BondUdInputT, ClaimActionInputT, SettleInputT } from "../schemas"
 import { appPathname, appUrl } from "../base-path"
 
 /**
@@ -257,6 +259,24 @@ export const api = {
     bond: {
       get: (p: { from?: string; to?: string } = {}) => req<BondRegister>(`/vat/bond${qs(p)}`),
       csvUrl: (view: "register" | "lots" | "drawback", p: { from?: string; to?: string } = {}) => `${BASE}/vat/bond${qs({ ...p, view, format: "csv" })}`,
+    },
+    /** R6.5: our own UDs / UP and their bond settlement */
+    bondUds: {
+      register: (state?: string) => req<BondUdRegister>(`/vat/bond-uds${qs({ state })}`),
+      csvUrl: () => `${BASE}/vat/bond-uds?format=csv`,
+      get: (id: string) => req<BondUdRow>(`/vat/bond-uds/${encodeURIComponent(id)}`),
+      create: (b: BondUdInputT) => req<BondUdRow>("/vat/bond-uds", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: BondUdInputT) => req<BondUdRow>(`/vat/bond-uds/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(b) }),
+      settle: (id: string, b: SettleInputT) => req<BondUdRow>(`/vat/bond-uds/${encodeURIComponent(id)}/settle`, { method: "POST", body: JSON.stringify(b) }),
+    },
+    /** R6.5: duty-drawback claims (DEDO / Mushak-22) */
+    claims: {
+      list: (status?: string) => req<DrawbackClaimList>(`/vat/drawback-claims${qs({ status })}`),
+      csvUrl: () => `${BASE}/vat/drawback-claims?format=csv`,
+      get: (id: string) => req<DrawbackClaimRow>(`/vat/drawback-claims/${id}`),
+      create: (b: { saleIds: string[]; note?: string }) => req<DrawbackClaimRow>("/vat/drawback-claims", { method: "POST", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true; id: string }>(`/vat/drawback-claims/${id}`, { method: "DELETE" }),
+      action: (id: string, b: ClaimActionInputT) => req<DrawbackClaimRow>(`/vat/drawback-claims/${id}/action`, { method: "POST", body: JSON.stringify(b) }),
     },
     /** R6.3: §127 interest + late-return penalty — exposure (no period) or a what-if quote for one period */
     penaltyExposure: () => req<PenaltyExposure>("/vat/penalty"),

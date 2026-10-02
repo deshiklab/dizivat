@@ -273,6 +273,24 @@ def run():
           "R6.4: bonded import keeps duty foregone with nothing payable")
     check(arif.get(f"{BASE}/vat/bond", params={"to": "2030-01-01"}).status_code == 422, "R6.4: range validation (422)")
 
+    # R6.5: own UD settlement + drawback claims (compat), persisted in PostgreSQL
+    print("R6.5: UD settlement, drawback claims")
+    bu = {u["id"]: u for u in arif.get(f"{BASE}/vat/bond-uds").json().get("rows", [])}
+    b1, b5 = bu.get("bu1", {}), bu.get("bu5", {})
+    check(b1.get("state") == "settled" and abs((b1.get("settlement") or {}).get("lines", [{}])[0].get("dutyPaidQty", 0) - 974.24) < 0.001
+          and any(l.get("broughtForward") == 2000 for l in b5.get("lines", [])), "R6.5: seeded settlement + brought forward served from PostgreSQL")
+    ud_no = f"BKMEA/UD/2026/N{TAG}".upper()
+    r = arif.post(f"{BASE}/vat/bond-uds", json={"kind": "UD", "issuer": "BKMEA", "no": ud_no, "date": "2026-08-01", "expiry": "2026-09-01", "masterLcNo": f"EXP-LC-N-{TAG}",
+                                               "inputs": [{"itemId": "i9", "qty": 100}], "garments": [{"itemId": "i18", "qty": 300}]})
+    ud_id = r.json().get("id") if r.status_code == 201 else None
+    st = arif.post(f"{BASE}/vat/bond-uds/{ud_id}/settle", json={"date": "2026-09-20", "bondRef": f"CBC/N/{TAG}"}) if ud_id else None
+    check(ud_id is not None and st is not None and st.status_code == 200 and st.json().get("state") == "settled", "R6.5: an expired UD settles (nothing left over)")
+    check(arif.post(f"{BASE}/vat/bond-uds/{ud_id}/settle", json={"date": "2026-09-20", "bondRef": f"CBC/N/{TAG}"}).status_code == 409, "R6.5: a settled UD cannot be settled again (409)")
+    drafts = arif.get(f"{BASE}/vat/drawback-claims", params={"status": "draft"}).json().get("rows", [])
+    claim_id = drafts[0]["id"] if drafts else None
+    fr = arif.post(f"{BASE}/vat/drawback-claims/{claim_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"DEDO/N/{TAG}"}) if claim_id else None
+    check(fr is not None and fr.status_code == 200 and fr.json().get("status") == "filed", "R6.5: a draft drawback claim is filed with DEDO")
+
     # re-baseline: the R6.2 block above adds audit events for this run's tag (officer, access log, backups)
     before_ids = sorted(e["id"] for e in arif.get(f"{BASE}/audit", params={"q": TAG, "size": 50}).json()["data"])
     if RESTART:
@@ -294,6 +312,10 @@ def run():
         n = arif.post(f"{BASE}/customers", json={"name": f"R5 After Restart {TAG}", "mode": "Foreign", "country": "Japan", "address": "4-5-6 Shibuya, Tokyo"})
         check(n.status_code == 201 and n.json()["id"] != cid, "new records after a restart get fresh ids")
         check(arif.get(f"{BASE}/vat/bond").json().get("totals") == bond.get("totals"), "R6.4: bond register unchanged after a restart")
+        u_after = arif.get(f"{BASE}/vat/bond-uds/{ud_id}").json() if ud_id else {}
+        c_after = arif.get(f"{BASE}/vat/drawback-claims/{claim_id}").json() if claim_id else {}
+        check((u_after.get("settlement") or {}).get("bondRef") == f"CBC/N/{TAG}" and c_after.get("status") == "filed" and c_after.get("dedoRef") == f"DEDO/N/{TAG}",
+              "R6.5: UD settlement and filed claim survive a restart")
         bl = admin.get(f"{BASE}/backups").json()
         check(any(x["id"] == bid for x in bl.get("rows", [])), "R6.2: backups survive a restart")
         v2 = arif.get(f"{BASE}/audit/verify").json()

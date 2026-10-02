@@ -65,7 +65,7 @@ export default {
       steps(
         "Filter the period, open an export and check the import lines it consumed.",
         "Download **Drawback CSV** for the supporting schedule: export invoice, bill of export, Bill of Entry, quantity, CD and RD per line.",
-        "File the claim with DEDO before the claim date, with the export documents and the Bills of Entry.",
+        "Tick the exports and choose **Create claim**, then file it with DEDO before the claim date — see [Drawback claims](help:drawback-claims).",
       ),
       note("Bonded inputs never carry duty, so they never appear here: a factory that imports everything under bond has little or no drawback. Drawback matters for inputs bought duty-paid — for example a rush order bought before the UD was issued."),
       tip("Related: [Bond consumption register](help:bond-consumption-register), [Mushak 9.1 return](help:vat-return-9-1)."),
