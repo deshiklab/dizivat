@@ -7,7 +7,7 @@
 > [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/deshiklab/dizivat/tree/r5-nestjs)
 > The `main` branch keeps the in-browser mock demo on GitHub Pages: https://deshiklab.github.io/dizivat/en/
 >
-> **Branch `r6-enlistment-rmg` (v0.13.0, R6.4):** readiness for **NBR VAT-software enlistment** and features for the **RMG
+> **Branch `r6-enlistment-rmg` (v0.13.1, R6.4):** readiness for **NBR VAT-software enlistment** and features for the **RMG
 > (garments)** segment — see [docs/NBR_ENLISTMENT.md](docs/NBR_ENLISTMENT.md) and [docs/RMG.md](docs/RMG.md). Tags `v0.12.0` (R6.3), `v0.11.0` (R6.2), `v0.10.0` (R6.1) and `v0.9.1` are the earlier states.
 
 Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (Base UI) · next-intl (EN/বাংলা) · TanStack Query + Table · React Hook Form + Zod · Recharts.
@@ -111,7 +111,7 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
   - **Tests:** `e2e_r63.py` (26 checks); contract 573 checks / 196 endpoints; `api_native.py` 73 checks
     (+ restore drill); axe 0 violations / 254 runs (126 pages).
 
-- **R6.4 — RMG bond consumption register + duty drawback (v0.13.0):**
+- **R6.4 — RMG bond consumption register + duty drawback (v0.13.0 / v0.13.1):**
   - **Bonded imports:** *Imported under bond (IM-7)* on the import form — duties assessed and kept as *duty foregone*,
     nothing payable or creditable, Mushak 9.1 note 11. Go-live bonded stock is carried forward on the opening stock.
   - **Bond consumption register** (`/vat/bond-consumption`, Customs Act s.114): bonded receipts vs export consumption
@@ -119,10 +119,15 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     own bond licence; date range; CSV.
   - **Bills of Entry** aged against the 24-month bonding period (+ 6-month extension): expiring / in extension / overdue.
   - **Duty drawback:** CD + RD on duty-paid inputs consumed by each export, six-month claim window (DEDO, Mushak-22).
-  - Demo data reset once on upgrade (`SEED_VERSION` r6.4). Two new bilingual help articles (44 in total). See
+  - Demo data reset once on upgrade (`SEED_VERSION` r6.4.1). Two new bilingual help articles (44 in total). See
     [docs/RMG.md](docs/RMG.md) §6.
-  - **Tests:** `e2e_r64.py` (10 checks); contract 579 checks / 197 endpoints; `api_native.py` 78 checks;
-    axe 0 violations / 260 runs (129 pages).
+  - **v0.13.1 — deploy-overlap guard (backend):** during a Render deploy the old and the new instance briefly share
+    the database. Every re-seed, audit-chain append and compat-state save now starts with a PostgreSQL advisory lock
+    (`pg_advisory_xact_lock`), and an instance whose data set was re-seeded by another instance since it booted
+    (`meta.seeded_at`) refuses to write (503) instead of chaining to a replaced head or saving stale state over the
+    fresh data (`api/src/common/state-guard.ts`).
+  - **Tests:** `e2e_r64.py` (10 checks); contract 579 checks / 197 endpoints; `api_native.py` 83 checks (incl. the
+    deploy-overlap scenario); axe 0 violations / 260 runs (129 pages).
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

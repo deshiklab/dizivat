@@ -14,6 +14,7 @@ import { Authed } from "../common/auth"
 import { searchParams, sendCsv, toIso } from "../common/http"
 import { sqlList } from "../common/list"
 import { withStateLock } from "../common/lock"
+import { lockState } from "../common/state-guard"
 import { db, type Tx } from "../db/client"
 import { auditEvents } from "../db/schema"
 import { mirror } from "../state"
@@ -59,6 +60,7 @@ const sealFields = (r: SealRaw): ChainFields => ({ at: toIso(r.at), actor: r.act
  */
 export async function sealUnchained(log: (m: string) => void) {
   await withStateLock(() => db.transaction(async (tx) => {
+    await lockState(tx, { checkEpoch: false })
     const raw = await tx.execute(sql`select * from audit_events where hash is null order by id`)
     const rows = raw.rows as SealRaw[]
     if (!rows.length) return
@@ -95,6 +97,7 @@ export class AuditService {
       const actorId = typeof e.actor === "string" ? mirror.findUserByName(e.actor)?.id : e.actor.id
       const base = { at, day: dhakaDay(at), actor, actorId, entity: e.entity, entityId: e.entityId, ref: e.ref, action: e.action, changes: e.changes?.length ? e.changes : undefined, note: e.note }
       const [row] = await db.transaction(async (tx) => {
+        await lockState(tx)
         const { rows } = chainValues([values(base)], await headHash(tx))
         return tx.insert(auditEvents).values(rows).returning({ id: auditEvents.id })
       })
@@ -129,7 +132,7 @@ export class AuditService {
     return false
   }
 
-  /** Inside the state lock: saves events the compat handlers appended, fixing their ids to the table's. */
+  /** Inside the state lock and a transaction that began with lockState(): saves events the compat handlers appended, fixing their ids to the table's. */
   async forwardPending(tx: Tx) {
     const store = mirror.audit()
     let prev: string | undefined

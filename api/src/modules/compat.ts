@@ -10,6 +10,7 @@ import type { Request, Response } from "express"
 import { SessionService } from "../common/auth"
 import { isHttps } from "../common/http"
 import { withStateLock } from "../common/lock"
+import { lockState } from "../common/state-guard"
 import { compatCtx } from "../compat/session-user.shim"
 import { db } from "../db/client"
 import { compatState } from "../db/schema"
@@ -103,6 +104,7 @@ export class CompatService {
     const hash = createHash("sha1").update(json).digest("hex")
     if (hash === lastSaved && !this.audit.hasPending()) return
     await db.transaction(async (tx) => {
+      await lockState(tx) // cross-process: never overwrite a newer instance's re-seed with this process's state
       await this.audit.forwardPending(tx)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })

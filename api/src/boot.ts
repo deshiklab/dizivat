@@ -19,8 +19,9 @@ import { compatSnapshot, markSaved } from "./modules/compat"
 import { toUser } from "./modules/identity"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, restoreGlobals } from "./state"
+import { lockState, setEpoch } from "./common/state-guard"
 
-export const SEED_VERSION = "r6.4"
+export const SEED_VERSION = "r6.4.1"
 
 /**
  * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —
@@ -51,7 +52,9 @@ async function seed(log: (m: string) => void) {
   const demoHash = await Promise.all(m.userStore.users.map(() => hashPassword(m.DEMO_PASSWORD)))
   const events = m.auditStore.events
   const snapshot = compatSnapshot()
+  const seededAt = new Date().toISOString()
   await db.transaction(async (tx) => {
+    await lockState(tx, { checkEpoch: false }) // waits for any other instance's in-flight write (deploy overlap)
     // the append-only guard on audit_events lets this transaction (and only it) clear the table
     await tx.execute(sql`set local dizivat.reseed = 'on'`)
     for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "tariff_lines", "audit_events", "compat_state", "meta"])
@@ -83,9 +86,10 @@ async function seed(log: (m: string) => void) {
     }
     await tx.insert(compatState).values({ key: "main", data: JSON.parse(snapshot) as unknown })
     await tx.insert(meta).values([
-      { key: "seed_version", value: SEED_VERSION }, { key: "seeded_at", value: new Date().toISOString() }, { key: "tariff_fy", value: m.TARIFF_FY },
+      { key: "seed_version", value: SEED_VERSION }, { key: "seeded_at", value: seededAt }, { key: "tariff_fy", value: m.TARIFF_FY },
     ])
   })
+  setEpoch(seededAt)
   G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
   markPersisted(events)
   markSaved(snapshot)
@@ -98,6 +102,8 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   const prefs: Record<string, Preferences> = {}
   const list: User[] = userRows.map((r) => { prefs[r.id] = r.preferences as Preferences; return toUser(r) })
   const unitRows: Unit[] = (await db.select().from(units).orderBy(asc(units.ord))).map((r) => ({ id: r.id, code: r.code, name: r.name, decimals: r.decimals, active: r.active, createdAt: r.createdAt.toISOString() }))
+  const [ep] = await db.select().from(meta).where(eq(meta.key, "seeded_at"))
+  setEpoch(ep?.value)
   const raw = await db.execute(sql`select * from audit_events order by id`)
   const events: AuditEvent[] = (raw.rows as Parameters<typeof rawToEvent>[0][]).map(rawToEvent)
   restoreGlobals({ db: state.db as never, notifRead: state.notifRead, users: list, prefs, company: await loadCompany(), units: unitRows, events })

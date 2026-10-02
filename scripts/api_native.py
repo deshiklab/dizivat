@@ -298,6 +298,29 @@ def run():
         check(any(x["id"] == bid for x in bl.get("rows", [])), "R6.2: backups survive a restart")
         v2 = arif.get(f"{BASE}/audit/verify").json()
         check(v2.get("ok") is True and v2.get("count", 0) > v.json().get("count", 0), "R6: the chain continues across a restart")
+
+        # R6.4.1: Render overlaps the old and the new instance during a deploy. When the new one re-seeds, the old
+        # one must refuse to write (its in-memory state is stale) instead of chaining audit events to a replaced head
+        # or upserting its snapshot over the fresh demo data.
+        print("\nR6.4.1: deploy overlap — the database is re-seeded under a running instance")
+        epoch = psql("select value from meta where key = 'seeded_at'")
+        events_before = psql("select count(*) from audit_events")
+        psql("update meta set value = '2099-01-01T00:00:00.000Z' where key = 'seeded_at'")
+        try:
+            w = arif.post(f"{BASE}/customers", json={"name": f"R6 Stale Write {TAG}", "mode": "Foreign", "country": "Japan", "address": "1-2-3 Ginza, Tokyo"})
+            check(w.status_code == 503, f"stale instance refuses a compat write after a re-seed elsewhere (HTTP {w.status_code})")
+            check(psql(f"select count(*) from compat_state where data::text like '%R6 Stale Write {TAG}%'") == "0", "stale snapshot not written over the re-seeded data")
+            r = requests.post(f"{BASE}/auth/login", json={"username": "farzana", "password": PW})
+            check(r.status_code == 503, f"stale instance refuses to append to the audit chain (HTTP {r.status_code})")
+            check(psql("select count(*) from audit_events") == events_before, "no audit event chained to a replaced head")
+        finally:
+            psql(f"update meta set value = '{epoch}' where key = 'seeded_at'")
+        restart()  # drop the diverged in-memory state
+        v3 = arif.get(f"{BASE}/audit/verify").json()
+        cl = arif.get(f"{BASE}/customers", params={"q": f"R6 Stale Write {TAG}"}).json()
+        cl = cl.get("data", []) if isinstance(cl, dict) else cl
+        check(v3.get("ok") is True and not any(f"R6 Stale Write {TAG}" in (c.get("name") or "") for c in cl),
+              "after a restart: chain intact, refused write absent")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 
