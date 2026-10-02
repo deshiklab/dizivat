@@ -13,6 +13,8 @@ export const NATIVE = [
   "backups", "backups/[id]", "backups/[id]/verify",
   // R5.2: customers and vendors live in the `parties` table
   "customers", "customers/[id]", "customers/[id]/restore", "vendors", "vendors/[id]", "vendors/[id]/restore",
+  // R5.2: SKUs and master items live in `items` / `master_items` (the stock ledger and the branch split stay here)
+  "items", "items/[id]", "master-items", "master-items/[id]",
 ]
 
 const found = []

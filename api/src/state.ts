@@ -6,7 +6,7 @@
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
-import type { AuditEvent, Company, Party, Purchase, Sale, Unit } from "@/lib/types"
+import type { AuditEvent, Company, Item, MasterItem, Party, Purchase, Sale, Unit } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
 /** The undo buffer: deleted documents (compat state) and deleted parties (R5.2: `parties.deleted_at`). */
@@ -20,7 +20,7 @@ interface UserStore {
   notifRead: Record<string, { ids: string[]; allBefore?: string }>; revokedBefore: Record<string, number>
 }
 interface Globals {
-  __dzDb?: Record<string, unknown> & { units: Unit[]; customers: Party[]; vendors: Party[]; trash: TrashEntry[] }
+  __dzDb?: Record<string, unknown> & { units: Unit[]; customers: Party[]; vendors: Party[]; items: Item[]; masterItems: MasterItem[]; trash: TrashEntry[] }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
   __dzCompany?: Company
@@ -43,10 +43,16 @@ export const compat = (): CompatModule => {
 }
 
 /** Restores saved state before the compat bundle initialises (its stores use `globalThis.x ??= seed()`). */
-export function restoreGlobals(s: { db: Record<string, unknown>; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company; units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; events: AuditEvent[] }) {
+export function restoreGlobals(s: {
+  db: Record<string, unknown>; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company
+  units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]; events: AuditEvent[]
+}) {
   // documents only: an older snapshot's deleted parties are rebuilt from `parties.deleted_at` (given separately)
   const docsTrash = ((s.db as { trash?: TrashEntry[] }).trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor")
-  G.__dzDb = { ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, trash: [...docsTrash, ...s.partyTrash] }
+  G.__dzDb = {
+    ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, items: s.items, masterItems: s.masterItems,
+    trash: [...docsTrash, ...s.partyTrash],
+  }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
   G.__dzCompany = s.company
@@ -90,6 +96,33 @@ export const mirror = {
     const list = mirror.parties(kind)
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.2: the SKUs — documents move their counters, the register lists them */
+  items: (): Item[] => G.__dzDb!.items,
+  putItems(list: Item[]) { const a = mirror.items(); a.splice(0, a.length, ...list) },
+  findItem: (id: string) => mirror.items().find((i) => i.id === id),
+  putItem(it: Item) {
+    const list = mirror.items()
+    const cur = list.find((x) => x.id === it.id)
+    if (cur) replaceObject(cur, it)
+    else list.push(it)
+    return cur ?? it
+  },
+  removeItem(id: string) {
+    const list = mirror.items()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.2: the HS-code master items (a SKU references one by name) */
+  masterItems: (): MasterItem[] => G.__dzDb!.masterItems,
+  putMasterItems(list: MasterItem[]) { const a = mirror.masterItems(); a.splice(0, a.length, ...list) },
+  findMasterItem: (id: string) => mirror.masterItems().find((m) => m.id === id),
+  putMasterItem(m: MasterItem) {
+    const list = mirror.masterItems()
+    const cur = list.find((x) => x.id === m.id)
+    if (cur) replaceObject(cur, m)
+    else list.push(m)
+    return cur ?? m
   },
   /** Deleted documents and parties (the 10-second undo); party entries mirror `parties.deleted_at`. */
   trash: (): TrashEntry[] => G.__dzDb!.trash,

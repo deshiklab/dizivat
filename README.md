@@ -160,28 +160,44 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
   - **Tests:** `e2e_r66.py` (8 sections); contract 676 checks / 226 endpoints; `api_native.py` 95 checks;
     axe 0 violations / 288 runs (143 pages).
 
-- **R5.2 — Backend: customers and vendors on real tables (branch `r5-nestjs`):** the first business records leave the
-  compat layer and get their own PostgreSQL table. See [docs/BACKEND.md › R5.2](docs/BACKEND.md#r52--customers-and-vendors-on-their-own-table).
+- **R5.2 — Backend: the master data on real tables (branch `r5-nestjs`):** customers, vendors, items and master items
+  leave the compat layer and get their own PostgreSQL tables. See
+  [docs/BACKEND.md › R5.2](docs/BACKEND.md#r52--customers-and-vendors-on-their-own-table) (parties) and
+  [› items](docs/BACKEND.md#r52--items-and-master-items-on-their-own-table).
   - **`parties`:** customers and vendors in one table (`kind` tells them apart), `ord` keeping each kind's insertion
     order so lists tie-break exactly as they did in memory. The duplicate rules are enforced by the database too
     (partial unique indexes per kind on the name and on the BIN with its `NID ` prefix ignored), and a race that slips
     past the application check is still a 422.
   - **Deleting is a `deleted_at` stamp**, so master data never leaves relational storage: the 10-second undo trash is
     rebuilt from the table at boot, a deleted customer is still a row, and it is still in every backup.
+  - **`items` and `master_items`:** SKUs and the HS-code products they belong to, with the six movement counters an
+    item's `remain` is derived from as columns — so stock travels with its row. Unique by the database as well
+    (`lower(sku)`, `lower(name)`), a master item's rename carries its SKUs along in the same transaction (they quote
+    its name), and its tax profile is stored flat, like the tariff's own columns, so the two can be compared in SQL.
+  - **Documents still move those counters** (a sale approved, an opening entry, a damage note), so the write-back
+    saves what a compat handler changed and reads the stored row back into memory — a column type that rounds cannot
+    leave the two copies apart. The same path adopts a SKU the R6.2 bulk import creates.
   - **The rules are shared, not copied:** the native handlers call the mock handlers' own functions (`partyRow`,
-    `partyErrors`, `normaliseParty`, `newPartyId` …) through the compat bundle, so the PostgreSQL API, the Next.js mock
-    and the GitHub Pages demo cannot drift. The contract is unchanged — same responses, same 422/404/409 codes, same
-    audit events — and the register's aggregates still come from the documents, which stay in `compat_state` until R5.3.
-  - **Write-through both ways:** the in-memory copies the 92 unported route modules read are kept in step, and a party
-    a compat handler creates (the R6.2 bulk import) is adopted into the table after its request.
-  - **Upgrading keeps the data:** the first boot after the migration moves the customers and vendors out of
-    `compat_state` into `parties` and rewrites the snapshot without them — no re-seed (`SEED_VERSION` unchanged), so a
-    customer installation and a restored pre-R5.2 backup both carry their parties over.
-  - **Tests:** `api_native.py` 115 checks (+20: rows in `parties`, no party collection left in the snapshot, the
-    database refuses a duplicate, delete → `deleted_at` → undo → still deleted after a restart, and a stale instance
-    refuses a native party write during a deploy overlap). Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.2:** items and master items. The stock ledger and branches' stock are derived from documents, so they
-    become relational with the documents themselves (R5.3).
+    `partyErrors`, `normaliseParty`, `newPartyId`, `buildItem`, `masterErrors`, `masterRow` …) through the compat
+    bundle — the item and master-item rules were gathered into `src/app/api/v1/_items.ts` for exactly that, and the
+    mock's answers are byte-identical to before (58 request cases compared against the pre-refactor handlers). So the
+    PostgreSQL API, the Next.js mock and the GitHub Pages demo cannot drift: same responses, same 422/404/409 codes,
+    same audit events — and the party register's aggregates still come from the documents, which stay in
+    `compat_state` until R5.3.
+  - **Write-through both ways:** the in-memory copies the 88 unported route modules read are kept in step, and what a
+    compat handler writes — a party or SKU the R6.2 bulk import creates, a counter a document moves — is adopted into
+    the tables after its request.
+  - **Upgrading keeps the data:** the first boot after the migration moves the customers, vendors, items and master
+    items out of `compat_state` into their tables and rewrites the snapshot without them — no re-seed
+    (`SEED_VERSION` unchanged), so a customer installation and a restored pre-R5.2 backup both carry their records
+    over.
+  - **Tests:** `api_native.py` 135 checks (+40: rows in `parties`, `items` and `master_items`, none of those
+    collections left in the snapshot, the database refusing a duplicate party name and SKU, delete → `deleted_at` →
+    undo → still deleted after a restart, a rename that reaches the SKU in the table, a compat document's counter and
+    a compat import landing in `items`, stock surviving a restart, and a stale instance refusing native party and SKU
+    writes during a deploy overlap). Contract unchanged: 676 checks / 226 endpoints.
+  - **Left for R5.3:** the stock ledger and branches' stock, which are *derived* from documents, become relational
+    with the documents themselves.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

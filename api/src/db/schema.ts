@@ -1,14 +1,14 @@
 /**
  * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables, R5.2 the
- * parties (customers and vendors); the business documents still live in `compat_state` until R5.3–R5.5 give each
- * module its own tables.
+ * master data (customers and vendors as `parties`, SKUs as `items`, HS-code products as `master_items`); the
+ * business documents still live in `compat_state` until R5.3–R5.5 give each module its own tables.
  * Migrations are generated with `npm run db:generate` into ./drizzle and applied at boot.
  */
 import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange } from "@/lib/types"
+import type { AuditChange, HistoryEntry } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -188,6 +188,85 @@ export const parties = pgTable("parties", {
   uniqueIndex("parties_live_bin_key").on(t.kind, sql`regexp_replace(${t.bin}, '^NID ', '')`).where(sql`${t.bin} <> '' and ${t.deletedAt} is null`),
   check("parties_kind_check", sql`${t.kind} in ('customer','vendor')`),
   check("parties_exporter_check", sql`${t.exporterType} is null or ${t.exporterType} in ('direct','deemed')`),
+])
+
+/**
+ * R5.2 — SKUs. The movement counters live on the row, so an item's `remain`
+ * (opening + purchased + prodReceive − prodIssue − sold − damage) travels with it; the documents that move the
+ * counters are still compat state until R5.3 and write them back through the mirror. Quantities carry the units'
+ * three decimals, money two. Items are never deleted — an unused one is deactivated (its ledger must stay readable).
+ */
+export const items = pgTable("items", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  hsCode: text("hs_code").notNull(),
+  group: text("group").notNull(),
+  /** the master item's *name*: SKUs reference their master by name, so renaming one carries them along */
+  masterItem: text("master_item").notNull(),
+  brand: text("brand").notNull(),
+  name: text("name").notNull(),
+  /** unit-of-measure code from the Units master */
+  unit: text("unit").notNull(),
+  sku: text("sku").notNull(),
+  purchasePrice: numeric("purchase_price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** derived when the SKU is created (from the purchase price, or the sale price without one) and never edited */
+  costPrice: numeric("cost_price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  salePrice: numeric("sale_price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  opening: numeric("opening", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  purchased: numeric("purchased", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  prodReceive: numeric("prod_receive", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  prodIssue: numeric("prod_issue", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  sold: numeric("sold", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  damage: numeric("damage", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  reorderLevel: numeric("reorder_level", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  active: boolean("active").notNull(),
+}, (t) => [
+  // SKUs are unique case-insensitively (skuTaken)
+  uniqueIndex("items_sku_lower_key").on(sql`lower(${t.sku})`),
+  index("items_master_item_idx").on(t.masterItem),
+  index("items_hs_code_idx").on(t.hsCode),
+  check("items_group_check", sql`${t.group} in ('Raw Material','Consumable','Packing Materials','Finished Goods')`),
+])
+
+/**
+ * R5.2 — master items: the HS-code product a SKU belongs to, with its tax profile. Rates default from the tariff
+ * (`tariff_lines`); a difference is flagged as an override and needs a reason. The profile is stored flat, like the
+ * tariff's own columns, so a master item and its HS line can be compared in SQL.
+ */
+export const masterItems = pgTable("master_items", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  group: text("group").notNull(),
+  category: text("category").notNull(),
+  unit: text("unit").notNull(),
+  priceMethod: text("price_method").notNull(),
+  description: text("description"),
+  vat: numeric("vat", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  cd: numeric("cd", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  rd: numeric("rd", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  ait: numeric("ait", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  at: numeric("at", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  /** mandatory once a rate differs from the tariff (buildMaster) */
+  overrideReason: text("override_reason"),
+  active: boolean("active").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the master item's own trail, shown on its register row; the same entries are in `audit_events` */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  // names are unique case-insensitively (buildMaster)
+  uniqueIndex("master_items_name_lower_key").on(sql`lower(${t.name})`),
+  index("master_items_hs_code_idx").on(t.hsCode),
+  check("master_items_group_check", sql`${t.group} in ('Raw Material','Consumable','Packing Materials','Finished Goods')`),
+  check("master_items_category_check", sql`${t.category} in ('general','commercialImporter','medicine','petroleum','superShop')`),
+  check("master_items_price_method_check", sql`${t.priceMethod} in ('average','standard')`),
 ])
 
 /**

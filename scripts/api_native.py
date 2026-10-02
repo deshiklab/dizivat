@@ -160,6 +160,38 @@ def run():
     check(ud.status_code == 201, f"compat: UD created for the snapshot check ({ud.status_code})")
     unit = arif.post(f"{BASE}/units", json={"code": f"R5{TAG[:3]}", "name": "R5 test unit", "decimals": 1, "active": True})
     check(unit.status_code == 201 and unit.json()["id"].startswith("un"), "native: unit created")
+    # R5.2: SKUs and master items are native too. A master item's rename carries its SKUs along (they quote its name),
+    # a compat document moves an item's counters, and the R6.2 bulk import creates SKUs — all three must reach the table.
+    m0 = arif.get(f"{BASE}/master-items", params={"size": 1}).json()["data"][0]
+    HS, UNIT, RATES = m0["hsCode"], m0["unit"], m0["rates"]
+    master_body = {"hsCode": HS, "name": f"R5 Master {TAG}", "group": "Raw Material", "category": "general", "unit": UNIT,
+                   "priceMethod": "average", "description": "", "rates": RATES, "overrideReason": "", "active": True}
+    mi = arif.post(f"{BASE}/master-items", json=master_body)
+    check(mi.status_code == 201 and mi.json()["id"].startswith("m"), f"native (R5.2): master item created ({mi.status_code})")
+    mid = mi.json().get("id")
+    item_body = {"name": f"R5 Item {TAG}", "hsCode": HS, "group": "Raw Material", "unit": UNIT, "sku": f"R5-{TAG}",
+                 "purchasePrice": 100, "salePrice": 150, "vatRate": 15, "sdRate": 0, "reorderLevel": 10, "active": True,
+                 "masterItemId": mid}
+    it = arif.post(f"{BASE}/items", json=item_body)
+    check(it.status_code == 201 and it.json()["costPrice"] == 112 and it.json()["remain"] == 0,
+          f"native (R5.2): SKU created, cost price derived ({it.status_code})")
+    iid = it.json().get("id")
+    check(arif.post(f"{BASE}/items", json={**item_body, "name": "Same SKU again"}).status_code == 422, "a duplicate SKU is refused (422)")
+    check(arif.post(f"{BASE}/items", json={**item_body, "sku": f"R5B-{TAG}", "masterItemId": "m99999"}).status_code == 422,
+          "an unknown master item is refused (422)")
+    rn = arif.put(f"{BASE}/master-items/{mid}", json={**master_body, "name": f"R5 Master Renamed {TAG}"})
+    check(rn.status_code == 200 and arif.get(f"{BASE}/items/{iid}").json()["masterItem"] == f"R5 Master Renamed {TAG}",
+          "R5.2: renaming a master item carries its SKUs along")
+    check(any(x["id"] == iid for x in arif.get(f"{BASE}/master-items/{mid}").json()["skus"]), "R5.2: …and it still lists them")
+    branch = arif.get(f"{BASE}/stock").json()["branches"][0]["id"]
+    op = arif.post(f"{BASE}/opening-stock", json={"itemId": iid, "branchId": branch, "date": "2026-09-22", "inputTax": "standard",
+                                                  "qty": 40, "price": 100, "process": "Approved"})
+    check(op.status_code == 201 and arif.get(f"{BASE}/items/{iid}").json()["remain"] == 40,
+          f"compat: an approved opening entry moves the SKU's stock ({op.status_code})")
+    imp = arif.post(f"{BASE}/import", json={"entity": "items", "dryRun": False, "rows": [
+        {"name": f"R5 Imported {TAG}", "hsCode": HS, "group": "Consumable", "unit": UNIT, "sku": f"R5IMP-{TAG}",
+         "purchasePrice": "12.5", "salePrice": "20", "vatRate": "15", "sdRate": "0", "reorderLevel": "0", "active": "yes"}]})
+    check(imp.status_code == 201 and imp.json()["created"] == 1, f"compat (R6.2): the bulk import created a SKU ({imp.status_code})")
     arif.put(f"{BASE}/me/preferences", json={"density": "compact", "accent": "violet"})
     arif.post(f"{BASE}/me/views", json={"table": "sales", "name": f"R5 view {TAG}", "query": "status=approved"})
     audit = arif.get(f"{BASE}/audit", params={"q": TAG, "size": 50}).json()
@@ -182,6 +214,23 @@ def run():
                               f"select 'dup{TAG}', 999999, kind, name, bin, mode, mobile, address from parties where kind = 'customer' and deleted_at is null limit 1"],
                              capture_output=True, text=True)
         check(dup.returncode != 0, "R5.2: the database refuses a duplicate party name (unique index), not just the API")
+        check(psql(f"select count(*) from items where id = '{iid}'") == "1", "R5.2: SKUs are rows in the items table")
+        check(psql(f"select count(*) from master_items where id = '{mid}' and name = 'R5 Master Renamed {TAG}'") == "1",
+              "R5.2: …and master items in master_items")
+        check(psql(f"select count(*) from items where master_item = 'R5 Master Renamed {TAG}'") == "1", "R5.2: the rename carried the SKU along in the table")
+        check(psql(f"select opening = 40 from items where id = '{iid}'") == "t", "R5.2: a compat document that moved a counter reached the table")
+        check(psql(f"select count(*) from items where sku = 'R5IMP-{TAG}'") == "1", "R5.2: …and the compat bulk import was adopted into it")
+        check(psql("select count(*) from compat_state where data->'db' ? 'items' or data->'db' ? 'masterItems'") == "0",
+              "R5.2: the snapshot carries no item collection at all")
+        check(int(psql("select count(*) from items")) >= 22 and int(psql("select count(*) from master_items")) >= 19,
+              "R5.2: the demo SKUs and master items were seeded into their tables")
+        icols = ('id, ord, hs_code, "group", master_item, brand, name, unit, sku, purchase_price, cost_price, sale_price, vat_rate, '
+                 'sd_rate, opening, purchased, prod_receive, prod_issue, sold, damage, reorder_level, active')
+        dupsku = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                 f"insert into items ({icols}) select 'dups{TAG}', 999999, hs_code, \"group\", master_item, brand, name, unit, sku, "
+                                 "purchase_price, cost_price, sale_price, vat_rate, sd_rate, 0, 0, 0, 0, 0, 0, 0, true from items limit 1"],
+                                capture_output=True, text=True)
+        check(dupsku.returncode != 0, "R5.2: the database refuses a duplicate SKU (unique index), not just the API")
         # R6: tamper-evident, append-only audit trail (NBR enlistment — protection against tampering)
         check(psql("select count(*) from audit_events where hash is null or prev_hash is null") == "0", "R6: every audit event is sealed (prev_hash + hash)")
         def refused(q):
@@ -357,6 +406,8 @@ def run():
         check(arif.get(f"{BASE}/vendors/{gid}").status_code == 404, "R5.2: a deleted party stays deleted across a restart")
         check(any(u["no"] == ud_body["no"] for u in arif.get(f"{BASE}/vat/uds").json().get("rows", [])), "compat: the UD still there")
         check(any(x["code"] == f"R5{TAG[:3]}" for x in arif.get(f"{BASE}/units").json()["data"]), "native: unit still there")
+        check(arif.get(f"{BASE}/items/{iid}").json().get("remain") == 40, "R5.2: the SKU's stock survives a restart (counters are columns, not memory)")
+        check(arif.get(f"{BASE}/master-items/{mid}").json().get("name") == f"R5 Master Renamed {TAG}", "R5.2: …and the master item kept its rename")
         me = arif.get(f"{BASE}/me").json()
         check(me["preferences"].get("density") == "compact" and me["preferences"].get("accent") == "violet", "preferences still there")
         check(any(x["name"] == f"R5 view {TAG}" for x in arif.get(f"{BASE}/me/views", params={"table": "sales"}).json()), "saved view still there")
@@ -396,6 +447,9 @@ def run():
             w = arif.post(f"{BASE}/customers", json={"name": f"R6 Stale Write {TAG}", "mode": "Foreign", "country": "Japan", "address": "1-2-3 Ginza, Tokyo"})
             check(w.status_code == 503, f"stale instance refuses a native party write after a re-seed elsewhere (HTTP {w.status_code})")
             check(psql(f"select count(*) from parties where name like '%R6 Stale Write {TAG}%'") == "0", "R5.2: the refused party never reached the parties table")
+            wi = arif.post(f"{BASE}/items", json={**item_body, "name": f"R6 Stale Item {TAG}", "sku": f"R6-SW-{TAG}"})
+            check(wi.status_code == 503, f"R5.2: stale instance refuses a native SKU write (HTTP {wi.status_code})")
+            check(psql(f"select count(*) from items where sku = 'R6-SW-{TAG}'") == "0", "R5.2: the refused SKU never reached the items table")
             wu = arif.post(f"{BASE}/vat/uds", json={**ud_body, "no": f"BKMEA/UD/2026/SW{TAG}".upper(), "masterLcNo": f"EXP-LC-SW-{TAG}"})
             check(wu.status_code == 503, f"stale instance refuses a compat write after a re-seed elsewhere (HTTP {wu.status_code})")
             check(psql(f"select count(*) from compat_state where data::text like '%R6 Stale Write {TAG}%'") == "0", "stale snapshot not written over the re-seeded data")
@@ -409,9 +463,10 @@ def run():
         cl = arif.get(f"{BASE}/customers", params={"q": f"R6 Stale Write {TAG}"}).json()
         cl = cl.get("data", []) if isinstance(cl, dict) else cl
         uds_after = arif.get(f"{BASE}/vat/uds").json().get("rows", [])
+        stale_items = arif.get(f"{BASE}/items", params={"q": f"R6 Stale Item {TAG}"}).json()
         check(v3.get("ok") is True and not any(f"R6 Stale Write {TAG}" in (c.get("name") or "") for c in cl)
-              and not any(f"SW{TAG}".upper() in (u.get("no") or "") for u in uds_after),
-              "after a restart: chain intact, both refused writes absent")
+              and not any(f"SW{TAG}".upper() in (u.get("no") or "") for u in uds_after) and stale_items.get("total", 0) == 0,
+              "after a restart: chain intact, all three refused writes absent")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

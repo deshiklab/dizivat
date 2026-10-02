@@ -22,6 +22,7 @@ import { runQuery, toCSV } from "@/lib/mock/query"
 import { partyInput } from "@/lib/schemas"
 import type { Party } from "@/lib/types"
 import { Authed, type AuthedRequest } from "../common/auth"
+import { WriteBack, type Delta } from "../common/writeback"
 import { jsonBody, parse, Problem, searchParams, sendCsv } from "../common/http"
 import { lockState } from "../common/state-guard"
 import { db, type Tx } from "../db/client"
@@ -62,38 +63,16 @@ export const partyValues = (p: Party) => ({
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * Last persisted shape of every live party, keyed by id. The compat handlers read parties but only one of them
- * writes (the R6.2 bulk import creates customers/vendors); comparing signatures after each compat request adopts
- * those rows and heals any drift, so the table and the in-memory world cannot come apart.
+ * The compat handlers read parties everywhere but only one of them writes (the R6.2 bulk import creates
+ * customers/vendors); comparing signatures after each request adopts those rows and heals any drift, so the table
+ * and the in-memory world cannot come apart. See common/writeback.ts.
  */
-const sigs = new Map<string, string>()
-/** Key order is not part of the contract, so it must not make a party look modified (the sorted-keys replacer). */
-const sig = (p: Party) => JSON.stringify(p, Object.keys(p).sort())
-export const markParties = (list: Party[]) => list.forEach((p) => sigs.set(p.id, sig(p)))
-export const forgetParty = (id: string) => { sigs.delete(id) }
-
-export interface PartyDelta { insert: Party[]; update: Party[]; /** in the table but gone from memory */ missing: string[] }
-
-/** Parties the compat handlers added or edited since the last persist. A pure read: `applyPartyDelta` records the
- *  new signatures only once the transaction that saves them has committed, so a failure retries them. */
-export function partyDelta(): PartyDelta {
-  const delta: PartyDelta = { insert: [], update: [], missing: [] }
-  const live = new Set<string>()
-  for (const kind of ["customer", "vendor"] as const) {
-    for (const p of mirror.parties(kind)) {
-      live.add(p.id)
-      const s = sig(p)
-      const had = sigs.get(p.id)
-      if (had === undefined) delta.insert.push(p)
-      else if (had !== s) delta.update.push(p)
-    }
-  }
-  for (const id of sigs.keys()) if (!live.has(id)) delta.missing.push(id)
-  return delta
-}
-export const deltaEmpty = (d: PartyDelta) => !d.insert.length && !d.update.length && !d.missing.length
-/** After the persist transaction committed: the saved shapes are the new baseline. */
-export const commitPartyDelta = (d: PartyDelta) => markParties([...d.insert, ...d.update])
+const wb = new WriteBack<Party>("parties", () => [...mirror.parties("customer"), ...mirror.parties("vendor")], (p) => p.id)
+export type PartyDelta = Delta<Party>
+export const markParties = (list: Party[]) => wb.mark(list)
+export const forgetParty = (id: string) => wb.forget(id)
+export const partyDelta = () => wb.delta()
+export const commitPartyDelta = (d: PartyDelta) => wb.commit(d)
 
 /**
  * Applies the delta inside the persist transaction. A party that disappeared from memory is put back from its last
@@ -104,9 +83,8 @@ export async function applyPartyDelta(tx: Tx, d: PartyDelta) {
   for (const p of d.insert) await tx.insert(parties).values(partyValues(p)).onConflictDoUpdate({ target: parties.id, set: partyValues(p) })
   for (const p of d.update) await tx.update(parties).set(partyValues(p)).where(eq(parties.id, p.id))
   for (const id of d.missing) {
-    const s = sigs.get(id)
-    if (!s) continue
-    const p = JSON.parse(s) as Party
+    const p = wb.stored(id)
+    if (!p) continue
     mirror.putParty(p)
     console.warn(`[parties] ${p.kind} ${id} vanished from the in-memory state — restored from the table copy`)
   }
