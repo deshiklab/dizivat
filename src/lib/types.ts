@@ -89,7 +89,9 @@ export interface Line {
  * Customs duty stack of one Bill-of-Entry line (NBR method, all amounts BDT, rates %):
  * AV = USD × rate · CD = AV·cd · RD = AV·rd · SD = (AV+CD+RD)·sd · VAT = (AV+CD+RD+SD)·vat · AIT = AV·ait · AT = (AV+CD+RD+SD)·at
  */
-export interface ImportDuty { usd: number; usdRate: number; av: number; cdRate: number; cd: number; rdRate: number; rd: number; aitRate: number; ait: number; atRate: number; at: number }
+export interface ImportDuty { usd: number; usdRate: number; av: number; cdRate: number; cd: number; rdRate: number; rd: number; aitRate: number; ait: number; atRate: number; at: number; /** R6.4: bonded (IM-7) entry — the assessed duty stack that was suspended under bond; the payable fields above are then 0 */ foregone?: DutyForegone }
+/** R6.4: duties assessed on a bonded Bill of Entry but not paid (secured by the general bond until the goods are exported). */
+export interface DutyForegone { cd: number; rd: number; sd: number; vat: number; ait: number; at: number; total: number }
 
 export type HistoryAction = "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored" | "submitted"
 export interface HistoryEntry { at: string; by: string; action: HistoryAction; note?: string }
@@ -174,7 +176,7 @@ export interface Purchase extends DocBase {
   boe?: BillOfEntry
 }
 export type PurchaseCategory = "goods" | "service"
-export interface BillOfEntry { no: string; date: string; lcNo: string; lcDate: string; customsHouse: string; origin: string; cnfFirm?: string; receiveAddress?: string }
+export interface BillOfEntry { no: string; date: string; lcNo: string; lcDate: string; customsHouse: string; origin: string; cnfFirm?: string; receiveAddress?: string; /** R6.4: warehoused under the customs bond (IM-7) — no duty / VAT paid, no input credit; tracked in the bond register */ bonded?: boolean }
 
 export interface Page<T, Totals = Record<string, number>> {
   data: T[]
@@ -394,6 +396,8 @@ export interface OpeningEntry {
   /** VAT paid on this stock when bought (for the 6.1 opening value), BDT */
   vatPaid: number
   note?: string
+  /** R6.4: part of this opening stock still warehoused under bond at go-live — its Bill of Entry, quantity and the duty suspended on it */
+  bond?: { boeNo: string; boeDate: string; qty: number; dutyForegone: number }
   process: Process
   issuedBy: string; createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
 }
@@ -978,3 +982,77 @@ export interface BackupVerify { id: string; ok: boolean; sha256: string; size: n
 export type ImportEntity = "items" | "customers" | "vendors"
 export interface ImportIssue { row: number; field: string; message: string }
 export interface ImportResult { entity: ImportEntity; dryRun: boolean; total: number; valid: number; created: number; duplicates: number; issues: ImportIssue[] }
+
+/* ── R6.4 — RMG bond consumption register (Customs Act s.114) and duty drawback ───────────────────────────────── */
+
+/** One bonded Bill-of-Entry line (or go-live carry-forward) and how much of it exports have consumed (FIFO). */
+export interface BondLot {
+  key: string
+  source: "import" | "opening"
+  /** purchase id (import) or opening entry id */
+  docId: string
+  docNo: string
+  boeNo: string
+  boeDate: string
+  itemId: string; name: string; uom: string
+  qty: number
+  consumed: number
+  balance: number
+  dutyForegone: number
+  /** duty still secured by the bond on the unconsumed balance */
+  dutyOnBalance: number
+  /** end of the 24-month bonding period / of the Commissioner's 6-month extension */
+  dueDate: string
+  extendedDue: string
+  daysLeft: number
+  state: "cleared" | "open" | "expiring" | "extension" | "overdue"
+}
+
+/** Register row: one input item — bonded receipts vs export consumption via the input-output coefficient (BOM). */
+export interface BondItemRow {
+  itemId: string; name: string; uom: string; hsCode: string
+  /** bonded book balance at the start of the range */
+  opening: number
+  bondedIn: number
+  /** export consumption met from bonded stock */
+  bondedUsed: number
+  closing: number
+  /** s.114(3): duty-paid imports and local / opening stock received in the range */
+  dutyPaidIn: number
+  localIn: number
+  /** total export consumption (exports × BOM gross qty incl. wastage) and how it was met */
+  exportUse: number
+  fromDutyPaid: number
+  fromLocal: number
+  /** consumption no recorded receipt covers (coefficient or stock records out of line) */
+  unsourced: number
+  /** stock on hand today (only when the range ends today), and the bonded quantity it cannot cover */
+  physical: number | null
+  shortfall: number
+  dutyPerUnit: number
+  dutyOnBalance: number
+  dutyAtRisk: number
+  state: "ok" | "shortfall" | "overUsed" | "idle"
+}
+
+/** Duty drawback (Customs, DEDO): CD + RD paid on imported inputs that went into one export. */
+export interface DrawbackRow {
+  saleId: string; invoiceNo: string; exportDate: string; billNo: string; deemed: boolean; customerName: string
+  inputs: { purchaseId: string; purchaseNo: string; boeNo: string; itemId: string; name: string; uom: string; qty: number; cd: number; rd: number }[]
+  cd: number; rd: number; total: number
+  /** claim window: 6 months from the export */
+  deadline: string
+  daysLeft: number
+  state: "open" | "expiring" | "lapsed"
+}
+
+export interface BondRegister {
+  asOf: string; from: string; to: string
+  licence: BondRow
+  rows: BondItemRow[]
+  lots: BondLot[]
+  drawback: { rows: DrawbackRow[]; totals: { claimable: number; expiring: number; lapsed: number } }
+  /** export lines whose finished good has no approved BOM on the export date (consumption unknown) */
+  noCoefficient: { saleId: string; invoiceNo: string; date: string; itemId: string; name: string; qty: number }[]
+  totals: { bondedItems: number; dutyOnBalance: number; dutyAtRisk: number; shortfallItems: number; overUsedItems: number; lotsExpiring: number; lotsExtension: number; lotsOverdue: number }
+}

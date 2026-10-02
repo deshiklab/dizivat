@@ -57,7 +57,8 @@
     "tradingBook": "Purchase-sales book (6.2.1)",
     "udRegister": "UD / bond register",
     "dataImport": "Data import",
-    "backups": "Backups"
+    "backups": "Backups",
+    "bondRegister": "Bond consumption register"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -1638,10 +1639,12 @@
       "customsHouse": "Customs house",
       "origin": "Country of origin",
       "cnfFirm": "C&F agent",
-      "receiveAddress": "Receiving address"
+      "receiveAddress": "Receiving address",
+      "bonded": "Imported under bond (IM-7 warehousing entry)"
     },
     "hint": {
-      "lcDate": "On or before the BoE date"
+      "lcDate": "On or before the BoE date",
+      "bonded": "Duty and VAT are suspended under the customs bond: nothing is payable or creditable now, and the goods must leave the bond inside exports within 24 months. The assessed duty is kept as duty foregone in the bond register."
     },
     "col": {
       "qty": "Qty",
@@ -1655,9 +1658,12 @@
       "av": "Assessable value",
       "tti": "Total tax incidence",
       "rebate": "Input tax credit",
-      "landed": "Landed cost"
+      "landed": "Landed cost",
+      "foregone": "Duty foregone (under bond)"
     },
-    "auto": "Auto"
+    "auto": "Auto",
+    "bondedHint": "Bonded entry: the duty stack is assessed for the bond register only — the landed cost is the assessable value and no input tax is claimed (Mushak 9.1 note 11).",
+    "bondedBadge": "Under bond · duty foregone ৳ {amount}"
   },
   "debit": {
     "title": "Debit notes",
@@ -3228,7 +3234,9 @@
       "uds": "UD / bond register",
       "udsHint": "Exporters' UD balances and bond licence expiry",
       "m64": "Subcontracting register",
-      "m64Hint": "Inputs at contractors (Mushak 6.4) and overdue returns"
+      "m64Hint": "Inputs at contractors (Mushak 6.4) and overdue returns",
+      "bond": "Bond consumption register",
+      "bondHint": "Bonded inputs vs exports, BoE ageing, duty drawback"
     },
     "vdsIssueBy": "Issue Mushak 6.6 by {date} (3 working days after filing)",
     "pen": {
@@ -3914,6 +3922,128 @@
       },
       "neverHint": "No restore drill is recorded for this database yet.",
       "how": "A backup counts only once it has been restored. The drill restores the newest backup into a fresh database, compares every table and document, verifies the audit chain and starts the app on it. See Help → Restoring a backup and the restore drill."
+    }
+  },
+  "bond": {
+    "title": "Bond consumption register",
+    "subtitle": "Inputs warehoused under the customs bond against their use in exports through the input–output coefficient (BOM), each Bill of Entry aged against the bonding period, and the duty drawback still open on duty-paid inputs (Customs Act s.114).",
+    "error": "Could not load the bond register",
+    "daysLeft": "{days} days left",
+    "daysAgo": "{days} days ago",
+    "boeAttention": "Bills of Entry need attention",
+    "noCoefficient": "{n, plural, one {# export line has} other {# export lines have}} no approved BOM on the export date, so its input consumption is not counted: {items}.",
+    "csv": {
+      "register": "Register CSV",
+      "lots": "Bills of Entry CSV",
+      "drawback": "Drawback CSV"
+    },
+    "licence": {
+      "title": "Bond licence",
+      "no": "Licence",
+      "expiry": "Valid until",
+      "note": "Renew the licence every two years. A direct garment exporter needs no annual entitlement: imports follow each UD and its master LC, and the Bond Commissionerate settles the UD after export and audits this register every year.",
+      "state": {
+        "valid": "Valid",
+        "expiring": "Renewal due",
+        "expired": "Expired",
+        "missing": "Not recorded"
+      }
+    },
+    "totals": {
+      "secured": "Duty secured by the bond",
+      "securedHint": "On the bonded balance of {n, plural, one {# input} other {# inputs}}",
+      "atRisk": "Duty at risk",
+      "atRiskHint": "{n, plural, one {# input} other {# inputs}} short of the book balance, plus Bills of Entry past the extension",
+      "boe": "Bills of Entry to act on",
+      "boeHint": "{expiring} expiring · {extension} in extension · {overdue} overdue",
+      "drawback": "Drawback still claimable",
+      "drawbackHint": "৳ {amount} must be claimed within 30 days"
+    },
+    "range": {
+      "title": "Period",
+      "from": "From",
+      "to": "To",
+      "apply": "Apply",
+      "reset": "Reset",
+      "asOfToday": "Balances as of today, compared with stock on hand.",
+      "asOf": "Balances as of {date}. Stock on hand is only compared when the period ends today."
+    },
+    "tab": {
+      "register": "Register",
+      "boe": "Bills of Entry",
+      "drawback": "Duty drawback"
+    },
+    "reg": {
+      "table": "Bond register by input",
+      "item": "Input",
+      "opening": "Bonded opening",
+      "bondedIn": "Bonded receipts",
+      "exportUse": "Used in exports (bonded)",
+      "closing": "Bonded balance",
+      "physical": "Stock on hand",
+      "duty": "Duty on balance",
+      "status": "Status",
+      "metBy": "of {total} consumed · {paid} duty-paid · {local} local",
+      "unsourced": "{qty} not covered by any receipt",
+      "shortfall": "Short by {qty}",
+      "atRisk": "At risk",
+      "state": {
+        "ok": "In balance",
+        "shortfall": "Shortfall",
+        "overUsed": "Over-consumed",
+        "idle": "Not bonded"
+      },
+      "empty": "No bonded inputs",
+      "emptyHint": "Mark an import as \"Imported under bond\" to start the register.",
+      "note": "Consumption = exports (direct and deemed) × the gross quantity of each input in the BOM in force on the export date. Exports use bonded stock first (oldest Bill of Entry first), then duty-paid imports, then local stock. A shortfall means the bond book shows more than the stock on hand — the Bond Commissionerate charges full duty on it at the audit. Duty-paid and local inputs are listed too (s.114(3))."
+    },
+    "boe": {
+      "table": "Bonded Bills of Entry",
+      "boe": "Bill of Entry",
+      "item": "Input",
+      "qty": "Bonded",
+      "consumed": "Consumed",
+      "balance": "Balance",
+      "duty": "Duty on balance",
+      "of": "of",
+      "due": "Bonding period ends",
+      "status": "Status",
+      "carried": "{no} (go-live)",
+      "extensionUntil": "Extension needed — latest {date}",
+      "overdueSince": "Duty payable since {date}",
+      "state": {
+        "open": "Open",
+        "expiring": "Expiring",
+        "extension": "In extension",
+        "overdue": "Overdue",
+        "cleared": "Cleared"
+      },
+      "empty": "No bonded Bills of Entry",
+      "emptyHint": "Bonded imports and go-live carry-forwards appear here.",
+      "note": "Bonded goods must be exported within {months} months of the Bill of Entry; the Commissioner can extend this by at most {ext} months. A Bill of Entry turns amber {days} days before the end. After the extension the duty on the balance is payable."
+    },
+    "db": {
+      "table": "Duty drawback by export",
+      "export": "Export",
+      "inputs": "Duty-paid inputs consumed",
+      "inputsSummary": "{n} import lines",
+      "cd": "CD",
+      "rd": "RD",
+      "total": "Claimable",
+      "deadline": "Claim by",
+      "status": "Status",
+      "deemed": "deemed export",
+      "claimable": "Claimable (open)",
+      "expiring": "Expiring within {days} days",
+      "lapsed": "Lapsed — not claimed in time",
+      "state": {
+        "open": "Open",
+        "expiring": "Expiring",
+        "lapsed": "Lapsed"
+      },
+      "empty": "No drawback",
+      "emptyHint": "Exports that consumed duty-paid imported inputs appear here.",
+      "note": "Customs duty and regulatory duty paid on imported inputs that went into an export are refundable as duty drawback: claim on Mushak-22 at the Duty Exemption & Drawback Office (DEDO) within {months} months of the export. VAT and AT are already input credit in the return, SD on exported inputs is taken back through Mushak 9.1 note 40, and AIT is an income-tax advance, so none of them is counted here."
     }
   }
 }

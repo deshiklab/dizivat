@@ -1,4 +1,4 @@
-# RMG (ready-made garments) — VAT features (R6 / R6.2 / R6.3)
+# RMG (ready-made garments) — VAT features (R6 / R6.2 / R6.3 / R6.4)
 
 DiziVAT's main customer segment is the garment industry. That covers two kinds of business:
 
@@ -130,7 +130,49 @@ yet). UD 08812 has a $268,500 export LC, BB-LC `BB-LC-0934-26-0117` at 78.8 % of
 API: `GET /vat/sd-eligible`, `POST /vat/adjustments` with `kind: "sdExport"`, `PUT /vat/uds/{id}` with `amendReason` —
 see `docs/API.md`.
 
-## 6. Still planned
+## 6. R6.4 — bond consumption register and duty drawback
 
-1. Duty drawback / bond consumption register (inputs imported under bond vs used in exports).
+A bonded garment factory imports fabric, yarn and accessories **without paying duty**: the Bill of Entry is a
+warehousing entry (IM-7) secured by the general bond, and the goods may only leave the bond inside exported garments.
+Customs Act s.114 requires a register of these goods (s.114(3): duty-paid and locally bought inputs too); the Bond
+Commissionerate settles each UD after export, audits the register every year and charges the full duty on anything
+that is not accounted for. A direct garment exporter needs no annual entitlement — imports follow each UD and its master
+LC — but the bond licence must be renewed every two years.
+
+- **Bonded import:** *Purchases › New import* has a switch **Imported under bond (IM-7 warehousing entry)**. The duty
+  stack (CD, RD, SD, VAT, AIT, AT) is still assessed from the tariff and kept on each line as `duty.foregone`, but the
+  payable fields are 0: no TTI, no input tax credit, landed cost = assessable value. Mushak 9.1 reports the value in
+  **note 11** (zero-rated import). The purchase shows an *Under bond* badge. Go-live bonded stock is brought forward on
+  the opening-stock entry (`bond: {boeNo, boeDate, qty, dutyForegone}`) so its bonding period runs from the original
+  Bill of Entry.
+- **Consumption = the input–output coefficient:** every approved export invoice (direct and deemed) × the gross quantity
+  (incl. wastage) of each input in the approved BOM (Mushak 4.3) in force on the export date. One chronological pass
+  per input; consumption is met from **bonded lots (oldest Bill of Entry first)**, then **duty-paid imports** (drawback),
+  then **local purchases / opening stock**; what is left is *unsourced*.
+- **Register** (*NBR VAT › Bond consumption register*, `/vat/bond-consumption`): per input — bonded opening, bonded
+  receipts, bonded quantity used in exports (with the total consumption and its duty-paid / local split), bonded
+  balance, stock on hand, **shortfall** (book balance above stock on hand) and the duty on the balance / **at risk**
+  (shortfall × duty per unit + Bills of Entry past the extension). States: *in balance*, *shortfall*, *over-consumed*
+  (unsourced consumption), *not bonded*. A date range (`from` / `to`) re-computes the bonded opening; stock on hand is
+  compared only when the range ends today.
+- **Bills of Entry:** each bonded line with consumed / balance and the **24-month bonding period** (+ at most 6 months'
+  extension by the Commissioner): *open*, *expiring* (≤ 90 days), *in extension*, *overdue* (duty payable), *cleared*.
+- **Duty drawback:** customs duty + regulatory duty on the duty-paid import lines each export consumed, claimable on
+  Mushak-22 at DEDO within **six months of the export** (*open*, *expiring* ≤ 30 days, *lapsed*). VAT / AT (input credit),
+  SD (note 40) and AIT (income-tax advance) are not counted.
+- CSV for each tab; the compliance centre lists the register (BOND); two bilingual help articles.
+
+Demo data (R6.4): four bonded Bills of Entry — Jan 2026 denim (cleared by the Feb jeans export), Mar 2026 compact yarn
+(part used by the polo exports), Jul 2026 denim + pocketing and Sep 2026 combed yarn + elastane (open) — and two go-live
+carry-forwards: pocketing (BoE 5 Nov 2024, bonding period ends 5 Nov 2026 → *expiring*) and printing ink (BoE 20 Aug
+2024 → *in extension*; book 76.32 kg vs 55 kg on the shelf → shortfall, about ৳9,072 at risk). Drawback: 13 exports
+with duty-paid inputs, one claim window ending on 25 Sep 2026 and ৳1.07 m already lapsed. The bonded imports carry no
+tax, so tax payable and the returns are unchanged.
+
+API: `GET /vat/bond?from&to[&format=csv&view=register|lots|drawback]`; `POST /purchases` with `boe.bonded: true` — see
+`docs/API.md`.
+
+## 7. Still planned
+
+1. Drawback claim tracking (Mushak-22 reference, DEDO status) and UD-wise bond settlement.
 2. Export proceeds matched automatically from the bank's PRC file.

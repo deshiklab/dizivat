@@ -20,7 +20,7 @@ import { toUser } from "./modules/identity"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, restoreGlobals } from "./state"
 
-export const SEED_VERSION = "r6.3"
+export const SEED_VERSION = "r6.4"
 
 /**
  * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —

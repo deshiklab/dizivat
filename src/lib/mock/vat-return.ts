@@ -30,6 +30,8 @@ export function saleNote(s: Sale, vatRate: number): number {
 export function purchaseNote(p: Purchase, l: Purchase["lines"][number]): number {
   const imp = isImport(p)
   if (p.mode === "Non-registered") return 20
+  // R6.4: warehoused under bond (IM-7) — zero-rated import of inputs for export production, no input tax
+  if (imp && p.boe?.bonded) return 11
   if (!l.rebateable) return imp ? 22 : 21
   if (l.vatRate === 0) return imp ? 13 : 12
   if (l.vatRate === 15) return imp ? 15 : 14

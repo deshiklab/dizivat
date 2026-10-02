@@ -3,6 +3,7 @@ import type { Line, Party, Purchase, Sale } from "../types"
 import type { importInput, purchaseInput, saleInput } from "../schemas"
 import { findService } from "../r2"
 import { findSaleService } from "../r3"
+import { bondedLine } from "../bond"
 import { calcImportLine, calcLine, round2, sumLines } from "../vat"
 import { db, resolveBranch } from "./db"
 
@@ -65,6 +66,7 @@ export function buildPurchaseFields(d: PurchaseData | ImportData, v: Party) {
       const it = db.items.find((i) => i.id === l.itemId)!
       const rebateable = l.rebateable ?? true
       const c = calcImportLine({ qty: l.qty, usd: l.usd, usdRate: l.usdRate, av: l.av, cdRate: l.cdRate, rdRate: l.rdRate, sdRate: l.sdRate, vatRate: l.vatRate, aitRate: l.aitRate, atRate: l.atRate }, rebateable)
+      if (imp.boe.bonded) return bondedLine(it, l, c)
       return {
         itemId: it.id, name: it.name, hsCode: it.hsCode, uom: it.unit, qty: l.qty, price: c.unitAv, sdRate: l.sdRate, vatRate: l.vatRate,
         subtotal: c.av, sd: c.sd, vat: c.vat, total: c.total, tti: c.tti, rebateable, vds: false,
@@ -92,7 +94,7 @@ export function buildPurchaseFields(d: PurchaseData | ImportData, v: Party) {
     rebate: round2(lines.filter((l) => l.rebateable).reduce((a, l) => a + l.vat + (l.duty?.at ?? 0), 0)),
     paid, due: round2(t.netTotal - paid), issuedBy: d.issuedBy, designation: d.designation, narration: d.narration,
     ...(service ? { category: "service" as const } : {}),
-    ...(imp ? { boe: { no: d.challanNo, date: d.challanDate, ...imp.boe, cnfFirm: imp.boe.cnfFirm || undefined, receiveAddress: imp.boe.receiveAddress || undefined } } : {}),
+    ...(imp ? { boe: { no: d.challanNo, date: d.challanDate, ...imp.boe, cnfFirm: imp.boe.cnfFirm || undefined, receiveAddress: imp.boe.receiveAddress || undefined, bonded: imp.boe.bonded || undefined } } : {}),
     ...branchFields(d.branchId),
   } satisfies Partial<Purchase>
 }

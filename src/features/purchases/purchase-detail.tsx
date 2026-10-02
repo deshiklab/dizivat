@@ -3,7 +3,7 @@
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { ArrowLeft, HandCoins, Link2, Printer, ShieldCheck, Ship, Undo2 } from "lucide-react"
+import { ArrowLeft, HandCoins, Landmark, Link2, Printer, ShieldCheck, Ship, Undo2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { PdfButton } from "@/components/common/pdf-button"
@@ -24,7 +24,7 @@ import { useCan, useCompany } from "@/components/auth/me-provider"
 import { customsHouseName } from "@/lib/r2"
 import { round2 } from "@/lib/vat"
 import type { Line } from "@/lib/types"
-import { fmtDate } from "@/lib/format"
+import { fmtDate, fmtNum } from "@/lib/format"
 
 export function PurchaseDetail({ id }: { id: string }) {
   const company = useCompany()
@@ -81,7 +81,9 @@ export function PurchaseDetail({ id }: { id: string }) {
         <div className="grid min-w-0 content-start gap-4">
         {p.boe && (
           <Card>
-            <CardHeader><CardTitle className="flex items-center gap-2"><Ship className="size-4" aria-hidden /> {ti("sectionBoe")}</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="flex flex-wrap items-center gap-2"><Ship className="size-4" aria-hidden /> {ti("sectionBoe")}
+              {p.boe.bonded && <Link href="/vat/bond-consumption?tab=boe" className="ml-auto"><Pill tone="info" icon={Landmark}>{ti("bondedBadge", { amount: fmtNum(p.lines.reduce((a, l) => a + (l.duty?.foregone?.total ?? 0), 0), locale, 2) })}</Pill></Link>}
+            </CardTitle></CardHeader>
             <CardContent>
               <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 {[[ti("field.boeNo"), p.challanNo], [ti("field.boeDate"), fmtDate(p.challanDate, locale)], [ti("field.lcNo"), p.boe.lcNo], [ti("field.lcDate"), fmtDate(p.boe.lcDate, locale)],

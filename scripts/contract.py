@@ -188,6 +188,7 @@ ENDPOINTS = [
     E("POST", "/vat/adjustments", "doc.create", "Create {kind, issueDate, taxPeriod, amount, description ≥ 10, reference?, process} (422 periodLocked). R6.3 kind sdExport (note 40) adds {purchaseId, itemId, qty, saleId}; the amount is computed pro rata (422 sdPurchaseApproved / sdNoSd / sdDirectExportOnly / sdWindow / sdClaimLapsed / sdPeriodBeforeExport / sdExceeds)"),
     E("GET", "/vat/sd-eligible", None, "R6.3: SD paid on inputs — 6-month export window {rows (purchase line, sd, claimed, remaining, remainingQty, deadline, daysLeft, state open/expiring/lapsed/claimed), exports (direct exports in a window), totals {claimable, expiring, lapsedUnclaimed}}; ?exclude=<adjustment> ignores one draft"),
     E("GET", "/vat/penalty", None, "R6.3: interest (§127, 1 %/month ≤ 24) + late-return penalty — exposure {asOf, rows, total, periodsAtRisk}; with ?period&vat&sd&paidOn&filedOn&latePenalty a quote {input, result (dueDate, daysLate, chargedMonths, capped, interestVat → note 41, interestSd → 42, penaltyLate → 43, total), basis} (422 outOfRange / min0 / date / beforePeriodEnd)"),
+    E("GET", "/vat/bond", None, "R6.4 (RMG): bond consumption register — {asOf, from, to, licence (own bond licence: BondRow), rows (per input: bonded opening / receipts / used in exports via the BOM coefficient / closing, duty-paid + local receipts, exportUse met fromDutyPaid / fromLocal / unsourced, physical, shortfall, dutyOnBalance, dutyAtRisk, state ok|shortfall|overUsed|idle), lots (bonded BoE lines + go-live carry-forwards, FIFO consumed / balance, dueDate 24 months, extendedDue +6, state open|expiring|extension|overdue|cleared), drawback {rows (export → duty-paid import lines, CD + RD, deadline 6 months, state open|expiring|lapsed), totals {claimable, expiring, lapsed}}, noCoefficient, totals}; ?from&to (422 date / afterToday / beforeFrom); ?format=csv&view=register|lots|drawback", csv=True),
     E("GET", "/vat/adjustments/{adjustment}", None, "One adjustment with history"),
     E("PUT", "/vat/adjustments/{adjustment}", "doc.edit", "Replace a draft"),
     E("PATCH", "/vat/adjustments/{adjustment}", None, "Approve / cancel {reason≥10}"),
@@ -434,6 +435,10 @@ def run():
         ("arif", "GET", "/vat/penalty?period=2026-08&paidOn=2026-13-45", None, 422, "paidOn"),
         ("arif", "POST", "/vat/adjustments", {"kind": "otherIncrease", "issueDate": "2026-08-20", "taxPeriod": "2026-08", "amount": 100, "description": "Contract test in a locked period", "process": "Created"}, 422, "taxPeriod"),
         ("arif", "PUT", f"/vat/adjustments/{fx['adjustment']}", {}, 409, None),
+        # R6.4 — bond register range validation
+        ("arif", "GET", "/vat/bond?from=2026-02-30", None, 422, "from"),
+        ("arif", "GET", "/vat/bond?to=2030-01-01", None, 422, "to"),
+        ("arif", "GET", "/vat/bond?from=2026-09-01&to=2026-08-01", None, 422, "to"),
         ("arif", "GET", "/mushak/6.10?from=bad&to=2026-08-31", None, 422, "from"),
         ("admin", "PUT", "/vat/settings", {}, 422, None),
         ("admin", "PUT", "/accounting/config", {}, 422, None),

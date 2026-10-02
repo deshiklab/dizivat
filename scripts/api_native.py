@@ -261,6 +261,18 @@ def run():
     else:
         skipped("restore drill (DATABASE_URL not set)")
 
+    # R6.4: bond consumption register + drawback (compat), bonded import fields persisted in PostgreSQL
+    print("R6.4: bond register, BoE ageing, drawback")
+    bond = arif.get(f"{BASE}/vat/bond").json()
+    lots = {(l["boeNo"], l["itemId"]): l for l in bond.get("lots", [])}
+    check(lots.get(("C-0988415", "i4"), {}).get("state") == "expiring" and lots.get(("C-0979032", "i11"), {}).get("state") == "extension",
+          "R6.4: go-live BoEs expiring / in extension (bond register served from PostgreSQL)")
+    check(bond.get("totals", {}).get("dutyAtRisk", 0) > 0 and bond.get("drawback", {}).get("totals", {}).get("claimable", 0) > 0, "R6.4: shortfall duty at risk and claimable drawback")
+    bp = arif.get(f"{BASE}/purchases/{lots.get(('C-1012264', 'i5'), {}).get('docId', 'p98')}").json()
+    check(bp.get("boe", {}).get("bonded") is True and bp.get("vat") == 0 and (bp.get("lines") or [{}])[0].get("duty", {}).get("foregone", {}).get("total", 0) > 0,
+          "R6.4: bonded import keeps duty foregone with nothing payable")
+    check(arif.get(f"{BASE}/vat/bond", params={"to": "2030-01-01"}).status_code == 422, "R6.4: range validation (422)")
+
     # re-baseline: the R6.2 block above adds audit events for this run's tag (officer, access log, backups)
     before_ids = sorted(e["id"] for e in arif.get(f"{BASE}/audit", params={"q": TAG, "size": 50}).json()["data"])
     if RESTART:
@@ -281,6 +293,7 @@ def run():
         check(requests.post(f"{BASE}/auth/login", json={"username": name, "password": new_pw}).status_code == 200, "changed password survives a restart")
         n = arif.post(f"{BASE}/customers", json={"name": f"R5 After Restart {TAG}", "mode": "Foreign", "country": "Japan", "address": "4-5-6 Shibuya, Tokyo"})
         check(n.status_code == 201 and n.json()["id"] != cid, "new records after a restart get fresh ids")
+        check(arif.get(f"{BASE}/vat/bond").json().get("totals") == bond.get("totals"), "R6.4: bond register unchanged after a restart")
         bl = admin.get(f"{BASE}/backups").json()
         check(any(x["id"] == bid for x in bl.get("rows", [])), "R6.2: backups survive a restart")
         v2 = arif.get(f"{BASE}/audit/verify").json()

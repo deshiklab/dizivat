@@ -70,13 +70,13 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
     defaultValues: initial ? {
       vendorId: initial.vendorId, issueDate: initial.issueDate, challanNo: initial.challanNo, challanDate: initial.challanDate, method: initial.method,
       discount: initial.discount, paid: initial.paid, issuedBy: initial.issuedBy, designation: initial.designation, narration: initial.narration ?? "", process: "Created", branchId: initial.branchId ?? "", category: "goods",
-      boe: { lcNo: initial.boe?.lcNo ?? "", lcDate: initial.boe?.lcDate ?? "", customsHouse: initial.boe?.customsHouse ?? "301", origin: initial.boe?.origin ?? "", cnfFirm: initial.boe?.cnfFirm ?? "", receiveAddress: initial.boe?.receiveAddress ?? "" },
+      boe: { lcNo: initial.boe?.lcNo ?? "", lcDate: initial.boe?.lcDate ?? "", customsHouse: initial.boe?.customsHouse ?? "301", origin: initial.boe?.origin ?? "", cnfFirm: initial.boe?.cnfFirm ?? "", receiveAddress: initial.boe?.receiveAddress ?? "", bonded: initial.boe?.bonded ?? false },
       lines: initial.lines.map((l) => ({ itemId: l.itemId, qty: l.qty, usd: l.duty?.usd ?? 0, usdRate: l.duty?.usdRate ?? 122, av: l.duty && round2(l.duty.usd * l.duty.usdRate) !== l.duty.av ? l.duty.av : undefined, price: 0,
         cdRate: l.duty?.cdRate ?? 0, rdRate: l.duty?.rdRate ?? 0, sdRate: l.sdRate, vatRate: l.vatRate, aitRate: l.duty?.aitRate ?? 0, atRate: l.duty?.atRate ?? 0, rebateable: l.rebateable ?? true, vds: false })),
     } : {
       vendorId: "", issueDate: TODAY, challanNo: "", challanDate: TODAY, method: "Transaction", discount: 0, paid: 0, issuedBy: me.user.name, designation: me.user.designation,
       narration: "", process: "Created", branchId: "", category: "goods",
-      boe: { lcNo: "", lcDate: "", customsHouse: "301", origin: "", cnfFirm: "", receiveAddress: "" }, lines: [blankLine()],
+      boe: { lcNo: "", lcDate: "", customsHouse: "301", origin: "", cnfFirm: "", receiveAddress: "", bonded: false }, lines: [blankLine()],
     },
   })
   const { register, control, handleSubmit, setValue, getValues, setError, formState: { errors, isDirty, isSubmitting } } = form
@@ -93,7 +93,10 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
   }, !!l?.rebateable))
   const sum = (k: keyof (typeof calc)[number]) => round2(calc.reduce((a, c) => a + (c[k] as number), 0))
   const tot = { av: sum("av"), cd: sum("cd"), rd: sum("rd"), sd: sum("sd"), vat: sum("vat"), ait: sum("ait"), at: sum("at"), tti: sum("tti"), total: sum("total"), rebate: sum("rebate") }
-  const net = round2(tot.total - (Number(w.discount) || 0))
+  // R6.4: bonded (IM-7) entry — the duty stack is only assessed (secured by the bond); nothing payable or creditable
+  const bonded = !!w.boe?.bonded
+  const pay = bonded ? { tti: 0, total: tot.av, rebate: 0 } : { tti: tot.tti, total: tot.total, rebate: tot.rebate }
+  const net = round2(pay.total - (Number(w.discount) || 0))
   const payable = Math.max(0, round2(net - (Number(w.paid) || 0)))
 
   const pickItem = async (i: number, id: string) => {
@@ -177,6 +180,10 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
               {sel("branchId", tp("field.branch"), branches.map((b) => ({ value: b.id, label: b.name })), { fallback: mainBranch })}
               {sel("method", ts("field.method"), methodItems)}
               <Field id="boe.receiveAddress" label={t("field.receiveAddress")} error={err("boe.receiveAddress")} className="md:col-span-2">{(a) => <Input {...a} {...register("boe.receiveAddress")} />}</Field>
+              <div className="flex items-start gap-3 rounded-md border p-3 md:col-span-2">
+                <Controller control={control} name="boe.bonded" render={({ field }) => <Switch id="boe-bonded" checked={!!field.value} onCheckedChange={field.onChange} aria-describedby="boe-bonded-hint" />} />
+                <div className="grid gap-0.5"><label htmlFor="boe-bonded" className="text-sm font-medium">{t("field.bonded")}</label><p id="boe-bonded-hint" className="text-xs text-muted-foreground">{t("hint.bonded")}</p></div>
+              </div>
             </CardContent>
           </Card>
 
@@ -253,8 +260,9 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
               <dl className="grid grid-cols-[1fr_auto] gap-y-1.5 text-sm" aria-live="polite">
                 <dt className="text-muted-foreground">{t("sum.av")}</dt><dd className="text-right"><Money value={tot.av} /></dd>
                 {(["cd", "rd", "sd", "vat", "ait", "at"] as const).map((k) => <React.Fragment key={k}><dt className="text-muted-foreground">{k.toUpperCase()}</dt><dd className="text-right"><Money value={tot[k]} /></dd></React.Fragment>)}
-                <dt className="border-t pt-1.5 font-medium">{t("sum.tti")}</dt><dd className="border-t pt-1.5 text-right font-medium"><Money value={tot.tti} /></dd>
-                <dt className="font-medium text-success">{t("sum.rebate")}</dt><dd className="text-right font-medium text-success"><Money value={tot.rebate} /></dd>
+                {bonded && <><dt className="font-medium text-warning">{t("sum.foregone")}</dt><dd className="text-right font-medium text-warning" data-testid="duty-foregone"><Money value={tot.tti} /></dd></>}
+                <dt className="border-t pt-1.5 font-medium">{t("sum.tti")}</dt><dd className="border-t pt-1.5 text-right font-medium"><Money value={pay.tti} /></dd>
+                <dt className="font-medium text-success">{t("sum.rebate")}</dt><dd className="text-right font-medium text-success"><Money value={pay.rebate} /></dd>
               </dl>
               <div className="grid grid-cols-2 gap-3">
                 <Field id="discount" label={ts("field.discount")} error={err("discount")}>{(a) => <Input type="number" step="0.01" min={0} className="text-right tabular" {...a} {...register("discount", { valueAsNumber: true })} />}</Field>
@@ -264,7 +272,7 @@ export function ImportForm({ initial }: { initial?: Purchase } = {}) {
                 <dt className="font-semibold">{t("sum.landed")}</dt><dd className="text-right text-xl font-semibold"><span className="text-sm text-muted-foreground">৳ </span><Money value={net} /></dd>
                 <dt className="text-sm text-muted-foreground">{tp("payable")}</dt><dd className="text-right text-sm"><Money value={payable} /></dd>
               </dl>
-              <p className="flex items-start gap-2 text-xs text-muted-foreground"><Info className="mt-0.5 size-3.5 shrink-0" aria-hidden /> {t("rebateHint")}</p>
+              <p className="flex items-start gap-2 text-xs text-muted-foreground"><Info className="mt-0.5 size-3.5 shrink-0" aria-hidden /> {bonded ? t("bondedHint") : t("rebateHint")}</p>
               <div className="grid gap-2">
                 {canApprove && <Button type="button" onClick={() => submit("Approved")} disabled={save.isPending}>{save.isPending ? <Loader2 className="animate-spin" /> : <Send />} {ts("saveApprove")}</Button>}
                 <Button type="submit" variant={canApprove ? "outline" : "default"} disabled={save.isPending}><Save /> {initial ? ts("saveChanges") : ts("saveDraft")}</Button>

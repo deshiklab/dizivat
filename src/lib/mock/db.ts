@@ -5,6 +5,7 @@ import { users } from "./users"
 import { company } from "./company"
 import { seedStockDocs, seedUnits } from "./seed-stock"
 import { seedSdImports } from "./seed-r63"
+import { seedBondCarryForward, seedBondedImports } from "./seed-r64"
 import { EXTRA_VENDORS, enrichImports, seedDebitNotes, seedMasterItems, seedOpening, seedServicePurchases } from "./seed-r2"
 import { EXTRA_CUSTOMERS, enrichCustomers, enrichExports, seedBoms, seedCreditNotes, seedProduction, seedR3Sales } from "./seed-r3"
 import { seedR4 } from "./seed-r4"
@@ -88,6 +89,7 @@ function init(): DB {
   for (const dn of debitNotes) if (dn.process === "Approved") for (const l of dn.lines) { item(l.itemId).purchased -= l.qty; bal.set(key(l.itemId, main), (bal.get(key(l.itemId, main)) ?? 0) - l.qty) }
   const store = stockBranches().find((b) => b.id !== main) ?? { id: main, name: mainName }
   const openings = seedOpening(d.items, { id: main, name: mainName }, { id: store.id, name: store.name })
+  seedBondCarryForward(openings, d.items)
   const masterItems = seedMasterItems(d.items)
   // R3: service sales + deemed exports, credit notes, 4.3 declarations, work orders and batches (factory stock)
   const balMain = { get: (id: string) => bal.get(key(id, main)) ?? 0, add: (id: string, q: number) => bal.set(key(id, main), (bal.get(key(id, main)) ?? 0) + q) }
@@ -99,6 +101,7 @@ function init(): DB {
   const { workOrders, batches } = seedProduction(d.items, boms, d.vendors, { id: main, name: mainName }, balMain)
   // R6.3: SD-paid packing imports (9.1 note 40 — SD on inputs of exported goods)
   seedSdImports(d.purchases, d.vendors, d.items, { id: main, name: mainName })
+  seedBondedImports(d.purchases, d.vendors, d.items, { id: main, name: mainName })
   const r4 = seedR4({ sales: d.sales, purchases: d.purchases, creditNotes, debitNotes, customers: d.customers, vendors: d.vendors })
   const r2Docs = [
     ...debitNotes.map((x) => ({ entity: "debitNote" as const, id: x.id, ref: x.no, history: x.history })),

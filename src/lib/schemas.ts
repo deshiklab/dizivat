@@ -109,6 +109,8 @@ export const boeInput = z.object({
   origin: z.string().trim().min(2, "required").max(40),
   cnfFirm: z.string().trim().max(120).optional().default(""),
   receiveAddress: z.string().trim().max(250).optional().default(""),
+  /** R6.4: warehoused under the customs bond (IM-7) — duties suspended, no input credit */
+  bonded: z.boolean().optional().default(false),
 })
 export const importInput = purchaseInput.extend({
   lines: z.array(importLineInput).min(1, "atLeastOneLine"),

@@ -38,6 +38,7 @@ const REPORTS: { form: string; key: string; href: string }[] = [
   { form: "6.10", key: "m610", href: "/vat/mushak-6-10" },
   { form: "EXP", key: "exports", href: "/vat/export-compliance" },
   { form: "UD", key: "uds", href: "/vat/ud-register" },
+  { form: "BOND", key: "bond", href: "/vat/bond-consumption" },
   { form: "9.1", key: "m91", href: "/vat/return-9-1" },
   { form: "TR-6", key: "tr6", href: "/vat/tr-6" },
 ]

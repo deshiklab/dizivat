@@ -20,7 +20,7 @@ def watch(pg, errs):
     pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
     pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" else None)
 VP = {"width": 1440, "height": 900}
-N_ARTICLES = 42
+N_ARTICLES = 44
 # window.print is replaced in every frame (the print frame is a srcdoc iframe): count calls on the top window.
 PRINT_STUB = "window.print = () => { try { window.top.__kbPrints = (window.top.__kbPrints || 0) + 1 } catch (e) {} }"
 
@@ -67,9 +67,9 @@ async def main():
             await pg.get_by_role("group", name="Filter by topic").get_by_role("button", name="NBR VAT", exact=True).click()
             await expect(pg.get_by_role("group", name="Filter by topic").get_by_role("button", name="NBR VAT", exact=True)).to_have_attribute("aria-pressed", "true")
             await expect(pg).to_have_url(re.compile(r"topic=nbrVat"))
-            assert await main_.locator("ul a[href*='/help/']").count() == 11
+            assert await main_.locator("ul a[href*='/help/']").count() == 13
             await expect(pg.get_by_role("heading", name="Start here")).to_have_count(0)
-            ok("topic filter narrows to NBR VAT (11 articles) and is kept in the URL")
+            ok("topic filter narrows to NBR VAT (13 articles) and is kept in the URL")
         except Exception as e: fail(1, e)
 
         # ── 2. Search ─────────────────────────────────────────────────

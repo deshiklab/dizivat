@@ -1,6 +1,6 @@
 {
   "name": "dizivat",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "author": "BITSCOL <sales@bitscol.com> (https://www.bitscol.com)",
   "scripts": {
@@ -11,7 +11,7 @@
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "kb:lint": "node scripts/kb_lint.mjs",
-    "test:e2e": "cd scripts && python3 capture.py && python3 visual.py && python3 e2e.py && python3 e2e_s2.py && python3 contract.py && python3 e2e_s3.py && python3 e2e_s4.py && python3 e2e_r2.py && python3 e2e_r3.py && python3 e2e_r4.py && python3 e2e_kb.py && python3 e2e_m43.py && python3 e2e_pdf.py && python3 e2e_r6.py && python3 e2e_r62.py && python3 e2e_r63.py && python3 a11y.py && python3 perf.py"
+    "test:e2e": "cd scripts && python3 capture.py && python3 visual.py && python3 e2e.py && python3 e2e_s2.py && python3 contract.py && python3 e2e_s3.py && python3 e2e_s4.py && python3 e2e_r2.py && python3 e2e_r3.py && python3 e2e_r4.py && python3 e2e_kb.py && python3 e2e_m43.py && python3 e2e_pdf.py && python3 e2e_r6.py && python3 e2e_r62.py && python3 e2e_r63.py && python3 e2e_r64.py && python3 a11y.py && python3 perf.py"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

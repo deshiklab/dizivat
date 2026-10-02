@@ -1,4 +1,4 @@
-import type { AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
 import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
@@ -253,6 +253,11 @@ export const api = {
     adjustments: docResource<VatAdjustment, AdjustmentInput>("/vat/adjustments"),
     /** R6.3: SD-paid purchase lines and their six-month export window (note 40) */
     sdEligible: (exclude?: string) => req<SdEligible>(`/vat/sd-eligible${qs({ exclude })}`),
+    /** R6.4: bond consumption register + duty drawback */
+    bond: {
+      get: (p: { from?: string; to?: string } = {}) => req<BondRegister>(`/vat/bond${qs(p)}`),
+      csvUrl: (view: "register" | "lots" | "drawback", p: { from?: string; to?: string } = {}) => `${BASE}/vat/bond${qs({ ...p, view, format: "csv" })}`,
+    },
     /** R6.3: §127 interest + late-return penalty — exposure (no period) or a what-if quote for one period */
     penaltyExposure: () => req<PenaltyExposure>("/vat/penalty"),
     penalty: (p: { period: string; vat?: number; sd?: number; paidOn?: string; filedOn?: string; latePenalty?: number }) =>

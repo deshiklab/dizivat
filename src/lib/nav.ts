@@ -88,6 +88,7 @@ export const NAV: NavGroup[] = [
       { key: "mushak610", href: "/vat/mushak-6-10", release: "R4", ready: true },
       { key: "exportRegister", href: "/vat/export-compliance", release: "R6", ready: true },
       { key: "udRegister", href: "/vat/ud-register", release: "R6", ready: true },
+      { key: "bondRegister", href: "/vat/bond-consumption", release: "R6", ready: true },
       { key: "vatSettings", href: "/vat/settings", release: "R4", ready: true, perm: "settings.manage" },
       { key: "tariff", href: "/vat/tariff", release: "R1", ready: true, legacy: "/en/nbrvat/taxtarrif/" },
     ],
