@@ -200,7 +200,47 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     same rows, the same four registers and a snapshot without the collections are required back). Contract unchanged:
     676 checks / 226 endpoints.
   - **Left for R5.3:** the stock ledger and branches' stock, which are *derived* from documents, become relational
-    with the documents themselves.
+    with the documents themselves — R5.3 gives the first documents tables, and the derivation follows once every
+    movement family has one.
+
+- **R5.3 — Backend: the first documents on real tables (branch `r5-nestjs`):** stock transfers and damage entries
+  leave the compat layer for `stock_documents` + `stock_document_lines`. See
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--stock-documents-on-their-own-tables).
+  - **One table for both kinds** (`kind` tells a transfer from a damage entry), because that is how the registers and
+    the branch-stock derivation read them. The branch a document consumes is `from_branch_id` for either kind — a
+    transfer's origin, a damage entry's own branch — and only a transfer has a destination. `ord` keeps the insertion
+    order the lists tie-break on, exactly as the in-memory arrays did.
+  - **Lines are rows, not JSON:** each carries its item, quantity and the unit cost at posting (`numeric(18,3)` /
+    `numeric(18,2)`), so what a movement carries can be summed in SQL instead of walked in memory. Editing a draft
+    replaces its lines in the same transaction, deleting a draft deletes them with it, and the document number
+    (`TR-MMYY####` / `DM-MMYY####`) is unique in the database as well — a race that slips past the application check
+    is a 409, not a 500.
+  - **An approval writes what it moves:** a damage entry's `items.damage` counter goes with the document, in its
+    transaction, and is taken back on cancellation; if the transaction fails, the in-memory counters are restored, so
+    the two copies cannot drift apart.
+  - **The rules are shared, not copied:** the native handlers call the mock handlers' own functions (`buildStock`,
+    `nextStockNo`, `approveDoc`, `cancelDoc`, `stockDocDiff`, `stockSpec`, `stockCsvColumns` …) through the compat
+    bundle — the stock rules were gathered into `src/app/api/v1/_stock.ts` for exactly that, and now return data
+    (field errors, a document's fields, a rejection's status and title) rather than a Web `Response`, so each side
+    makes its own response out of the same rules. Both sides were held against the same contract suite: 676 checks
+    with the routes served natively, and 676 again with the mock handlers serving them, so the port is behaviour for
+    behaviour and the Next.js mock and the GitHub Pages demo cannot drift.
+  - **The derived stock still reads every document:** the branch split (`stock`) and an item's ledger
+    (`items/{id}/ledger`) add up sales, purchases, credit and debit notes, opening entries and production batches as
+    well, so they stay derived in memory until those have tables too (R5.3–R5.4). A document written natively reaches
+    them at once — the module keeps the in-memory copies in step, and the write-back adopts whatever a compat handler
+    writes through the mock's arrays.
+  - **Upgrading keeps the data:** the first boot after the migration moves both collections out of `compat_state`
+    into the tables and rewrites the snapshot without them — no re-seed (`SEED_VERSION` unchanged), so a customer
+    installation and a restored pre-R5.3 backup both carry their documents over.
+  - **Tests:** `api_native.py` 180 checks (+33: a draft is a row with its lines and moves no stock, approving it moves
+    the branch split the still-unported endpoints derive in memory, cancelling gives the stock back, a write-off
+    reaches `items.damage` and is taken back, editing a draft replaces the line rows, deleting one removes them and
+    retires its number, a create that cannot be approved leaves no row, the database refusing a duplicate document
+    number, a stale instance refusing a native document write during a deploy overlap — and a **second upgrade drill**: the database is rewritten into its pre-R5.3 shape, the API restarted, and
+    the same documents, lines, registers and derived stock are required back). Contract unchanged: 676 checks / 226
+    endpoints.
+  - **Next in R5.3:** sales (Mushak 6.3), purchases incl. imports and services, credit and debit notes (6.7/6.8).
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

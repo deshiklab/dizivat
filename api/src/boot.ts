@@ -8,10 +8,10 @@ import { gzip } from "node:zlib"
 import { asc, eq, sql } from "drizzle-orm"
 import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
-import type { AuditEvent, Item, MasterItem, Party, Unit } from "@/lib/types"
+import type { AuditEvent, Damage, Item, MasterItem, Party, StockDoc, Transfer, Unit } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, compatState, items, masterItems, meta, parties, tariffLines, units, users } from "./db/schema"
+import { auditEvents, backups, compatState, items, masterItems, meta, parties, stockDocumentLines, stockDocuments, tariffLines, units, users } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -19,6 +19,7 @@ import { compatSnapshot, markSaved } from "./modules/compat"
 import { toUser } from "./modules/identity"
 import { itemValues, markItems, markMasters, masterValues, toItem, toMaster } from "./modules/items"
 import { markParties, partyValues, toParty } from "./modules/parties"
+import { assembleStockDocs, markStockDocs, stockDocValues, stockLineValues } from "./modules/stock"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
@@ -58,12 +59,15 @@ async function seed(log: (m: string) => void) {
   const demoParties = [...m.db.customers, ...m.db.vendors].map((x) => partyValues(x))
   const demoItems = m.db.items.map(itemValues)
   const demoMasters = m.db.masterItems.map(masterValues)
+  // R5.3: the first documents — stock transfers and damage entries, each with its lines
+  const demoStock: StockDoc[] = [...m.db.transfers, ...m.db.damages]
+  const demoStockLines = demoStock.flatMap(stockLineValues)
   const seededAt = new Date().toISOString()
   await db.transaction(async (tx) => {
     await lockState(tx, { checkEpoch: false }) // waits for any other instance's in-flight write (deploy overlap)
     // the append-only guard on audit_events lets this transaction (and only it) clear the table
     await tx.execute(sql`set local dizivat.reseed = 'on'`)
-    for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "tariff_lines", "audit_events", "compat_state", "meta"])
+    for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "tariff_lines", "audit_events", "compat_state", "meta"])
       await tx.execute(sql.raw(`delete from ${t}`))
     await tx.insert(users).values(m.userStore.users.map((u, i) => ({
       id: u.id, username: u.username, name: u.name, designation: u.designation, initials: u.initials, email: u.email, role: u.role,
@@ -77,6 +81,8 @@ async function seed(log: (m: string) => void) {
     for (let i = 0; i < demoParties.length; i += 500) await tx.insert(parties).values(demoParties.slice(i, i + 500))
     for (let i = 0; i < demoItems.length; i += 500) await tx.insert(items).values(demoItems.slice(i, i + 500))
     for (let i = 0; i < demoMasters.length; i += 500) await tx.insert(masterItems).values(demoMasters.slice(i, i + 500))
+    for (let i = 0; i < demoStock.length; i += 500) await tx.insert(stockDocuments).values(demoStock.slice(i, i + 500).map(stockDocValues))
+    for (let i = 0; i < demoStockLines.length; i += 500) await tx.insert(stockDocumentLines).values(demoStockLines.slice(i, i + 500))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -102,10 +108,11 @@ async function seed(log: (m: string) => void) {
   markParties([...m.db.customers, ...m.db.vendors])
   markItems(m.db.items)
   markMasters(m.db.masterItems)
+  markStockDocs(demoStock)
   G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
   markPersisted(events)
   markSaved(snapshot)
-  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 async function restore(state: { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log: (m: string) => void) {
@@ -123,23 +130,27 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     .sort((a, b) => a.at.localeCompare(b.at))
   const itemRows: Item[] = (await db.select().from(items).orderBy(asc(items.ord))).map(toItem)
   const masterRows: MasterItem[] = (await db.select().from(masterItems).orderBy(asc(masterItems.ord))).map(toMaster)
+  const stockRows: StockDoc[] = await assembleStockDocs(await db.select().from(stockDocuments).orderBy(asc(stockDocuments.ord)))
+  const transfers = stockRows.filter((d): d is Transfer => d.kind === "transfer")
+  const damages = stockRows.filter((d): d is Damage => d.kind === "damage")
   const [ep] = await db.select().from(meta).where(eq(meta.key, "seeded_at"))
   setEpoch(ep?.value)
   const raw = await db.execute(sql`select * from audit_events order by id`)
   const events: AuditEvent[] = (raw.rows as Parameters<typeof rawToEvent>[0][]).map(rawToEvent)
   restoreGlobals({
     db: state.db as never, notifRead: state.notifRead, users: list, prefs, company: await loadCompany(), units: unitRows,
-    customers, vendors, partyTrash, items: itemRows, masterItems: masterRows, events,
+    customers, vendors, partyTrash, items: itemRows, masterItems: masterRows, transfers, damages, events,
   })
   loadCompat()
   markParties([...mirror.parties("customer"), ...mirror.parties("vendor")])
   markItems(mirror.items())
   markMasters(mirror.masterItems())
+  markStockDocs(stockRows)
   markPersisted(events)
   const json = compatSnapshot()
-  // an adopted snapshot still carries the parties — replace it with the one this version writes. Under the state
-  // lock, and only while the stored row is still in the pre-R5.2 shape: another instance may have served writes
-  // during this boot (rolling deploy) and its newer snapshot must not be clobbered by this one.
+  // an adopted snapshot still carries the adopted collections — replace it with the one this version writes. Under
+  // the state lock, and only while the stored row is still in the older shape: another instance may have served
+  // writes during this boot (rolling deploy) and its newer snapshot must not be clobbered by this one.
   if (adopted) {
     await db.transaction(async (tx) => {
       await lockState(tx)
@@ -150,20 +161,22 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     })
   }
   markSaved(json)
-  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
-/** The collections R5.2 moved out of `compat_state` into their own tables. */
-const ADOPTED = ["customers", "vendors", "items", "masterItems"] as const
+/** The collections R5.2 and R5.3 moved out of `compat_state` into their own tables. */
+const ADOPTED = ["customers", "vendors", "items", "masterItems", "transfers", "damages"] as const
 
 /**
- * R5.2 upgrade: a database written before these tables holds its master data inside `compat_state` (and deleted
- * parties in the undo buffer). It is moved into the tables once — customer data is never re-seeded — and the
- * snapshot is rewritten without it, so the tables are the only copy from then on. Also covers restoring a
- * pre-R5.2 backup into a fresh database.
+ * Upgrade: a database written before these tables holds the collections inside `compat_state` (and deleted
+ * parties in the undo buffer). Each is moved into its table once — customer data is never re-seeded — and the
+ * snapshot is rewritten without them, so the tables are the only copy from then on. Also covers restoring an
+ * older backup into a fresh database. R5.2 moved the master data, R5.3 the stock documents.
  */
 async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: string) => void): Promise<boolean> {
-  const s = state.db as { customers?: Party[]; vendors?: Party[]; items?: Item[]; masterItems?: MasterItem[]; trash?: TrashEntry[] }
+  const s = state.db as {
+    customers?: Party[]; vendors?: Party[]; items?: Item[]; masterItems?: MasterItem[]; transfers?: StockDoc[]; damages?: StockDoc[]; trash?: TrashEntry[]
+  }
   if (!ADOPTED.some((k) => Array.isArray(s[k]))) return false
   const trashed = (Array.isArray(s.trash) ? s.trash : []).filter((t) => t.kind === "customer" || t.kind === "vendor")
   const partyRows = [
@@ -173,11 +186,15 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
   ]
   const itemRows = (s.items ?? []).map(itemValues)
   const masterRows = (s.masterItems ?? []).map(masterValues)
+  const stockDocs: StockDoc[] = [...(s.transfers ?? []), ...(s.damages ?? [])]
+  const stockRows = stockDocs.map(stockDocValues)
+  const stockLineRows = stockDocs.flatMap(stockLineValues)
   const [{ n: haveParties }] = await db.select({ n: sql<number>`count(*)::int` }).from(parties)
   const [{ n: haveItems }] = await db.select({ n: sql<number>`count(*)::int` }).from(items)
   const [{ n: haveMasters }] = await db.select({ n: sql<number>`count(*)::int` }).from(masterItems)
-  const moved: string[] = []
-  if ((!haveParties && partyRows.length) || (!haveItems && itemRows.length) || (!haveMasters && masterRows.length)) {
+  const [{ n: haveStock }] = await db.select({ n: sql<number>`count(*)::int` }).from(stockDocuments)
+  const moved: string[] = [], movedStock: string[] = []
+  if ((!haveParties && partyRows.length) || (!haveItems && itemRows.length) || (!haveMasters && masterRows.length) || (!haveStock && stockRows.length)) {
     await db.transaction(async (tx) => {
       await lockState(tx) // waits out any other instance's in-flight write; the epoch is not set yet
       if (!haveParties && partyRows.length) {
@@ -192,8 +209,14 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
         for (let i = 0; i < masterRows.length; i += 500) await tx.insert(masterItems).values(masterRows.slice(i, i + 500))
         moved.push(`${masterRows.length} master items`)
       }
+      if (!haveStock && stockRows.length) {
+        for (let i = 0; i < stockRows.length; i += 500) await tx.insert(stockDocuments).values(stockRows.slice(i, i + 500))
+        for (let i = 0; i < stockLineRows.length; i += 500) await tx.insert(stockDocumentLines).values(stockLineRows.slice(i, i + 500))
+        movedStock.push(`${stockRows.length} stock documents (${stockLineRows.length} lines)`)
+      }
     })
-    log(`R5.2 upgrade: ${moved.join(", ")} moved out of compat_state into their own tables`)
+    if (moved.length) log(`R5.2 upgrade: ${moved.join(", ")} moved out of compat_state into their own tables`)
+    if (movedStock.length) log(`R5.3 upgrade: ${movedStock.join(", ")} moved out of compat_state into their own tables`)
   }
   return true
 }

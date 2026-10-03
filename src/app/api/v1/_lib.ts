@@ -8,11 +8,13 @@ export const json = (data: unknown, init?: ResponseInit) => Response.json(data, 
 /** RFC 9457 problem+json — the error shape the Symfony API will return */
 export const problem = (status: number, title: string, errors?: Record<string, string[]>) =>
   Response.json({ type: "about:blank", title, status, errors }, { status, headers: { "content-type": "application/problem+json" } })
-export const zodProblem = (e: ZodError) => {
+/** zod issues → field → codes (R5.3: data, so the API's native modules answer with the same 422 body). */
+export const zodErrors = (e: ZodError): Record<string, string[]> => {
   const errors: Record<string, string[]> = {}
   for (const i of e.issues) (errors[i.path.join(".") || "_"] ??= []).push(i.message)
-  return problem(422, "Validation failed", errors)
+  return errors
 }
+export const zodProblem = (e: ZodError) => problem(422, "Validation failed", zodErrors(e))
 
 /** 403 problem if the user lacks `perm`, else null. */
 export const deny = (user: User, perm: Permission) =>

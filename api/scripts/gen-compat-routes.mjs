@@ -15,6 +15,9 @@ export const NATIVE = [
   "customers", "customers/[id]", "customers/[id]/restore", "vendors", "vendors/[id]", "vendors/[id]/restore",
   // R5.2: SKUs and master items live in `items` / `master_items` (the stock ledger and the branch split stay here)
   "items", "items/[id]", "master-items", "master-items/[id]",
+  // R5.3: stock transfers and damage entries live in `stock_documents` (the ledger and the branch split derive
+  // from every movement document, so they stay here until the rest have tables)
+  "transfers", "transfers/[id]", "damage", "damage/[id]",
 ]
 
 const found = []

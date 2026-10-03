@@ -15,8 +15,9 @@ backend**, including 520 contract checks, every end-to-end suite, axe, and all 3
 ## R5.1 — what runs where
 
 The API is built in slices. R5.1 moves **identity, security and reference data** into real tables, R5.2 the
-**master data** (customers and vendors, items and master items). The other modules keep their exact mock behaviour inside the API, and
-their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
+**master data** (customers and vendors, items and master items) and R5.3 the **first documents** (stock transfers and
+damage entries). The other modules keep their exact mock behaviour inside the API, and their data is saved to
+PostgreSQL so nothing is lost on restart or redeploy.
 
 | Area | Endpoints | R5.1 |
 | --- | --- | --- |
@@ -30,8 +31,9 @@ their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
 | Backups (R6.2) | `backups`, `backups/{id}`, `backups/{id}/verify` | **native** — `backups` (gzip snapshot + SHA-256), scheduler 02:00 / 14:00 Dhaka with catch-up |
 | Customers & vendors (R5.2) | `customers`, `customers/{id}`, `customers/{id}/restore`, and the same three for `vendors` | **native** — `parties` (one table, `kind` tells them apart) |
 | Items & master items (R5.2) | `items`, `items/{id}`, `master-items`, `master-items/{id}` | **native** — `items`, `master_items` (the counters an item's `remain` is derived from are columns) |
+| Stock transfers & damage (R5.3) | `transfers`, `transfers/{id}`, `damage`, `damage/{id}` | **native** — `stock_documents` + `stock_document_lines` (one table for both kinds, `kind` tells them apart) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: sales, purchases, the stock ledger and branches' stock, production, accounting, VAT returns, notifications, dashboard, search… | 88 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: sales, purchases, the stock ledger and branches' stock, production, accounting, VAT returns, notifications, dashboard, search… | 84 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -62,10 +64,11 @@ their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
    - When the handler changes state, the JSONB snapshot and any new audit events are saved in one transaction.
    - A process-wide lock serialises compat requests.
 3. **Write-through** (both directions)
-   - Native modules own users, company, units and (R5.2) the parties, items and master items in PostgreSQL.
+   - Native modules own users, company, units, (R5.2) the parties, items and master items and (R5.3) the stock documents in PostgreSQL.
    - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table, and an invoice quotes a customer the `parties` table holds.
    - The other way round: when a compat handler writes a record a native module owns — the R6.2 bulk import creates
-     customers, vendors and SKUs, and approving a document moves an item's counters — the request's persist step
+     customers, vendors and SKUs, approving a document moves an item's counters, a restored backup puts stock
+     documents back — the request's persist step
      compares the in-memory rows with what was last saved and adopts the difference into the table
      (`api/src/common/writeback.ts`).
 
@@ -123,11 +126,46 @@ drift.
   data does), and the mirror's copies move with them.
 - **Ids stay the mock's**: `i<n>-<base36>` from the number of items, `m<n>` from the highest number the table has ever
   held — computed inside the locked transaction, so two creates in flight never share one.
-- **Documents still move the counters.** Sales, purchases, debit notes, opening entries, damage and production
-  documents are compat state until R5.3, so they write through the in-memory item and the write-back saves the new
-  counters (and reads the stored row back, so a column type that rounds cannot leave the two copies apart).
+- **Documents still move the counters.** Sales, purchases, debit notes, opening entries and production documents are
+  compat state until R5.3–R5.4, so they write through the in-memory item and the write-back saves the new counters
+  (and reads the stored row back, so a column type that rounds cannot leave the two copies apart). Since R5.3 a
+  damage entry is native and writes `items.damage` itself, in the document's own transaction.
 - **The stock ledger and branches' stock stay compat**: both are *derived* from documents (`items/{id}/ledger`,
-  `stock`), so they become relational with the documents themselves in R5.3 — there is no stored movement table yet.
+  `stock`). R5.3 gives the first documents tables — a movement is a row now — but the derivation adds up *every*
+  family, so it becomes SQL once the rest of them (sales, purchases, notes, production) are relational too.
+
+## R5.3 — stock documents on their own tables
+
+`api/src/modules/stock.ts` serves `transfers`, `transfers/{id}`, `damage` and `damage/{id}` from **`stock_documents`**
+and **`stock_document_lines`**, the same way: the contract is unchanged, and the rules are the mock's own
+(`src/app/api/v1/_stock.ts`, re-exported by `api/src/compat/entry.ts`), so line validation and pricing, the monthly
+document numbers, the branch-stock checks around approving and cancelling, the counters a write-off moves, the
+register's facets and its CSV columns cannot drift. These are the first business documents in PostgreSQL — and both
+sides were held against the same contract suite, the native routes and the mock handlers serving them, so the port is
+behaviour for behaviour.
+
+- **One table for both kinds** (`kind` tells a transfer from a damage entry), because that is how the registers and
+  the branch-stock derivation read them. The branch a document consumes is `from_branch_id` for either kind — a
+  transfer's origin, a damage entry's own branch — and only a transfer has a destination.
+- **Lines are rows, not JSON.** `stock_document_lines` holds the item, the quantity and the unit cost at posting
+  (`qty numeric(18,3)`, `cost`/`value numeric(18,2)`), so what a movement carries can be summed in SQL instead of
+  walked in memory. Editing a draft replaces its lines in the same transaction; deleting a draft deletes them with it.
+- **Numbers are unique in the database too** (`TR-MMYY####` / `DM-MMYY####`). The handlers already skip the numbers of
+  deleted drafts — the audit trail keeps them — and a violation the application check missed (two requests at once) is
+  a 409, not a 500.
+- **Ids stay the mock's** (`t<n>` / `d<n>`), taken from the highest number the table has ever held for that kind inside
+  the locked transaction, so a document is never renumbered and two creates in flight never share an id.
+- **An approval writes what it moves.** A damage entry moves `items.damage`; the counter is written with the document,
+  in its transaction, and taken back on cancellation. If the transaction fails, the in-memory counters are restored —
+  the two copies cannot drift apart.
+- **The derived stock still reads every document.** The branch split (`stock`) and an item's ledger
+  (`items/{id}/ledger`) add up *all* movement documents — sales, purchases, credit and debit notes, opening entries,
+  production batches — so they stay derived in memory until those have tables too (R5.3–R5.4). A document written
+  natively reaches them at once (the module keeps the in-memory copy in step), and the write-back covers the other
+  direction, so a compat handler writing through the mock's arrays cannot leave the table behind.
+- **The upgrade is one boot.** A database written before this slice holds both collections inside `compat_state`; the
+  first start moves every document and line into the tables and rewrites the snapshot without them. Restoring a
+  pre-R5.3 backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI.
 
 ## Tables
 
@@ -145,7 +183,9 @@ drift.
 | `parties` | **R5.2:** customers and vendors (`kind`), exporter details, seeded credit terms; `deleted_at` is the undo trash; unique per kind on name and BIN |
 | `items` | **R5.2:** SKUs — prices and rates (`numeric`), the six movement counters `remain` is derived from, the master item's *name*; unique on `lower(sku)` |
 | `master_items` | **R5.2:** HS-code products — flat tax profile like `tariff_lines`, override reason, own history (JSONB); unique on `lower(name)` |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2) |
+| `stock_documents` | **R5.3:** stock transfers and damage entries (`kind`) — number (unique), process, branches, reason, totals (`numeric`), own history (JSONB) |
+| `stock_document_lines` | **R5.3:** a document's lines — item, quantity and unit cost at posting; primary key (document, position) |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents since R5.3) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -188,7 +228,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 147 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 180 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -199,6 +239,15 @@ the last section rewrites the live database back into the pre-R5.2 shape (the co
 deleted parties in its undo buffer, the three tables empty), restarts, and requires the same rows back, the snapshot
 rewritten without them, the four registers served row for row as before, a second boot that adopts nothing again, and
 writes that still land in the tables.
+
+Since R5.3 it checks the first documents the same way — a draft is a row with its lines and moves no stock, approving
+it moves the branch split that the still-unported `stock` and ledger endpoints derive in memory, cancelling gives the
+stock back, a damage write-off reaches `items.damage` and is taken back again, editing a draft replaces the line rows,
+deleting one removes them and retires its number, a create that cannot be approved leaves no row, and the database
+refuses a duplicate document number — and it **drills the second upgrade**: the live database is rewritten back into
+the pre-R5.3 shape (both collections with their lines inside `compat_state`, the two tables empty), the API restarts,
+and the same documents and lines must be back in the tables, the snapshot rewritten without them, both registers
+served row for row as before, the derived stock unchanged, a second boot adopting nothing again.
 
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
@@ -274,7 +323,7 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | Slice | Moves to its own tables |
 | --- | --- |
 | R5.2 | **done** — customers and vendors (`parties`), items and master items (`items`, `master_items`). The stock ledger and branches' stock are *derived* from documents (there is no stored movement table), so they become relational with the documents in R5.3 |
-| R5.3 | sales (6.3), purchases incl. imports/services, credit & debit notes (6.7/6.8), transfers, damage |
+| R5.3 | **in progress** — transfers and damage are done (`stock_documents` + `stock_document_lines`). Next: sales (6.3), purchases incl. imports/services, credit & debit notes (6.7/6.8). The stock ledger and branches' stock derive from *every* movement document, so they become relational once the rest — including R5.4's production batches — have tables |
 | R5.4 | production: BOM/4.3 versions, work orders, batches (6.4), production config |
 | R5.5 | accounting (accounts, receipts/payments, allocations), VAT: 9.1 returns, period lock, treasury/TR-6, VDS/6.6, adjustments — then `compat_state` and the lock are removed and the API can scale out |
 

@@ -1,7 +1,8 @@
 /**
  * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables, R5.2 the
- * master data (customers and vendors as `parties`, SKUs as `items`, HS-code products as `master_items`); the
- * business documents still live in `compat_state` until R5.3–R5.5 give each module its own tables.
+ * master data (customers and vendors as `parties`, SKUs as `items`, HS-code products as `master_items`) and R5.3
+ * the first documents (transfers and damage entries as `stock_documents` with their lines); the remaining
+ * documents still live in `compat_state` until R5.3–R5.5 give each module its own tables.
  * Migrations are generated with `npm run db:generate` into ./drizzle and applied at boot.
  */
 import { sql } from "drizzle-orm"
@@ -270,7 +271,75 @@ export const masterItems = pgTable("master_items", {
 ])
 
 /**
- * Modules not yet migrated (sales, purchases, stock, production, accounting, VAT returns…) keep their exact
+ * R5.3 — stock documents: a transfer moves goods between branches, a damage entry writes them off. Both are a
+ * header with priced lines, both are numbered per month and never reuse a number (a deleted draft stays in the
+ * audit trail), and both only move stock once approved. The two kinds share a table because that is how the
+ * registers and the branch-stock derivation read them (`StockDoc`): the branch a document consumes is
+ * `from_branch_id` for either kind, and a transfer also names where the goods go.
+ */
+export const stockDocuments = pgTable("stock_documents", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["transfer", "damage"] }).notNull(),
+  /** TR-MMYY#### / DM-MMYY#### — unique forever, so a deleted draft's number is not handed out again */
+  no: text("no").notNull(),
+  /** the document date the number is derived from and the registers filter by */
+  date: date("date", { mode: "string" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** the branch the stock leaves: a transfer's origin, a damage entry's own branch */
+  fromBranchId: text("from_branch_id").notNull(),
+  fromBranch: text("from_branch").notNull(),
+  /** a transfer's destination; NULL on a damage entry, which moves nothing */
+  toBranchId: text("to_branch_id"),
+  toBranch: text("to_branch"),
+  /** damage only: why the stock was written off */
+  reason: text("reason", { enum: ["damaged", "expired", "wastage", "lost"] }),
+  /** transfer only: the vehicle that carried the goods */
+  vehicle: text("vehicle"),
+  note: text("note"),
+  totalQty: numeric("total_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  totalValue: numeric("total_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail, shown on its register row; the same entries are in `audit_events` */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  uniqueIndex("stock_documents_no_key").on(t.no),
+  index("stock_documents_kind_created_idx").on(t.kind, t.createdAt),
+  check("stock_documents_kind_check", sql`${t.kind} in ('transfer','damage')`),
+  check("stock_documents_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("stock_documents_reason_check", sql`${t.reason} is null or ${t.reason} in ('damaged','expired','wastage','lost')`),
+  // a transfer names both branches, a damage entry only the one it writes off
+  check("stock_documents_branches_check", sql`(${t.kind} = 'transfer' and ${t.toBranchId} is not null) or (${t.kind} = 'damage' and ${t.toBranchId} is null and ${t.reason} is not null)`),
+])
+
+/**
+ * The lines of a stock document: the item, the quantity and the unit cost at posting, so the entry keeps the value
+ * it was approved with even after the SKU's price moves. A child table rather than JSON — that is what lets the
+ * branch stock and an item's ledger be summed in SQL.
+ */
+export const stockDocumentLines = pgTable("stock_document_lines", {
+  docId: text("doc_id").notNull(),
+  /** position on the document */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed on the document: the SKU's name and code at posting */
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  cost: numeric("cost", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.docId, t.ord] }),
+  index("stock_document_lines_item_idx").on(t.itemId),
+])
+
+/**
+ * Modules not yet migrated (sales, purchases, production, accounting, VAT returns…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */
 export const compatState = pgTable("compat_state", {

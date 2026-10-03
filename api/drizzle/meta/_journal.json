@@ -50,6 +50,13 @@
       "when": 1790975353267,
       "tag": "0006_r52_items",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791009616504,
+      "tag": "0007_r53_stock_documents",
+      "breakpoints": true
     }
   ]
 }

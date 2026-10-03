@@ -63,6 +63,32 @@ PRE_R52_TRASH = f"""update compat_state set data = jsonb_set(data, '{{db,trash}}
 PARTY_TRASH_LEFT = """select count(*) from compat_state where jsonb_typeof(data->'db'->'trash') = 'array'
   and exists (select 1 from jsonb_array_elements(data->'db'->'trash') t where t->>'kind' in ('customer', 'vendor'))"""
 
+# ── R5.3 upgrade drill ─────────────────────────────────────────────────────────────────────────────────────────
+# The same, one release later: a database written before R5.3 holds its stock documents (transfers and damage
+# entries, lines included) inside compat_state and has no stock_documents rows. These statements rebuild that shape
+# from the live tables, so the first boot on this code has to adopt it. Nothing here ships either: it is the inverse
+# of the stock-document half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+STOCK_LINES_DOC = """(select coalesce(jsonb_agg(jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'sku', l.sku, 'uom', l.uom, 'qty', l.qty, 'cost', l.cost, 'value', l.value)
+      order by l.ord), '[]'::jsonb) from stock_document_lines l where l.doc_id = d.id)"""
+STOCK_DOC = _NO_NULLS.format("""jsonb_build_object(
+    'kind', kind, 'id', id, 'no', no, 'date', date, 'process', process, 'lines', """ + STOCK_LINES_DOC + """,
+    'totalQty', total_qty, 'totalValue', total_value, 'note', note,
+    'fromBranchId', case when kind = 'transfer' then from_branch_id end,
+    'fromBranch', case when kind = 'transfer' then from_branch end,
+    'toBranchId', to_branch_id, 'toBranch', to_branch, 'vehicle', vehicle,
+    'branchId', case when kind = 'damage' then from_branch_id end,
+    'branch', case when kind = 'damage' then from_branch end, 'reason', reason,
+    'issuedBy', issued_by, 'createdAt', """ + _ISO.format("created_at") + """,
+    'updatedAt', """ + _ISO.format("updated_at") + """, 'cancelReason', cancel_reason, 'history', history)""")
+STOCK_AGG = lambda kind: (f"(select coalesce(jsonb_agg({STOCK_DOC} order by ord), '[]'::jsonb) "
+                          f"from stock_documents d where kind = '{kind}')")
+# both collections back inside the snapshot
+PRE_R53_COLLECTIONS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'transfers', {STOCK_AGG('transfer')},
+  'damages', {STOCK_AGG('damage')}
+)) where key = 'main'"""
+
 
 def check(cond, msg):
     global ok, fail
@@ -316,6 +342,99 @@ def run():
     check(arif.post(f"{BASE}/customers", json={"name": "SUNRISE FASHION RETAIL LTD", "mode": "Local", "bin": "004817362-0105", "address": "Dhaka, Bangladesh"}).status_code == 422,
           "a duplicate name/BIN is refused (422) — the rules the mock handlers use")
 
+    # R5.3: transfers and damage entries are the first documents with their own tables. Their registers read
+    # PostgreSQL; the branch split and an item's ledger still derive from *every* movement document through the
+    # in-memory copies the unported handlers read, so a document written natively has to reach them at once; and an
+    # approval writes the item counter it moves in the same transaction as the document.
+    print("R5.3: stock documents are rows, and the derived stock follows them")
+    other = [b["id"] for b in arif.get(f"{BASE}/stock").json()["branches"] if b["id"] != branch][0]
+
+    def held():
+        rows = arif.get(f"{BASE}/stock", params={"size": 100}).json()["data"]
+        r = [x for x in rows if x["id"] == iid][0]
+        return r["remain"], r["byBranch"].get(branch, 0), r["byBranch"].get(other, 0)
+
+    tdate = time.strftime("%Y-%m-%d")
+    t0 = held()
+    tr = arif.post(f"{BASE}/transfers", json={"fromBranchId": branch, "toBranchId": other, "date": tdate, "vehicle": "",
+                                              "note": f"R5.3 transfer {TAG}", "lines": [{"itemId": iid, "qty": 6}], "process": "Created"})
+    tid, tno = tr.json().get("id"), tr.json().get("no")
+    check(tr.status_code == 201 and tr.json()["process"] == "Created"
+          and [h["action"] for h in tr.json()["history"]] == ["created"], f"native (R5.3): transfer draft created ({tr.status_code})")
+    check(held() == t0, "R5.3: a draft moves no stock")
+    if DB_URL:
+        check(psql(f"select count(*) from stock_documents where id = '{tid}' and process = 'Created'") == "1",
+              "R5.3: the draft is a row in stock_documents")
+        check(psql(f"select count(*) from stock_document_lines where doc_id = '{tid}'") == "1",
+              "R5.3: …and its lines are rows in stock_document_lines")
+    ap = arif.patch(f"{BASE}/transfers/{tid}", json={"process": "Approved"})
+    check(ap.status_code == 200 and ap.json()["process"] == "Approved" and held() == (t0[0], t0[1] - 6, t0[2] + 6),
+          f"R5.3: approving moves the stock, and the branch split derived in memory follows ({ap.status_code})")
+    led = arif.get(f"{BASE}/items/{iid}/ledger", params={"branch": other}).json()
+    check(any(e["type"] == "transferIn" and e["ref"] == tno for e in led["entries"]),
+          "R5.3: …and the item's ledger, still derived from every document, quotes it")
+    if DB_URL:
+        check(psql(f"select jsonb_array_length(history) from stock_documents where id = '{tid}'") == "2",
+              "R5.3: the document's own history travels with the row")
+    cn = arif.patch(f"{BASE}/transfers/{tid}", json={"process": "Cancelled", "reason": f"R5.3 cancelled {TAG}"})
+    check(cn.status_code == 200 and held() == t0, "R5.3: cancelling gives the stock back")
+    if DB_URL:
+        check(psql(f"select count(*) from stock_documents where id = '{tid}' and process = 'Cancelled' and cancel_reason is not null") == "1",
+              "R5.3: …and the cancellation is stored on the row")
+    # a damage entry writes stock off: the item's counter moves with the document, in its transaction
+    dm = arif.post(f"{BASE}/damage", json={"branchId": branch, "date": tdate, "reason": "wastage", "note": f"R5.3 damage {TAG}",
+                                           "lines": [{"itemId": iid, "qty": 2}], "process": "Approved"})
+    did = dm.json().get("id")
+    check(dm.status_code == 201 and dm.json()["process"] == "Approved" and held() == (t0[0] - 2, t0[1] - 2, t0[2]),
+          f"native (R5.3): a damage entry approved on creation writes the stock off ({dm.status_code})")
+    if DB_URL:
+        check(psql(f"select damage = 2 from items where id = '{iid}'") == "t",
+              "R5.3: …and the counter it moved is written with it (items.damage)")
+    dcn = arif.patch(f"{BASE}/damage/{did}", json={"process": "Cancelled", "reason": f"R5.3 cancelled {TAG}"})
+    check(dcn.status_code == 200 and held() == t0, "R5.3: cancelling a damage entry puts the stock back")
+    if DB_URL:
+        check(psql(f"select damage = 0 from items where id = '{iid}'") == "t", "R5.3: …and takes the counter back")
+    # editing a draft replaces its lines; deleting one removes the row and retires its number
+    d2 = arif.post(f"{BASE}/transfers", json={"fromBranchId": branch, "toBranchId": other, "date": tdate,
+                                              "lines": [{"itemId": iid, "qty": 3}], "process": "Created"}).json()
+    ed = arif.put(f"{BASE}/transfers/{d2['id']}", json={"fromBranchId": branch, "toBranchId": other, "date": tdate,
+                                                        "lines": [{"itemId": iid, "qty": 4}, {"itemId": "i19", "qty": 1}],
+                                                        "process": "Created"})
+    check(ed.status_code == 200 and [l["qty"] for l in ed.json()["lines"]] == [4, 1],
+          f"R5.3: editing a draft replaces its lines ({ed.status_code})")
+    if DB_URL:
+        check(psql(f"select string_agg(item_id || ':' || qty::text, ',' order by ord) from stock_document_lines where doc_id = '{d2['id']}'")
+              == f"{iid}:4.000,i19:1.000", "R5.3: …in the child table, in the order they are printed")
+    dl = arif.delete(f"{BASE}/transfers/{d2['id']}")
+    check(dl.status_code == 200 and dl.json().get("ok") is True, "R5.3: a draft is deleted")
+    if DB_URL:
+        check(psql(f"select count(*) from stock_documents where id = '{d2['id']}'") == "0"
+              and psql(f"select count(*) from stock_document_lines where doc_id = '{d2['id']}'") == "0",
+              "R5.3: …and its row and lines leave the database")
+    nx = arif.post(f"{BASE}/transfers", json={"fromBranchId": branch, "toBranchId": other, "date": tdate,
+                                              "lines": [{"itemId": iid, "qty": 1}], "process": "Created"}).json()
+    check(nx["no"] != d2["no"], f"R5.3: a deleted draft's number stays retired ({d2['no']} → {nx['no']})")
+    arif.delete(f"{BASE}/transfers/{nx['id']}")
+    rows0 = psql("select count(*) from stock_documents") if DB_URL else None
+    sh = arif.post(f"{BASE}/transfers", json={"fromBranchId": other, "toBranchId": branch, "date": tdate,
+                                              "lines": [{"itemId": iid, "qty": 100000}], "process": "Approved"})
+    check(sh.status_code == 422 and "Insufficient stock" in sh.json().get("title", ""),
+          f"R5.3: approving more than the branch holds is a 422 ({sh.status_code})")
+    if DB_URL:
+        check(psql("select count(*) from stock_documents") == rows0, "R5.3: …and the refused document left no row behind")
+        check(psql("select count(*) from compat_state where data->'db' ? 'transfers' or data->'db' ? 'damages'") == "0",
+              "R5.3: the snapshot carries no stock-document collection at all")
+        check(int(psql("select count(*) from stock_documents where kind = 'transfer'")) >= 8
+              and int(psql("select count(*) from stock_documents where kind = 'damage'")) >= 6
+              and int(psql("select count(*) from stock_document_lines")) >= 21,
+              "R5.3: the demo transfers and damage entries were seeded into their tables")
+        dupno = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                "insert into stock_documents (id, kind, no, date, process, from_branch_id, from_branch, to_branch_id, "
+                                f"to_branch, total_qty, total_value, issued_by, created_at) select 'dupd{TAG}', kind, no, date, process, "
+                                "from_branch_id, from_branch, to_branch_id, to_branch, 0, 0, 'x', now() from stock_documents limit 1"],
+                               capture_output=True, text=True)
+        check(dupno.returncode != 0, "R5.3: the database refuses a duplicate document number (unique index), not just the API")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -508,6 +627,11 @@ def run():
             wi = arif.post(f"{BASE}/items", json={**item_body, "name": f"R6 Stale Item {TAG}", "sku": f"R6-SW-{TAG}"})
             check(wi.status_code == 503, f"R5.2: stale instance refuses a native SKU write (HTTP {wi.status_code})")
             check(psql(f"select count(*) from items where sku = 'R6-SW-{TAG}'") == "0", "R5.2: the refused SKU never reached the items table")
+            ws = arif.post(f"{BASE}/transfers", json={"fromBranchId": branch, "toBranchId": other, "date": time.strftime("%Y-%m-%d"),
+                                                      "note": f"R5.3 stale {TAG}", "lines": [{"itemId": iid, "qty": 1}], "process": "Created"})
+            check(ws.status_code == 503, f"R5.3: stale instance refuses a native stock-document write (HTTP {ws.status_code})")
+            check(psql(f"select count(*) from stock_documents where note like '%R5.3 stale {TAG}%'") == "0",
+                  "R5.3: the refused document never reached stock_documents")
             wu = arif.post(f"{BASE}/vat/uds", json={**ud_body, "no": f"BKMEA/UD/2026/SW{TAG}".upper(), "masterLcNo": f"EXP-LC-SW-{TAG}"})
             check(wu.status_code == 503, f"stale instance refuses a compat write after a re-seed elsewhere (HTTP {wu.status_code})")
             check(psql(f"select count(*) from compat_state where data::text like '%R6 Stale Write {TAG}%'") == "0", "stale snapshot not written over the re-seeded data")
@@ -567,6 +691,43 @@ def run():
         w = arif.post(f"{BASE}/customers", json={"name": f"R5 Upgraded {TAG}", "mode": "Foreign", "country": "Japan", "address": "1-2-3 Ginza, Tokyo"})
         check(w.status_code == 201 and psql(f"select count(*) from parties where id = '{w.json().get('id')}'") == "1",
               f"and writes land in the tables on the upgraded database ({w.status_code})")
+
+        # R5.3: the same upgrade one release later — a database written before the stock documents had tables holds
+        # them (lines included) inside compat_state, and the first boot on this code has to move them out without
+        # losing a line or a state.
+        print("\nR5.3: upgrading a pre-R5.3 database moves the stock documents into their tables")
+        stock_counts = lambda: (psql("select count(*) from stock_documents"), psql("select count(*) from stock_document_lines"))
+        stock_registers = lambda: {k: arif.get(f"{BASE}/{k}", params={"size": 200}).json() for k in ("transfers", "damage")}
+        def stock_boots():
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as f:
+                return sum(1 for line in f if "R5.3 upgrade:" in line)
+        shad, sbefore, ssplit, sboots = stock_counts(), stock_registers(), held(), stock_boots()
+        tlines = psql(f"select count(*) from stock_document_lines where doc_id = '{tid}'")
+        psql(PRE_R53_COLLECTIONS)
+        psql("delete from stock_document_lines")
+        psql("delete from stock_documents")
+        check(stock_counts() == ("0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'transfers' and data->'db' ? 'damages'") == "1",
+              f"the database is back in the pre-R5.3 shape ({shad[0]} stock documents, {shad[1]} lines inside the snapshot)")
+        restart()
+        check(stock_counts() == shad, f"the first boot moved every document into the tables ({shad[0]} documents, {shad[1]} lines)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'transfers' or data->'db' ? 'damages'") == "0",
+              "…and rewrote the snapshot without them")
+        check(stock_registers() == sbefore, "…and serves the same two registers, row for row")
+        check(psql(f"select count(*) from stock_documents where id = '{tid}' and process = 'Cancelled'") == "1"
+              and psql(f"select count(*) from stock_document_lines where doc_id = '{tid}'") == tlines,
+              "a document approved and cancelled before the upgrade kept its state and its lines")
+        check(held() == ssplit, "…and the stock derived from them is unchanged — the branch split survived the round trip")
+        sboots_after, snow = stock_boots(), stock_counts()
+        restart()
+        check(stock_counts() == snow and (sboots is None or sboots_after == sboots + 1) and (sboots is None or stock_boots() == sboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        wt = arif.post(f"{BASE}/transfers", json={"fromBranchId": branch, "toBranchId": other, "date": time.strftime("%Y-%m-%d"),
+                                                  "lines": [{"itemId": iid, "qty": 1}], "process": "Created"})
+        check(wt.status_code == 201 and psql(f"select count(*) from stock_documents where id = '{wt.json().get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({wt.status_code})")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

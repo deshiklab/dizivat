@@ -20,3 +20,14 @@ export {
   buildItem, buildMaster, flatMaster, itemCsvColumns, itemEdit, ITEM_FIELDS, itemSpec, itemStockValue, masterCsvColumns,
   MASTER_FIELDS, masterErrors, masterFields, masterRow, masterSpec, newItemId, skuTaken,
 } from "@/app/api/v1/_items"
+// R5.3: the stock-document rules, shared the same way — validation and pricing of the lines, the monthly numbers
+// (which the audit trail takes part in), the branch-stock checks around approving and cancelling, the item counter
+// a damage entry moves, the document's own history, and the register's spec and CSV columns. The documents
+// themselves live in `stock_documents`; the branch split and an item's ledger still derive from *every* movement
+// document, so they stay with the compat layer until the rest have tables (R5.3–R5.4).
+export {
+  approveDoc, buildStock, cancelDoc, findStockDoc, LABEL as STOCK_LABEL, nextStockNo, stampHistory as stampStockHistory,
+  stockCsvColumns, stockCsvRows, stockDocs, stockDocDiff, stockSource, stockSpec,
+  type DamageFields, type StockBuilt, type StockProblem, type TransferFields,
+} from "@/app/api/v1/_stock"
+export { branchLabels, stockShortfall } from "@/lib/mock/db"

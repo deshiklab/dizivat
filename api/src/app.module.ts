@@ -9,22 +9,25 @@ import { CompatController, CompatService } from "./modules/compat"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
 import { CustomersController, PartiesService, VendorsController } from "./modules/parties"
 import { ItemsController, ItemsService, MasterItemsController } from "./modules/items"
+import { DamageController, StockService, TransfersController } from "./modules/stock"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
 import { SEED_VERSION } from "./boot"
 
 export const VERSION = "0.15.0"
 const NATIVE_CONTROLLERS = [
   AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController,
-  CustomersController, VendorsController, ItemsController, MasterItemsController,
+  CustomersController, VendorsController, ItemsController, MasterItemsController, TransfersController, DamageController,
 ]
 
 @Global()
 @Module({
   providers: [
-    SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, CompatService, BackupsService,
-    { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, CompatService,
+    BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, CompatService, BackupsService],
+  exports: [
+    SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, CompatService, BackupsService,
+  ],
 })
 class CoreModule {}
 
