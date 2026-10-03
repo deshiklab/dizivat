@@ -15,8 +15,53 @@ PW = "demo1234"
 RESTART = os.environ.get("API_RESTART_CMD")
 DB_URL = os.environ.get("DATABASE_URL")
 SECRET = os.environ.get("SESSION_SECRET")
+API_LOG = os.environ.get("API_LOG")
 ok = fail = skip = 0
 TAG = uuid.uuid4().hex[:6]
+
+# ── R5.2 upgrade drill ─────────────────────────────────────────────────────────────────────────────────────────
+# A database written before R5.2 holds its master data inside compat_state (deleted parties in the undo buffer) and
+# has no parties/items/master_items rows. These statements rebuild exactly that shape from the live tables — the
+# stored row as the compat world had it: camelCase fields, optional ones absent rather than null, timestamps in the
+# ISO-8601 the snapshot carries — so the first boot on this code has to adopt it, and the drill can prove nothing was
+# lost. Nothing here ships: it is the inverse of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+_NO_NULLS = "(select jsonb_object_agg(key, value) from jsonb_each({}) where value <> 'null'::jsonb)"
+_ISO = """to_char({} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')"""
+PARTY_DOC = _NO_NULLS.format("""jsonb_build_object(
+    'id', id, 'name', name, 'bin', bin, 'mode', mode, 'mobile', mobile, 'address', address, 'kind', kind,
+    'country', country, 'email', email, 'contactPerson', contact_person, 'active', active, 'creditLimit', credit_limit,
+    'vdsWithholder', vds_withholder, 'exporterType', exporter_type, 'bondLicenseNo', bond_license_no,
+    'bondLicenseExpiry', bond_license_expiry, 'associationNo', association_no)""")
+ITEM_DOC = _NO_NULLS.format("""jsonb_build_object(
+    'id', id, 'hsCode', hs_code, 'group', "group", 'masterItem', master_item, 'brand', brand, 'name', name, 'unit', unit,
+    'sku', sku, 'purchasePrice', purchase_price, 'costPrice', cost_price, 'salePrice', sale_price, 'vatRate', vat_rate,
+    'sdRate', sd_rate, 'opening', opening, 'purchased', purchased, 'prodReceive', prod_receive, 'prodIssue', prod_issue,
+    'sold', sold, 'damage', damage, 'reorderLevel', reorder_level, 'active', active)""")
+MASTER_DOC = _NO_NULLS.format("""jsonb_build_object(
+    'id', id, 'name', name, 'hsCode', hs_code, 'group', "group", 'category', category, 'unit', unit,
+    'priceMethod', price_method, 'description', description,
+    'rates', jsonb_build_object('vat', vat, 'sd', sd, 'cd', cd, 'rd', rd, 'ait', ait, 'at', at),
+    'overrideReason', override_reason, 'active', active, 'createdAt', """ + _ISO.format("created_at") + """,
+    'updatedAt', """ + _ISO.format("updated_at") + """, 'history', history)""")
+PARTY_AGG = lambda kind: (f"(select coalesce(jsonb_agg(doc order by ord), '[]'::jsonb) "
+                          f"from (select ord, {PARTY_DOC} as doc from parties "
+                          f"where kind = '{kind}' and deleted_at is null) {kind[0]})")
+# the four collections back inside the snapshot
+PRE_R52_COLLECTIONS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'customers', {PARTY_AGG('customer')},
+  'vendors', {PARTY_AGG('vendor')},
+  'items', (select coalesce(jsonb_agg({ITEM_DOC} order by ord), '[]'::jsonb) from items),
+  'masterItems', (select coalesce(jsonb_agg({MASTER_DOC} order by ord), '[]'::jsonb) from master_items)
+)) where key = 'main'"""
+# … and the deleted parties back into the undo buffer, keeping the documents already in it
+PRE_R52_TRASH = f"""update compat_state set data = jsonb_set(data, '{{db,trash}}',
+  coalesce(data->'db'->'trash', '[]'::jsonb) || (
+    select coalesce(jsonb_agg(jsonb_build_object('kind', kind, 'doc', doc, 'at', {_ISO.format('deleted_at')})
+                              order by deleted_at), '[]'::jsonb)
+    from (select kind, deleted_at, {PARTY_DOC} as doc from parties where deleted_at is not null) t),
+  true) where key = 'main'"""
+PARTY_TRASH_LEFT = """select count(*) from compat_state where jsonb_typeof(data->'db'->'trash') = 'array'
+  and exists (select 1 from jsonb_array_elements(data->'db'->'trash') t where t->>'kind' in ('customer', 'vendor'))"""
 
 
 def check(cond, msg):
@@ -480,6 +525,48 @@ def run():
         check(v3.get("ok") is True and not any(f"R6 Stale Write {TAG}" in (c.get("name") or "") for c in cl)
               and not any(f"SW{TAG}".upper() in (u.get("no") or "") for u in uds_after) and stale_items.get("total", 0) == 0,
               "after a restart: chain intact, all three refused writes absent")
+
+        # R5.2: the upgrade a customer installation takes — a database written before the migration still carries its
+        # master data inside compat_state, and the first boot on this code has to move it into the tables without
+        # losing a record (no re-seed: SEED_VERSION is unchanged, so the data on disk is all there is).
+        print("\nR5.2: upgrading a pre-R5.2 database moves the master data into their tables")
+        counts = lambda: (psql("select count(*) from parties"), psql("select count(*) from parties where deleted_at is not null"),
+                          psql("select count(*) from items"), psql("select count(*) from master_items"))
+        registers = lambda: {k: arif.get(f"{BASE}/{k}", params=q).json() for k, q in
+                             (("customers", {"view": "table", "size": 200}), ("vendors", {"view": "table", "size": 200}),
+                              ("items", {"size": 500}), ("master-items", {"size": 500}))}
+        def upgraded_boots():
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as f:
+                return sum(1 for line in f if "R5.2 upgrade:" in line)
+        had, before, boots = counts(), registers(), upgraded_boots()
+        psql(PRE_R52_COLLECTIONS)
+        psql(PRE_R52_TRASH)
+        psql("delete from parties")
+        psql("delete from items")
+        psql("delete from master_items")
+        check(counts() == ("0", "0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'customers' and data->'db' ? 'vendors' "
+                       "and data->'db' ? 'items' and data->'db' ? 'masterItems'") == "1",
+              f"the database is back in the pre-R5.2 shape ({had[0]} parties, {had[2]} SKUs, {had[3]} master items inside the snapshot)")
+        restart()
+        check(counts() == had, f"the first boot moved every record into the tables (parties {had[0]} incl. {had[1]} deleted, items {had[2]}, master items {had[3]})")
+        check(psql("select count(*) from compat_state where data->'db' ? 'customers' or data->'db' ? 'vendors' "
+                   "or data->'db' ? 'items' or data->'db' ? 'masterItems'") == "0",
+              "…and rewrote the snapshot without them")
+        check(psql(PARTY_TRASH_LEFT) == "0", "…and took the deleted parties out of the undo buffer, keeping its documents")
+        check(registers() == before, "…and serves the same four registers, row for row")
+        check(psql(f"select count(*) from parties where id = '{gid}' and deleted_at is not null") == "1"
+              and arif.get(f"{BASE}/vendors/{gid}").status_code == 404, "a party deleted before the upgrade is still in the trash")
+        check(arif.post(f"{BASE}/vendors/{gid}/restore").status_code == 200, "…and its undo still works afterwards")
+        boots_after, now = upgraded_boots(), counts()
+        restart()
+        check(counts() == now and (boots is None or boots_after == boots + 1) and (boots is None or upgraded_boots() == boots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        w = arif.post(f"{BASE}/customers", json={"name": f"R5 Upgraded {TAG}", "mode": "Foreign", "country": "Japan", "address": "1-2-3 Ginza, Tokyo"})
+        check(w.status_code == 201 and psql(f"select count(*) from parties where id = '{w.json().get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({w.status_code})")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

@@ -96,7 +96,8 @@ plan runs exactly one.
 - **Upgrading an existing database.** On the first boot after the migration, `boot.ts` moves the customers and
   vendors it finds inside `compat_state` (and the deleted ones in its undo buffer) into `parties`, then rewrites the
   snapshot without them — the items and master items below take the same path, in the same transaction. No re-seed: a customer installation keeps its data, and `SEED_VERSION` is unchanged.
-  Restoring a pre-R5.2 backup into a fresh database adopts them the same way.
+  Restoring a pre-R5.2 backup into a fresh database adopts them the same way. `api_native.py` drills it in CI: it
+  rewrites a live database into that older shape, restarts, and compares the registers row for row.
 - **The list is not in SQL yet.** `runQuery` (the shared in-memory engine) still builds the register, because its
   aggregates, facets and totals come from *documents* — turnover and amount due per party — and those live in
   `compat_state` until R5.3. Units work the same way. When documents get their tables, this becomes a SQL join with
@@ -183,10 +184,21 @@ npm run build && npx next start -p 3000             # → http://localhost:3000
 The existing suites run unchanged against the backend (`BASE_URL=http://localhost:3000`). One suite is new:
 
 ```bash
-API_RESTART_CMD=api/scripts/serve.sh DATABASE_URL=… SESSION_SECRET=… python3 scripts/api_native.py
+API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=… SESSION_SECRET=… \
+  python3 scripts/api_native.py
 ```
 
-It runs 39 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout, scrypt-only storage, audit rows, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit ids survive an API restart**.
+It runs 147 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
+fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
+ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
+`master_items`, none of those collections left in the snapshot, the database refusing a duplicate name, BIN or SKU that
+slipped past the application checks, `delete` → `deleted_at` → undo → still deleted after a restart, a compat document's
+counter and a compat import reaching `items` — and it **drills the upgrade**: `API_LOG` lets it count the adoption, and
+the last section rewrites the live database back into the pre-R5.2 shape (the collections inside `compat_state`, the
+deleted parties in its undo buffer, the three tables empty), restarts, and requires the same rows back, the snapshot
+rewritten without them, the four registers served row for row as before, a second boot that adopts nothing again, and
+writes that still land in the tables.
 
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 

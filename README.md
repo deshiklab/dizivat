@@ -191,12 +191,14 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     items out of `compat_state` into their tables and rewrites the snapshot without them — no re-seed
     (`SEED_VERSION` unchanged), so a customer installation and a restored pre-R5.2 backup both carry their records
     over.
-  - **Tests:** `api_native.py` 138 checks (+43: rows in `parties`, `items` and `master_items`, none of those
+  - **Tests:** `api_native.py` 147 checks (+52: rows in `parties`, `items` and `master_items`, none of those
     collections left in the snapshot, the database refusing a duplicate party name and SKU, delete → `deleted_at` →
     undo → still deleted after a restart, an undo whose name was taken again answering 422 instead of a 500 from the
     unique index, a rename that reaches the SKU in the table, a compat document's counter and a compat import landing
-    in `items`, stock surviving a restart, and a stale instance refusing native party and SKU writes during a deploy
-    overlap). Contract unchanged: 676 checks / 226 endpoints.
+    in `items`, stock surviving a restart, a stale instance refusing native party and SKU writes during a deploy
+    overlap — and an **upgrade drill**: the database is rewritten into its pre-R5.2 shape, the API restarted, and the
+    same rows, the same four registers and a snapshot without the collections are required back). Contract unchanged:
+    676 checks / 226 endpoints.
   - **Left for R5.3:** the stock ledger and branches' stock, which are *derived* from documents, become relational
     with the documents themselves.
 
