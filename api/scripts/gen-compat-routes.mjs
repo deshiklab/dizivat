@@ -21,6 +21,7 @@ export const NATIVE = [
   // R5.3: sales invoices live in `sales` (their lines in `sale_lines`, their proceeds entries in
   // `sale_realisations`); the branch stock, the ledger and the VAT returns still derive from every document
   "sales", "sales/[id]", "sales/[id]/creditable", "sales/[id]/realisations", "sales/[id]/restore", "sales/bulk",
+  "purchases", "purchases/[id]", "purchases/[id]/restore", "purchases/[id]/returnable", "purchases/bulk",
 ]
 
 const found = []

@@ -37,10 +37,15 @@ export {
 // `sales`; the branch stock, the ledger and the VAT returns still derive from every document, so they stay with the
 // compat layer until the rest have tables (R5.3–R5.5).
 export {
-  approveRule, buildRealisation, cancelRule, deleteRule, docDiff, editDraftRule, parseRealisation, purchaseCategoryRule,
-  realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows, saleFacetLabels,
-  saleIdentity, saleSpec, saleStockRule, stampDocHistory, purchaseIdentity,
+  approveRule, buildRealisation, cancelRule, deleteRule, docDiff, editDraftRule, parseRealisation, purchaseCategory,
+  purchaseCategoryRule, purchaseCsvColumns, purchaseCsvRows, purchaseFacetLabels, purchaseIdentity, parsePurchase,
+  purchaseSpec, realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows,
+  saleFacetLabels, saleIdentity, saleSpec, saleStockRule, stampDocHistory,
 } from "@/app/api/v1/_docs"
 export { creditable, parseSale } from "@/app/api/v1/_r3"
+export { returnable } from "@/app/api/v1/_r2"
+// R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
+// duty per line) variants, priced by the same functions the mock and the static demo run.
+export { buildPurchaseFields } from "@/lib/mock/build"
 export { periodLocked } from "@/app/api/v1/_r4"
 export { branchLabels, postStock, stockShortfall } from "@/lib/mock/db"

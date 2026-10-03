@@ -118,6 +118,43 @@ export function purchaseIdentity(category: string, issueDate: string) {
 }
 
 /**
+ * The purchases register's query spec (R5.3), shared with the API's native module so the two lists cannot drift.
+ * An import purchase is found by its Bill of Entry as well as by its own number.
+ */
+export const purchaseSpec = {
+  search: (p: Purchase) => `${p.invoiceNo} ${p.challanNo} ${p.vendorName} ${p.vendorBin}`,
+  dateField: "issueDate" as const,
+  facets: {
+    process: (p: Purchase) => p.process, mode: (p: Purchase) => p.mode, vendor: (p: Purchase) => p.vendorId,
+    payment: (p: Purchase) => (p.due <= 0 ? "paid" : p.paid > 0 ? "partial" : "unpaid"),
+    branch: (p: Purchase) => p.branchId,
+  },
+  totals: ["subtotal", "vat", "tti", "rebate", "netTotal", "paid", "due"] as (keyof Purchase)[],
+}
+
+/** The purchases register's category filter: goods by default, `service` for the service register, `all` for both. */
+export const purchaseCategory = (params: URLSearchParams, src: Purchase[]) => {
+  const cat = params.get("category") ?? "goods"
+  params.delete("category")
+  return cat === "all" ? src : src.filter((p) => (p.category ?? "goods") === cat)
+}
+
+export const purchaseCsvColumns: { key: string; label: string; get?: (p: Purchase) => unknown }[] = [
+  { key: "issueDate", label: "Issue Date" }, { key: "invoiceNo", label: "Purchase No" }, { key: "challanNo", label: "Challan / BoE" },
+  { key: "vendorName", label: "Vendor" }, { key: "branchName", label: "Branch" }, { key: "vendorBin", label: "BIN/NID" }, { key: "mode", label: "Mode" },
+  { key: "subtotal", label: "SubTotal" }, { key: "vat", label: "VAT" }, { key: "tti", label: "TTI" }, { key: "rebate", label: "Rebate" },
+  { key: "boe", label: "LC No", get: (p: Purchase) => p.boe?.lcNo ?? "" },
+  { key: "vds", label: "VDS", get: (p: Purchase) => (p.lines.some((l) => l.vds) ? "Yes" : "") },
+  { key: "netTotal", label: "Total" }, { key: "paid", label: "Paid" }, { key: "due", label: "Due" }, { key: "process", label: "Process" },
+]
+
+/** What the purchases CSV exports: the filtered rows, or only the checked ones when `?ids=` is given. */
+export const purchaseCsvRows = (all: Purchase[], ids?: string | null) => (ids ? all.filter((p) => ids.split(",").includes(p.id)) : all)
+
+/** The facet labels the purchases register shows next to its facet values. */
+export const purchaseFacetLabels = () => ({ vendor: Object.fromEntries(db.vendors.map((v) => [v.id, v.name])), branch: branchLabels() })
+
+/**
  * The stock and lot check behind saving or approving a sale. `status` mirrors what the mock returned: 422 when the
  * shortfall is found while saving an approve-on-edit, 409 when approving an existing draft.
  */

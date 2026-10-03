@@ -140,6 +140,54 @@ PRE_R53_SALE_TRASH = f"""update compat_state set data = jsonb_set(data, '{{db,tr
 SALE_TRASH_LEFT = """select count(*) from compat_state where jsonb_typeof(data->'db'->'trash') = 'array'
   and exists (select 1 from jsonb_array_elements(data->'db'->'trash') t where t->>'kind' = 'sale')"""
 
+# ── R5.3 upgrade drill: the purchases ────────────────────────────────────────────────────────────────────────
+# A database written before the purchases had tables holds them inside compat_state — lines, Bills of Entry and the
+# duty breakdown of every import line included, a deleted draft in the undo buffer. These statements rebuild that
+# shape from the live tables, so the first boot on this code has to adopt it. Nothing here ships either: it is the
+# inverse of the purchase half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+PURCHASE_LINES_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'hsCode', l.hs_code, 'uom', l.uom, 'qty', l.qty, 'price', l.price,
+      'sdRate', l.sd_rate, 'vatRate', l.vat_rate, 'subtotal', l.subtotal, 'sd', l.sd, 'vat', l.vat, 'total', l.total,
+      'rebateable', l.rebateable, 'vds', l.vds, 'tti', l.tti,
+      'duty', case when l.duty_av is null then null else """ + _NO_NULLS.format("""jsonb_build_object(
+        'usd', l.duty_usd, 'usdRate', l.duty_usd_rate, 'av', l.duty_av, 'cdRate', l.duty_cd_rate, 'cd', l.duty_cd,
+        'rdRate', l.duty_rd_rate, 'rd', l.duty_rd, 'aitRate', l.duty_ait_rate, 'ait', l.duty_ait,
+        'atRate', l.duty_at_rate, 'at', l.duty_at,
+        'foregone', case when l.foregone_total is null then null else jsonb_build_object(
+          'cd', l.foregone_cd, 'rd', l.foregone_rd, 'sd', l.foregone_sd, 'vat', l.foregone_vat,
+          'ait', l.foregone_ait, 'at', l.foregone_at, 'total', l.foregone_total) end)""") + """ end)""")
+    + """ order by l.ord), '[]'::jsonb) from purchase_lines l where l.purchase_id = p.id)""")
+# the Bill of Entry is a block of its own columns; `boe_no` is its presence marker
+PURCHASE_BOE_DOC = ("""(case when p.boe_no is null then null else """ + _NO_NULLS.format("""jsonb_build_object(
+      'no', p.boe_no, 'date', p.boe_date, 'lcNo', p.boe_lc_no, 'lcDate', p.boe_lc_date,
+      'customsHouse', p.boe_customs_house, 'origin', p.boe_origin, 'cnfFirm', p.boe_cnf_firm,
+      'receiveAddress', p.boe_receive_address, 'bonded', p.boe_bonded, 'udNo', p.boe_ud_no)""") + """ end)""")
+PURCHASE_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', p.id, 'invoiceNo', p.invoice_no, 'challanNo', p.challan_no, 'challanDate', p.challan_date,
+    'issueDate', p.issue_date, 'process', p.process, 'category', p.category, 'branchId', p.branch_id,
+    'branchName', p.branch_name, 'vendorId', p.vendor_id, 'vendorName', p.vendor_name, 'vendorBin', p.vendor_bin,
+    'vendorAddress', p.vendor_address, 'mode', p.mode, 'method', p.method, 'subtotal', p.subtotal, 'sd', p.sd,
+    'vat', p.vat, 'discount', p.discount, 'netTotal', p.net_total, 'paid', p.paid, 'due', p.due, 'tti', p.tti,
+    'rebate', p.rebate, 'lines', """ + PURCHASE_LINES_DOC + """, 'issuedBy', p.issued_by,
+    'designation', p.designation, 'narration', p.narration, 'createdAt', """ + _ISO.format("p.created_at") + """,
+    'updatedAt', """ + _ISO.format("p.updated_at") + """, 'cancelReason', p.cancel_reason, 'history', p.history,
+    'boe', """ + PURCHASE_BOE_DOC + """)""") + ")")
+PURCHASE_AGG = (f"(select coalesce(jsonb_agg({PURCHASE_DOC} order by p.ord), '[]'::jsonb) "
+                f"from purchases p where p.deleted_at is null)")
+# the purchases back inside the snapshot …
+PRE_R53_PURCHASES = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'purchases', {PURCHASE_AGG}
+)) where key = 'main'"""
+# … and the deleted drafts back into the undo buffer, keeping the documents already in it
+PRE_R53_PURCHASE_TRASH = f"""update compat_state set data = jsonb_set(data, '{{db,trash}}',
+  coalesce(data->'db'->'trash', '[]'::jsonb) || (
+    select coalesce(jsonb_agg(jsonb_build_object('kind', 'purchase', 'doc', doc, 'at', {_ISO.format('deleted_at')})
+                              order by deleted_at), '[]'::jsonb)
+    from (select p.deleted_at, {PURCHASE_DOC} as doc from purchases p where p.deleted_at is not null) t),
+  true) where key = 'main'"""
+PURCHASE_TRASH_LEFT = """select count(*) from compat_state where jsonb_typeof(data->'db'->'trash') = 'array'
+  and exists (select 1 from jsonb_array_elements(data->'db'->'trash') t where t->>'kind' = 'purchase')"""
+
 
 def check(cond, msg):
     global ok, fail
@@ -655,6 +703,156 @@ def run():
                                capture_output=True, text=True)
         check(dupno.returncode != 0, "R5.3: the database refuses a duplicate invoice number (unique index), not just the API")
 
+    # ── R5.3: the purchases ────────────────────────────────────────────────────────────────────────────────────
+    print("R5.3: purchases are rows too — imports with their Bill of Entry and the duty every line cleared")
+
+    def vendors(mode):
+        rows = arif.get(f"{BASE}/vendors", params={"size": 100}).json()
+        return [v for v in (rows["data"] if isinstance(rows, dict) else rows) if v["mode"] == mode]
+
+    sv = arif.get(f"{BASE}/services").json()[0]
+    vend = vendors("Local")[0]
+    # a purchase moves `purchased`, so these checks buy demo SKUs of their own: the R5.2 restart check still
+    # requires the item this suite created (`iid`) to hold exactly the 40 it opened with
+    buyable = [x["id"] for x in arif.get(f"{BASE}/items", params={"size": 200}).json()["data"]
+               if x["group"] != "Finished Goods" and x["id"] != iid]
+    piid, other_buyable = buyable[0], buyable[1]
+
+    def pheld():
+        r = stock_rows()[piid]
+        return r["remain"], r["byBranch"].get(branch, 0), r["byBranch"].get(other, 0)
+
+    bought0, split2 = (float(psql(f"select purchased from items where id = '{piid}'")) if DB_URL else None), pheld()
+    pur_body = {"vendorId": vend["id"], "issueDate": tdate, "challanNo": f"CH{TAG}", "challanDate": tdate,
+                "method": "Cash", "discount": 0, "paid": 0, "issuedBy": "Arif Hossain",
+                "designation": "Purchase Officer", "narration": f"R5.3 purchase {TAG}", "process": "Created",
+                "branchId": branch, "lines": [{"itemId": piid, "qty": 5, "price": 100, "sdRate": 0, "vatRate": 5}]}
+    pi = arif.post(f"{BASE}/purchases", json=pur_body)
+    pid, pno = pi.json().get("id"), pi.json().get("invoiceNo")
+    check(pi.status_code == 201 and pi.json()["process"] == "Created" and "boe" not in pi.json()
+          and str(pno).startswith("P-") and pi.json()["challanNo"] == f"CH{TAG}"
+          and [h["action"] for h in pi.json()["history"]] == ["created"],
+          f"native (R5.3): a purchase draft is created and numbered ({pi.status_code} {pno})")
+    check(pheld() == split2, "R5.3: a draft purchase moves no stock")
+    if DB_URL:
+        check(psql(f"select count(*) from purchases where id = '{pid}' and process = 'Created' and boe_no is null") == "1"
+              and psql(f"select count(*) from purchase_lines where purchase_id = '{pid}'") == "1",
+              "R5.3: the draft is a row in purchases, and its line a row in purchase_lines")
+    pa = arif.patch(f"{BASE}/purchases/{pid}", json={"process": "Approved"})
+    check(pa.status_code == 200 and pa.json()["process"] == "Approved"
+          and pheld() == (split2[0] + 5, split2[1] + 5, split2[2]),
+          f"R5.3: approving moves the stock in, and the branch split derived in memory follows ({pa.status_code})")
+    pled = arif.get(f"{BASE}/items/{piid}/ledger").json()
+    check(any(e.get("ref") == pno for e in pled["entries"]),
+          "R5.3: …and the item's ledger, still derived from every document, quotes it")
+    if DB_URL:
+        check(psql(f"select purchased = {bought0 + 5} from items where id = '{piid}'") == "t",
+              "R5.3: …and the counter it moved is written with it (items.purchased)")
+        check(psql(f"select jsonb_array_length(history) from purchases where id = '{pid}'") == "2",
+              "R5.3: the document's own history travels with the row")
+    pcan = arif.patch(f"{BASE}/purchases/{pid}", json={"process": "Cancelled", "reason": f"R5.3 cancelled {TAG}"})
+    check(pcan.status_code == 200 and pheld() == split2, "R5.3: cancelling takes the stock back out")
+    if DB_URL:
+        check(psql(f"select count(*) from purchases where id = '{pid}' and process = 'Cancelled'"
+                   f" and cancel_reason is not null") == "1"
+              and psql(f"select purchased = {bought0} from items where id = '{piid}'") == "t",
+              "R5.3: …and the cancellation and the counter are stored on the rows")
+    check(arif.patch(f"{BASE}/purchases/{pid}", json={"process": "Cancelled", "reason": "again"}).status_code == 409,
+          "R5.3: a purchase that is already cancelled refuses a second cancellation (409)")
+    # editing a draft replaces its lines; deleting one stamps the row (its number stays retired) and the undo restores it
+    p2 = arif.post(f"{BASE}/purchases", json={**pur_body, "lines": [
+        {"itemId": piid, "qty": 3, "price": 100, "sdRate": 0, "vatRate": 5}]}).json()
+    pe = arif.put(f"{BASE}/purchases/{p2['id']}", json={**pur_body, "lines": [
+        {"itemId": piid, "qty": 4, "price": 100, "sdRate": 0, "vatRate": 5},
+        {"itemId": other_buyable, "qty": 1, "price": 50, "sdRate": 0, "vatRate": 5}]})
+    check(pe.status_code == 200 and [l["qty"] for l in pe.json()["lines"]] == [4, 1]
+          and [h["action"] for h in pe.json()["history"]][-1] == "edited",
+          f"R5.3: editing a draft purchase replaces its lines ({pe.status_code})")
+    if DB_URL:
+        check(psql(f"select string_agg(item_id || ':' || qty::text, ',' order by ord) from purchase_lines"
+                   f" where purchase_id = '{p2['id']}'") == f"{piid}:4.000,{other_buyable}:1.000",
+              "R5.3: …in the child table, in the order they are printed")
+    pdel = arif.delete(f"{BASE}/purchases/{p2['id']}")
+    check(pdel.status_code == 200 and pdel.json().get("ok") is True
+          and arif.get(f"{BASE}/purchases/{p2['id']}").status_code == 404,
+          "R5.3: a draft purchase is deleted and leaves the register")
+    if DB_URL:
+        check(psql(f"select count(*) from purchases where id = '{p2['id']}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from purchase_lines where purchase_id = '{p2['id']}'") == "2",
+              "R5.3: …as a stamped row that keeps its lines, so its number stays retired")
+    p3 = arif.post(f"{BASE}/purchases", json=pur_body).json()
+    check(p3["invoiceNo"] != p2["invoiceNo"],
+          f"R5.3: the next purchase takes a new number ({p2['invoiceNo']} → {p3['invoiceNo']})")
+    pr = arif.post(f"{BASE}/purchases/{p2['id']}/restore")
+    check(pr.status_code == 200 and pr.json()["process"] == "Created"
+          and [h["action"] for h in pr.json()["history"]][-1] == "restored"
+          and arif.get(f"{BASE}/purchases/{p2['id']}").status_code == 200,
+          f"R5.3: the undo restores the draft, with its history ({pr.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from purchases where id = '{p2['id']}' and deleted_at is null") == "1",
+              "R5.3: …by clearing the stamp on the row")
+    swap = arif.put(f"{BASE}/purchases/{p3['id']}", json={**pur_body, "category": "service", "lines": [
+        {"itemId": sv["id"], "qty": 1, "price": 1000, "sdRate": 0, "vatRate": 10}]})
+    check(swap.status_code == 409, f"R5.3: a goods purchase cannot become a service purchase ({swap.status_code})")
+    # an import purchase carries its Bill of Entry, and every line's duty breakdown, as columns of its own
+    imp = arif.post(f"{BASE}/purchases", json={**pur_body, "vendorId": vendors("Foreign")[0]["id"],
+                                              "challanNo": f"BOE{TAG}", "process": "Approved",
+                                              "boe": {"lcNo": f"LC{TAG}", "lcDate": tdate, "customsHouse": "CTG",
+                                                      "origin": "China", "bonded": False},
+                                              "lines": [{"itemId": piid, "qty": 10, "usd": 100, "usdRate": 119.5,
+                                                         "cdRate": 25, "rdRate": 5, "sdRate": 0, "vatRate": 15,
+                                                         "aitRate": 5, "atRate": 5}]})
+    impid = imp.json().get("id")
+    duty = imp.json()["lines"][0].get("duty", {}) if imp.status_code == 201 else {}
+    check(imp.status_code == 201 and imp.json()["mode"] == "Foreign"
+          and imp.json()["boe"]["no"] == f"BOE{TAG}" and imp.json()["boe"]["lcNo"] == f"LC{TAG}"
+          and "bonded" not in imp.json()["boe"] and duty.get("av") == 11950 and duty.get("cd") == 2987.5
+          and imp.json()["tti"] == 7289.5,
+          f"native (R5.3): an import purchase prices its Bill of Entry lines with the duty stack ({imp.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from purchases where id = '{impid}' and boe_no = 'BOE{TAG}'"
+                   f" and boe_lc_no = 'LC{TAG}' and boe_origin = 'China' and boe_bonded is null") == "1",
+              "R5.3: …the Bill of Entry as columns of its own row, so a BoE, an LC or a country is queryable")
+        check(psql(f"select count(*) from purchase_lines where purchase_id = '{impid}' and duty_av = 11950"
+                   f" and duty_cd = 2987.5 and duty_at = 776.75 and tti = 7289.5 and foregone_total is null") == "1",
+              "R5.3: …and the duty every line cleared as columns, so a BoE's duty is a sum, not a walk")
+        bonded = int(psql("select count(*) from purchase_lines where foregone_total is not null"))
+        check(bonded >= 4,
+              f"R5.3: the bonded (IM-7) entries the bond register reports kept their duty foregone ({bonded} lines)")
+    # a service purchase is its own register and its own number series, and moves no stock
+    split3 = pheld()
+    ps = arif.post(f"{BASE}/purchases", json={**pur_body, "category": "service", "lines": [
+        {"itemId": sv["id"], "qty": 1, "price": 5000, "sdRate": 0, "vatRate": 10}]})
+    check(ps.status_code == 201 and ps.json()["category"] == "service"
+          and str(ps.json()["invoiceNo"]).startswith("PS-") and pheld() == split3,
+          f"native (R5.3): a service purchase is numbered in its own series and moves no stock ({ps.status_code})")
+    b1 = arif.post(f"{BASE}/purchases", json=pur_body).json()
+    bk = arif.post(f"{BASE}/purchases/bulk", json={"ids": [b1["id"], pid], "action": "approve"})
+    check(bk.status_code == 200 and bk.json() == {"done": [b1["id"]], "skipped": [pid]},
+          f"R5.3: bulk approve takes the drafts and reports the ones it skipped ({bk.status_code})")
+    rt = arif.get(f"{BASE}/purchases/{b1['id']}/returnable")
+    check(rt.status_code == 200 and rt.json()["purchase"]["invoiceNo"] == b1["invoiceNo"]
+          and rt.json()["lines"][0]["remaining"] == rt.json()["lines"][0]["purchasedQty"],
+          f"R5.3: what is still returnable on a purchase is served from its rows ({rt.status_code})")
+    check(arif.get(f"{BASE}/purchases/{ps.json()['id']}/returnable").status_code == 404,
+          "R5.3: …and a service purchase has nothing to return (404)")
+    if DB_URL:
+        check(psql("select count(*) from compat_state where data->'db' ? 'purchases'") == "0",
+              "R5.3: the snapshot carries no purchases collection at all")
+        check(int(psql("select count(*) from purchases")) >= 101 and int(psql("select count(*) from purchase_lines")) >= 101
+              and int(psql("select count(*) from purchases where boe_no is not null")) >= 40
+              and int(psql("select count(*) from purchases where category = 'service'")) >= 18,
+              "R5.3: the demo purchases were seeded into their tables, Bills of Entry and duty breakdowns included")
+        dupno = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                "insert into purchases (id, invoice_no, challan_no, challan_date, issue_date, process, "
+                                "branch_id, branch_name, vendor_id, vendor_name, vendor_bin, vendor_address, mode, method, "
+                                "subtotal, sd, vat, discount, net_total, paid, due, tti, rebate, issued_by, designation, "
+                                "created_at) select 'dupp" + TAG + "', invoice_no, challan_no, challan_date, issue_date, "
+                                "process, branch_id, branch_name, vendor_id, vendor_name, vendor_bin, vendor_address, mode, "
+                                "method, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'x', 'y', now() from purchases limit 1"],
+                               capture_output=True, text=True)
+        check(dupno.returncode != 0, "R5.3: the database refuses a duplicate purchase number (unique index), not just the API")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -1001,6 +1199,64 @@ def run():
         ws = arif.post(f"{BASE}/sales", json=inv_body)
         check(ws.status_code == 201 and psql(f"select count(*) from sales where id = '{ws.json().get('id')}'") == "1",
               f"and writes land in the tables on the upgraded database ({ws.status_code})")
+        # … and the purchases, which the same release moved out: a database written before them holds them inside
+        # compat_state — lines, Bills of Entry and the duty every import line cleared included, a draft deleted
+        # before the upgrade in the undo buffer.
+        print("\nR5.3: upgrading a pre-R5.3 database moves the purchases into their tables")
+        def purchase_counts():
+            return (psql("select count(*) from purchases"), psql("select count(*) from purchase_lines"))
+
+        def purchase_registers():
+            return {"purchases": arif.get(f"{BASE}/purchases", params={"size": 300, "category": "all"}).json(),
+                    "services": arif.get(f"{BASE}/purchases", params={"size": 100, "category": "service"}).json(),
+                    "vendors": arif.get(f"{BASE}/vendors", params={"size": 100}).json()}
+
+        gonep = arif.post(f"{BASE}/purchases", json={**pur_body, "narration": f"R5.3 deleted {TAG}"}).json()
+        arif.delete(f"{BASE}/purchases/{gonep['id']}")
+        def purchase_shapes():
+            return (psql("select count(*) from purchases where boe_no is not null"),
+                    psql("select count(*) from purchases where category = 'service'"),
+                    psql("select count(*) from purchase_lines where duty_av is not null"),
+                    psql("select count(*) from purchase_lines where foregone_total is not null"))
+
+        pcounts, pbefore, psplit, pboots, pshapes = (purchase_counts(), purchase_registers(), held(),
+                                                     stock_boots(), purchase_shapes())
+        psql(PRE_R53_PURCHASES)
+        psql(PRE_R53_PURCHASE_TRASH)
+        psql("delete from purchase_lines")
+        psql("delete from purchases")
+        check(purchase_counts() == ("0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'purchases'") == "1"
+              and psql(PURCHASE_TRASH_LEFT) == "1",
+              f"the database is back in the pre-R5.3 shape ({pcounts[0]} purchases, {pcounts[1]} lines "
+              f"inside the snapshot)")
+        restart()
+        check(purchase_counts() == pcounts,
+              f"the first boot moved every purchase into the tables ({pcounts[0]} documents, {pcounts[1]} lines)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'purchases'") == "0",
+              "…and rewrote the snapshot without them")
+        check(psql(PURCHASE_TRASH_LEFT) == "0",
+              "…and took the deleted drafts out of the undo buffer, keeping its documents")
+        check(purchase_registers() == pbefore, "…and serves the same three registers, row for row")
+        check(psql(f"select count(*) from purchases where id = '{gonep['id']}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from purchase_lines where purchase_id = '{gonep['id']}'") == "1",
+              "a purchase deleted before the upgrade is still in the undo buffer, with its lines")
+        unp = arif.post(f"{BASE}/purchases/{gonep['id']}/restore")
+        check(unp.status_code == 200
+              and psql(f"select count(*) from purchases where id = '{gonep['id']}' and deleted_at is null") == "1",
+              f"…and its undo still works afterwards ({unp.status_code})")
+        check(purchase_shapes() == pshapes,
+              f"the Bills of Entry ({pshapes[0]}), the service purchases ({pshapes[1]}), the duty breakdowns "
+              f"({pshapes[2]}) and the bonded entries ({pshapes[3]}) came back with their documents")
+        check(held() == psplit, "…and the stock derived from them is unchanged — the branch split survived the round trip")
+        pboots_after, pnow = stock_boots(), purchase_counts()
+        restart()
+        check(purchase_counts() == pnow and (pboots is None or pboots_after == pboots + 1)
+              and (pboots is None or stock_boots() == pboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        wp = arif.post(f"{BASE}/purchases", json=pur_body)
+        check(wp.status_code == 201 and psql(f"select count(*) from purchases where id = '{wp.json().get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({wp.status_code})")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

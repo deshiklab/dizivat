@@ -16,8 +16,8 @@ backend**, including 520 contract checks, every end-to-end suite, axe, and all 3
 
 The API is built in slices. R5.1 moves **identity, security and reference data** into real tables, R5.2 the
 **master data** (customers and vendors, items and master items) and R5.3 the **first documents** (stock transfers and
-damage entries, sales invoices). The other modules keep their exact mock behaviour inside the API, and their data is
-saved to PostgreSQL so nothing is lost on restart or redeploy.
+damage entries, sales invoices, purchases). The other modules keep their exact mock behaviour inside the API, and
+their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
 
 | Area | Endpoints | R5.1 |
 | --- | --- | --- |
@@ -33,8 +33,9 @@ saved to PostgreSQL so nothing is lost on restart or redeploy.
 | Items & master items (R5.2) | `items`, `items/{id}`, `master-items`, `master-items/{id}` | **native** — `items`, `master_items` (the counters an item's `remain` is derived from are columns) |
 | Stock transfers & damage (R5.3) | `transfers`, `transfers/{id}`, `damage`, `damage/{id}` | **native** — `stock_documents` + `stock_document_lines` (one table for both kinds, `kind` tells them apart) |
 | Sales invoices (R5.3) | `sales`, `sales/{id}`, `sales/{id}/creditable`, `sales/{id}/realisations`, `sales/{id}/restore`, `sales/bulk` | **native** — `sales` + `sale_lines` + `sale_realisations` |
+| Purchases (R5.3) | `purchases`, `purchases/{id}`, `purchases/{id}/returnable`, `purchases/{id}/restore`, `purchases/bulk` | **native** — `purchases` + `purchase_lines` (the Bill of Entry and each import line's duty are columns) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: purchases, the stock ledger and branches' stock, credit and debit notes, production, accounting, VAT returns, notifications, dashboard, search… | 78 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: the stock ledger and branches' stock, credit and debit notes, production, accounting, VAT returns, notifications, dashboard, search… | 73 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -65,7 +66,7 @@ saved to PostgreSQL so nothing is lost on restart or redeploy.
    - When the handler changes state, the JSONB snapshot and any new audit events are saved in one transaction.
    - A process-wide lock serialises compat requests.
 3. **Write-through** (both directions)
-   - Native modules own users, company, units, (R5.2) the parties, items and master items and (R5.3) the stock documents and the sales invoices in PostgreSQL.
+   - Native modules own users, company, units, (R5.2) the parties, items and master items and (R5.3) the stock documents, the sales invoices and the purchases in PostgreSQL.
    - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table, and an invoice quotes a customer the `parties` table holds.
    - The other way round: when a compat handler writes a record a native module owns — the R6.2 bulk import creates
      customers, vendors and SKUs, approving a document moves an item's counters, a restored backup puts stock
@@ -209,6 +210,42 @@ behaviour for behaviour.
   first start moves every invoice, line and proceeds entry into the tables and rewrites the snapshot without them.
   Restoring a pre-R5.3 backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI.
 
+## R5.3 — purchases on their own tables
+
+`api/src/modules/purchases.ts` serves `purchases`, `purchases/{id}`, `purchases/{id}/returnable`,
+`purchases/{id}/restore` and `purchases/bulk` from **`purchases`** and **`purchase_lines`**. The contract is
+unchanged and the rules are the mock's own (`src/app/api/v1/_docs.ts`, `_r2.ts`, re-exported by
+`api/src/compat/entry.ts`): `parsePurchase` — the vendor decides whether the body is a local, a service or an import
+document — `buildPurchaseFields` (how the lines are priced and what duty an import line carries), `purchaseIdentity`,
+`purchaseCategoryRule`, the debit notes and settlements that block a cancellation, `returnable`, the register's
+facets and its CSV columns cannot drift. Both sides were held against the same contract suite again: 676 checks with
+the routes served natively, 676 with the mock handlers serving them.
+
+- **A purchase is two tables.** The header carries the money (`numeric(18,2)`), the quantities (`numeric(18,3)`) and
+  the two totals only a purchase has — `tti`, the total tax incidence of an import, and `rebate`, the input tax
+  credit claimable in Mushak 9.1 — plus its own history (JSONB); `purchase_lines` holds the printed lines in order
+  (primary key `(document, position)`), with `rebateable` and `vds` per line.
+- **The Bill of Entry is columns, not JSON.** An import purchase (a Foreign vendor) keeps its BoE number and date,
+  LC number and date, customs house, origin, C&F firm, receive address, the bonded flag and the own UD number on the
+  document's row — `boe_no` is the presence marker, NULL for a local or service purchase — and every import line
+  keeps its duty breakdown as columns: the assessable value, CD, RD, AIT and AT with their rates. What the R6.4 bond
+  register reports as duty foregone under an IM-7 bond, and what the R6.5 drawback claims read, is a `WHERE` and a
+  `SUM` over those columns instead of a walk over every document in memory.
+- **Numbers are unique in the database and stay retired** (`P-MMYY####` for goods and imports, `PS-MMYY####` for
+  services), and deleting stamps `deleted_at` while keeping the lines, for the same reason an invoice does: the mock
+  counted the live array *and* the undo buffer when it handed out the next number. A race is a 409, not a 500.
+- **An approval writes what it moves.** `items.purchased` goes with the document, in its transaction, and is taken
+  back on cancellation; a purchase only ever adds stock, so there is no shortfall check to refuse one.
+- **A goods purchase cannot become a service one** (or the other way round) once issued — the shared
+  `purchaseCategoryRule` answers 409, as the mock did.
+- **What is still derived stays derived.** The debit notes that return against a purchase, the bond register, the
+  drawback claims, the branch split and the ledger that add up *every* document family read the in-memory copies
+  until the remaining families have tables (R5.3–R5.4). The module keeps those copies in step, and the write-back
+  adopts whatever a compat handler writes — including a delete, which it reads as "this document is in the undo
+  buffer now" and stamps exactly as the native delete does.
+- **The upgrade is one boot**, as with the invoices: the first start moves every purchase and line out of
+  `compat_state` and rewrites the snapshot without them, and `api_native.py` drills it in CI.
+
 ## Tables
 
 | Table | Purpose |
@@ -230,7 +267,9 @@ behaviour for behaviour.
 | `sales` | **R5.3:** sales invoices (Mushak 6.3) — number and challan (number unique), process, customer and branch as printed, money (`numeric`), the export / deemed-export shipping documents as their own columns, own history (JSONB); `deleted_at` is the undo trash, which keeps a deleted draft's number retired |
 | `sale_lines` | **R5.3:** an invoice's printed lines — item, name, HS code, unit, quantity, price, SD/VAT rates and totals, batch; primary key (invoice, position) |
 | `sale_realisations` | **R5.3:** export proceeds (PRC) recorded against an invoice — bank, PRC number, foreign-currency amount, rate and the BDT value at that rate, the R6.6 batch that posted it |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents or sales invoices since R5.3) |
+| `purchases` | **R5.3:** purchases (Mushak 6.1 input side) — number (unique), challan / BoE number and date, vendor as printed, mode, money (`numeric`), the two totals a purchase adds (`tti`, `rebate`), the Bill of Entry an import clears as its own columns, own history (JSONB); `deleted_at` is the undo trash |
+| `purchase_lines` | **R5.3:** a purchase's lines — item, quantity, prices and rates, `rebateable` / `vds`, and an import line's duty breakdown (AV, CD, RD, AIT, AT and the rates) plus what a bonded entry left foregone; primary key (document, position) |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices or purchases since R5.3) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -262,7 +301,7 @@ npm run build && npx next start -p 3000             # → http://localhost:3000
 | --- | --- |
 | `node api/dist/main.js --reset` | drop everything and re-seed the demo data |
 | `node api/dist/main.js --migrate-only` | apply migrations and exit |
-| `npm --prefix api run typecheck` | type-checks the API **and** the 78 compat route modules |
+| `npm --prefix api run typecheck` | type-checks the API **and** the 73 compat route modules |
 
 ## Tests
 
@@ -273,7 +312,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 223 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 263 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -310,6 +349,21 @@ database is rewritten back into its pre-R5.3 shape (the invoices with their line
 invoices, lines, export headers and proceeds entries must be back in the tables, the snapshot rewritten without them,
 the three registers served row for row as before, an invoice deleted before the upgrade still in the undo buffer and
 still undoable, the derived stock unchanged, a second boot adopting nothing again, and writes landing in the tables.
+
+It checks the purchases the same way — a draft is a row in `purchases` with its line in `purchase_lines` and moves
+no stock, approving moves the branch split and `items.purchased` and is quoted by the ledger, cancelling takes the
+stock back out and stores the reason on the row, the history travels with the row, editing replaces the line rows in
+the order they are printed, deleting stamps the row and keeps its lines so the next document takes a new number and
+the undo clears the stamp, a goods purchase refuses to become a service one, an import purchase keeps its Bill of
+Entry as columns of its own row and every line's duty (AV, CD, RD, AIT, AT) as columns of its line — the totals the
+R6.4 bond register and the R6.5 drawback claims read — the bonded demo entries kept their duty foregone, a service
+purchase is numbered in its own series and moves no stock, bulk approve reports what it skipped, what a debit note
+may still return is served from those rows (and a service purchase has nothing to return), the snapshot carries no
+purchases collection, and the database refuses a duplicate document number — and it **drills the fourth upgrade**:
+the live database is rewritten back into its pre-R5.3 shape (the documents with their lines, Bills of Entry and duty
+breakdowns inside `compat_state`, the deleted drafts back in its undo buffer, the two tables empty), the API
+restarts, and the same documents, lines, three registers row for row, BoEs, duty columns and derived stock are
+required back, with a document deleted before the upgrade still undoable and a second boot adopting nothing again.
 
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 

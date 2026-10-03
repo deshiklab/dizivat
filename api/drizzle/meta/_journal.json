@@ -64,6 +64,13 @@
       "when": 1791016371272,
       "tag": "0008_r53_sales",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791028481907,
+      "tag": "0009_r53_purchases",
+      "breakpoints": true
     }
   ]
 }

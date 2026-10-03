@@ -204,10 +204,12 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     movement family has one.
 
 - **R5.3 — Backend: the first documents on real tables (branch `r5-nestjs`):** stock transfers and damage entries
-  leave the compat layer for `stock_documents` + `stock_document_lines`, and the sales invoices (Mushak 6.3) for
-  `sales` + `sale_lines` + `sale_realisations`. See
-  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--stock-documents-on-their-own-tables) (stock documents) and
-  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--sales-invoices-on-their-own-tables) (sales invoices).
+  leave the compat layer for `stock_documents` + `stock_document_lines`, the sales invoices (Mushak 6.3) for
+  `sales` + `sale_lines` + `sale_realisations`, and the purchases (local, service and import) for `purchases` +
+  `purchase_lines`. See
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--stock-documents-on-their-own-tables) (stock documents),
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--sales-invoices-on-their-own-tables) (sales invoices) and
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--purchases-on-their-own-tables) (purchases).
   - **One table for both kinds** (`kind` tells a transfer from a damage entry), because that is how the registers and
     the branch-stock derivation read them. The branch a document consumes is `from_branch_id` for either kind — a
     transfer's origin, a damage entry's own branch — and only a transfer has a destination. `ord` keeps the insertion
@@ -264,7 +266,24 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     the in-memory copies until the remaining families have tables (R5.3–R5.4). The module keeps those copies in step,
     and the write-back adopts whatever a compat handler writes — including a delete, which it reads as "this invoice
     is in the undo buffer now" and stamps exactly as the native delete does.
-  - **Tests:** `api_native.py` 223 checks (+76 over the pre-R5.3 147: a stock draft is a row with its lines and moves no stock, approving it moves
+  - **A purchase is two tables, and an import is queryable:** the header carries the money, the two totals only a
+    purchase has (`tti`, the total tax incidence, and `rebate`, the input tax credit claimable in Mushak 9.1) and its
+    own history; `purchase_lines` holds the printed lines in order with `rebateable` and `vds` per line. The Bill of
+    Entry an import clears — its number and date, LC, customs house, origin, C&F firm, the bonded flag and the own UD
+    number — is columns of the document's row (`boe_no` is the presence marker), and every import line keeps its duty
+    breakdown as columns: the assessable value, CD, RD, AIT and AT with their rates, plus what a bonded (IM-7) entry
+    left foregone. What the R6.4 bond register and the R6.5 drawback claims report is a `WHERE` and a `SUM` over
+    those columns, not a walk over every document in memory.
+  - **The same discipline as the invoices:** numbers unique in the database as well (`P-MMYY####`, `PS-MMYY####` for
+    services), deleting stamps `deleted_at` and keeps the lines so a deleted draft's number stays retired, ids from
+    `purchaseIdentity` inside the locked transaction, `items.purchased` written with an approval and taken back on
+    cancellation, bulk approve answering 200 with `{done, skipped}`, and a goods purchase that cannot become a
+    service one (409). The rules are the mock's own (`parsePurchase` — the vendor decides between the local, the
+    service and the import schema — `buildPurchaseFields`, `purchaseCategoryRule`, `returnable`, the register's
+    facets and CSV columns) through the compat bundle, and both sides were held against the same contract suite:
+    676 checks natively, 676 again with the mock handlers serving them (which also proved the write-back for an
+    import: a compat-created BoE reached the table with its duty columns and the header's `tti` and `rebate`).
+  - **Tests:** `api_native.py` 263 checks (+116 over the pre-R5.3 147: a stock draft is a row with its lines and moves no stock, approving it moves
     the branch split the still-unported endpoints derive in memory, cancelling gives the stock back, a write-off
     reaches `items.damage` and is taken back, editing a draft replaces the line rows, deleting one removes them and
     retires its number, a create that cannot be approved leaves no row, the database refusing a duplicate document
@@ -281,8 +300,19 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     is rewritten into its pre-R5.3 shape (invoices, lines and proceeds entries inside `compat_state`, the deleted
     drafts back in its undo buffer, the three tables empty), the API restarted, and the same rows, registers, export
     headers, proceeds entries and derived stock are required back, with an invoice deleted before the upgrade still
-    undoable afterwards). Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.3:** purchases incl. imports and services, credit and debit notes (6.7/6.8).
+    undoable afterwards; then the purchases the same way — a draft is a row with its line and moves no stock,
+    approving moves the branch split, `items.purchased` and the ledger, cancelling takes the stock back out and
+    stores the reason, editing replaces the line rows in order, deleting stamps the row and keeps its lines so the
+    next document takes a new number and the undo clears the stamp, a goods purchase refuses to become a service one,
+    an import keeps its Bill of Entry and every line's duty as columns (with the bonded demo entries keeping their
+    duty foregone), a service purchase is numbered in its own series and moves no stock, bulk approve reports what it
+    skipped, what a debit note may still return is served from those rows, the snapshot carries no purchases
+    collection, the database refuses a duplicate document number — and a **fourth upgrade drill**: the database is
+    rewritten into its pre-R5.3 shape (documents, lines, Bills of Entry and duty breakdowns inside `compat_state`,
+    the deleted drafts back in its undo buffer, the two tables empty), the API restarted, and the same rows, three
+    registers row for row, BoEs, duty columns and derived stock are required back, with a document deleted before
+    the upgrade still undoable afterwards). Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.3:** credit and debit notes (Mushak 6.7/6.8), then the derived stock itself (R5.4).
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

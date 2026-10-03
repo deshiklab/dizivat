@@ -500,6 +500,148 @@ export const saleRealisations = pgTable("sale_realisations", {
 ])
 
 /**
+ * R5.3 — a purchase: goods from a local or a foreign vendor, a service purchase, or an import against a Bill of
+ * Entry. Same shape as `sales`, with the vendor's side of the header, the two totals a purchase adds (`tti`, the
+ * total tax incidence, and `rebate`, the input tax credit claimable in Mushak 9.1) and the Bill of Entry block in
+ * place of the export one. Stock arrives when the purchase is approved, so an approval writes `items.purchased`
+ * with the document.
+ */
+export const purchases = pgTable("purchases", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** P-MMYY#### (goods, imports) / PS-MMYY#### (services) — unique forever, so a deleted draft's number is not reused */
+  invoiceNo: text("invoice_no").notNull(),
+  /** the vendor's challan, or the Bill of Entry number on an import */
+  challanNo: text("challan_no").notNull(),
+  challanDate: date("challan_date", { mode: "string" }).notNull(),
+  /** the date the number is derived from, the registers filter by and the tax period follows */
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** R2: goods (stock) or service purchase (no stock movement); NULL = goods, as the mock leaves the key out */
+  category: text("category", { enum: ["goods", "service"] }),
+  /** branch / warehouse the goods arrive at */
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  vendorId: text("vendor_id").notNull(),
+  /** as printed: the vendor's name, BIN (or NID for a non-registered one) and address at issue */
+  vendorName: text("vendor_name").notNull(),
+  vendorBin: text("vendor_bin").notNull(),
+  vendorAddress: text("vendor_address").notNull(),
+  mode: text("mode", { enum: ["Local", "Foreign", "Non-registered"] }).notNull(),
+  method: text("method", { enum: ["Bank", "Cash", "Cheque", "Mobile", "Transaction"] }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  discount: numeric("discount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  netTotal: numeric("net_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  paid: numeric("paid", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  due: numeric("due", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** R2 (imports): total tax incidence — CD + RD + SD + VAT + AIT + AT over the Bill of Entry */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** R2: input tax credit claimable in Mushak 9.1 (the rebateable lines' VAT and AT) */
+  rebate: numeric("rebate", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  narration: text("narration"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted / restored, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** the undo buffer: a deleted draft keeps its row and its lines, so its number stays retired */
+  deletedAt: ts("deleted_at"),
+  /* the Bill of Entry an import purchase clears (R2) — `boeNo` is the presence marker */
+  boeNo: text("boe_no"),
+  boeDate: date("boe_date", { mode: "string" }),
+  boeLcNo: text("boe_lc_no"),
+  boeLcDate: date("boe_lc_date", { mode: "string" }),
+  boeCustomsHouse: text("boe_customs_house"),
+  boeOrigin: text("boe_origin"),
+  boeCnfFirm: text("boe_cnf_firm"),
+  boeReceiveAddress: text("boe_receive_address"),
+  /** R6.4: warehoused under the customs bond (IM-7) — duty and VAT suspended, no input credit, tracked in the bond register */
+  boeBonded: boolean("boe_bonded"),
+  /** R6.5: the own UD / UP the bonded inputs were imported against (settled per UD after export) */
+  boeUdNo: text("boe_ud_no"),
+}, (t) => [
+  uniqueIndex("purchases_invoice_no_key").on(t.invoiceNo),
+  index("purchases_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("purchases_issue_date_idx").on(t.issueDate),
+  index("purchases_vendor_idx").on(t.vendorId),
+  index("purchases_branch_idx").on(t.branchId),
+  /** R6.4: the bond register reads the warehoused BoEs by their number and date */
+  index("purchases_boe_bonded_idx").on(t.boeNo).where(sql`${t.boeBonded} is true`),
+  check("purchases_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("purchases_category_check", sql`${t.category} is null or ${t.category} in ('goods','service')`),
+  check("purchases_mode_check", sql`${t.mode} in ('Local','Foreign','Non-registered')`),
+  check("purchases_method_check", sql`${t.method} in ('Bank','Cash','Cheque','Mobile','Transaction')`),
+  // the Bill of Entry is a block: either all of its header is there, or none of it is
+  check("purchases_boe_check", sql`(${t.boeNo} is null and ${t.boeLcNo} is null) or (${t.boeNo} is not null and ${t.boeLcNo} is not null)`),
+  // only an import is warehoused under bond, and only a bonded entry names our own UD
+  check("purchases_boe_bonded_check", sql`${t.boeBonded} is null or ${t.boeNo} is not null`),
+  check("purchases_boe_ud_check", sql`${t.boeUdNo} is null or ${t.boeBonded} is true`),
+])
+
+/**
+ * The lines of a purchase: the item (or service code), the quantity and the prices at issue. An import line also
+ * carries its duty breakdown as columns, so the duty foregone under bond and the assessable value a BoE cleared
+ * can be summed in SQL (the R6.4 bond register and the R6.5 drawback claims read exactly that) instead of walked
+ * in memory. A NULL `duty_av` is a line with no Bill of Entry.
+ */
+export const purchaseLines = pgTable("purchase_lines", {
+  purchaseId: text("purchase_id").notNull(),
+  /** position on the document */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed: the SKU's name, HS code and unit at issue (a service line carries its code) */
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** an import line's price is the unit assessable value */
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  /** an import line's subtotal is its assessable value (AV) */
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** purchase only: the line's VAT (and AT) is claimable as input tax, and VDS was deducted at source */
+  rebateable: boolean("rebateable"),
+  vds: boolean("vds"),
+  /** imports: this line's total tax incidence (CD + RD + SD + VAT + AIT + AT) */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }),
+  /* R2 — the Bill of Entry duty breakdown: the invoice keeps the rates and the amounts it was cleared with */
+  dutyUsd: numeric("duty_usd", { precision: 18, scale: 2, mode: "number" }),
+  dutyUsdRate: numeric("duty_usd_rate", { precision: 18, scale: 6, mode: "number" }),
+  dutyAv: numeric("duty_av", { precision: 18, scale: 2, mode: "number" }),
+  dutyCdRate: numeric("duty_cd_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyCd: numeric("duty_cd", { precision: 18, scale: 2, mode: "number" }),
+  dutyRdRate: numeric("duty_rd_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyRd: numeric("duty_rd", { precision: 18, scale: 2, mode: "number" }),
+  dutyAitRate: numeric("duty_ait_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyAit: numeric("duty_ait", { precision: 18, scale: 2, mode: "number" }),
+  dutyAtRate: numeric("duty_at_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyAt: numeric("duty_at", { precision: 18, scale: 2, mode: "number" }),
+  /* R6.4 — a bonded (IM-7) entry: the duty stack suspended under bond, which the register reports as foregone */
+  foregoneCd: numeric("foregone_cd", { precision: 18, scale: 2, mode: "number" }),
+  foregoneRd: numeric("foregone_rd", { precision: 18, scale: 2, mode: "number" }),
+  foregoneSd: numeric("foregone_sd", { precision: 18, scale: 2, mode: "number" }),
+  foregoneVat: numeric("foregone_vat", { precision: 18, scale: 2, mode: "number" }),
+  foregoneAit: numeric("foregone_ait", { precision: 18, scale: 2, mode: "number" }),
+  foregoneAt: numeric("foregone_at", { precision: 18, scale: 2, mode: "number" }),
+  foregoneTotal: numeric("foregone_total", { precision: 18, scale: 2, mode: "number" }),
+}, (t) => [
+  primaryKey({ columns: [t.purchaseId, t.ord] }),
+  index("purchase_lines_item_idx").on(t.itemId),
+  // the duty breakdown is a block: an import line has all of it, a local or service line none
+  check("purchase_lines_duty_check", sql`(${t.dutyAv} is null and ${t.dutyCd} is null) or (${t.dutyAv} is not null and ${t.dutyCd} is not null)`),
+  check("purchase_lines_foregone_check", sql`${t.foregoneTotal} is null or ${t.dutyAv} is not null`),
+])
+
+/**
  * Modules not yet migrated (purchases, production, accounting, VAT returns…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */
