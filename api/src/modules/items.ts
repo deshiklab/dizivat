@@ -15,7 +15,7 @@
  * two endpoints (`items/[id]/ledger`, `stock`) are still served by the compat layer.
  */
 import { Controller, Get, Inject, Injectable, Param, Post, Put, Req, Res } from "@nestjs/common"
-import { asc, eq, sql } from "drizzle-orm"
+import { asc, eq, inArray, sql } from "drizzle-orm"
 import type { Request, Response } from "express"
 import { runQuery, toCSV } from "@/lib/mock/query"
 import { itemInput, masterItemInput } from "@/lib/schemas"
@@ -95,6 +95,21 @@ export const itemDelta = () => itemWb.delta()
 export const masterDelta = () => masterWb.delta()
 export const commitItemDelta = (d: ItemDelta) => itemWb.commit(d)
 export const commitMasterDelta = (d: MasterDelta) => masterWb.commit(d)
+
+/**
+ * R5.3: a document's transaction moved item counters in memory — a damage write-off, a sale's approval — and then
+ * failed, so the table still holds the values from before it. Read those back into the mirror. The write-back
+ * baseline is left alone: it already describes them, so the item simply stops looking modified.
+ */
+export async function revertItemCounters(ids: string[]) {
+  if (!ids.length) return
+  const rows = await db.select({ id: items.id, sold: items.sold, purchased: items.purchased, damage: items.damage })
+    .from(items).where(inArray(items.id, ids))
+  for (const r of rows) {
+    const it = mirror.findItem(r.id)
+    if (it) { it.sold = r.sold; it.purchased = r.purchased; it.damage = r.damage }
+  }
+}
 
 /**
  * Applies a delta inside the persist transaction and reads the saved rows back into memory: a column type that

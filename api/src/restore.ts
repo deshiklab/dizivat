@@ -229,7 +229,12 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
   let boot: RestoreDrill["boot"] = "skipped"
   if (a.boot) {
     const admin = a.adminPassword ? (a.adminUser ? users.find((u) => u.username === a.adminUser) : users.find((u) => u.role === "admin" && u.active)) : undefined
-    const sales = ((payload.tables.compat_state?.[0] as { data?: { db?: { sales?: unknown[] } } } | undefined)?.data?.db?.sales ?? []).length
+    // the invoices the restored instance must list: their own table since R5.3 (a stamped draft is not listed),
+    // the snapshot's array in a backup taken before that
+    const saleRows = payload.tables.sales as { deleted_at?: string | null }[] | undefined
+    const sales = saleRows
+      ? saleRows.filter((r) => !r.deleted_at).length
+      : ((payload.tables.compat_state?.[0] as { data?: { db?: { sales?: unknown[] } } } | undefined)?.data?.db?.sales ?? []).length
     const r = await bootCheck(a.target, admin && a.adminPassword ? { username: admin.username, password: a.adminPassword } : null, sales, log)
     boot = r.ok ? "ok" : "failed"
     if (!r.ok) mismatches.push(`boot: ${r.detail}`)

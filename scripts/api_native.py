@@ -89,6 +89,57 @@ PRE_R53_COLLECTIONS = f"""update compat_state set data = jsonb_set(data, '{{db}}
   'damages', {STOCK_AGG('damage')}
 )) where key = 'main'"""
 
+# ── R5.3 upgrade drill: the sales invoices ────────────────────────────────────────────────────────────────────
+# A database written before the invoices had tables holds them inside compat_state — lines and proceeds entries
+# included, a deleted draft in the undo buffer. These statements rebuild that shape from the live tables, so the
+# first boot on this code has to adopt it. Nothing here ships either: it is the inverse of the sales half of
+# `adoptCompatRows()` in api/src/boot.ts, for the test only.
+SALE_LINES_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'hsCode', l.hs_code, 'uom', l.uom, 'qty', l.qty, 'price', l.price,
+      'sdRate', l.sd_rate, 'vatRate', l.vat_rate, 'subtotal', l.subtotal, 'sd', l.sd, 'vat', l.vat, 'total', l.total,
+      'batchId', l.batch_id, 'batchNo', l.batch_no)""")
+    + """ order by l.ord), '[]'::jsonb) from sale_lines l where l.sale_id = s.id)""")
+SALE_REALS_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'id', r.id, 'date', r.date, 'bank', r.bank, 'prcNo', r.prc_no, 'fcAmount', r.fc_amount, 'rate', r.rate,
+      'bdt', r.bdt, 'note', r.note, 'by', r.by, 'at', """ + _ISO.format("r.at") + """, 'batchId', r.batch_id)""")
+    + """ order by r.ord), '[]'::jsonb) from sale_realisations r where r.sale_id = s.id)""")
+# the shipping documents are columns of the invoice; `export_deemed` is the block's presence marker
+SALE_EXPORT_DOC = ("""(case when s.export_deemed is null then null else """
+    + _NO_NULLS.format("""jsonb_build_object(
+      'deemed', s.export_deemed, 'lcNo', s.export_lc_no, 'lcDate', s.export_lc_date,
+      'customsHouse', s.export_customs_house, 'country', s.export_country, 'billNo', s.export_bill_no,
+      'billDate', s.export_bill_date, 'shippingAddress', s.export_shipping_address, 'cnfFirm', s.export_cnf_firm,
+      'udNo', s.export_ud_no, 'udDate', s.export_ud_date, 'expNo', s.export_exp_no, 'currency', s.export_currency,
+      'fcValue', s.export_fc_value, 'exchangeRate', s.export_exchange_rate, 'exporterBond', s.export_exporter_bond,
+      'ownUdNo', s.export_own_ud_no,
+      'realisations', case when s.export_realisations then """ + SALE_REALS_DOC + """ else null end)""")
+    + " end)")
+SALE_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', s.id, 'invoiceNo', s.invoice_no, 'challanNo', s.challan_no, 'issueDate', s.issue_date,
+    'issueTime', s.issue_time, 'process', s.process, 'category', s.category, 'branchId', s.branch_id,
+    'branchName', s.branch_name, 'customerId', s.customer_id, 'customerName', s.customer_name,
+    'customerBin', s.customer_bin, 'customerAddress', s.customer_address, 'deliveryAddress', s.delivery_address,
+    'vehicle', s.vehicle, 'mode', s.mode, 'method', s.method, 'vds', s.vds, 'subtotal', s.subtotal, 'sd', s.sd,
+    'vat', s.vat, 'discount', s.discount, 'netTotal', s.net_total, 'paid', s.paid, 'due', s.due,
+    'lines', """ + SALE_LINES_DOC + """, 'issuedBy', s.issued_by, 'designation', s.designation,
+    'narration', s.narration, 'createdAt', """ + _ISO.format("s.created_at") + """,
+    'updatedAt', """ + _ISO.format("s.updated_at") + """, 'cancelReason', s.cancel_reason, 'history', s.history,
+    'export', """ + SALE_EXPORT_DOC + """)""") + ")")
+SALE_AGG = f"(select coalesce(jsonb_agg({SALE_DOC} order by s.ord), '[]'::jsonb) from sales s where s.deleted_at is null)"
+# the invoices back inside the snapshot …
+PRE_R53_SALES = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'sales', {SALE_AGG}
+)) where key = 'main'"""
+# … and the deleted drafts back into the undo buffer, keeping the documents already in it
+PRE_R53_SALE_TRASH = f"""update compat_state set data = jsonb_set(data, '{{db,trash}}',
+  coalesce(data->'db'->'trash', '[]'::jsonb) || (
+    select coalesce(jsonb_agg(jsonb_build_object('kind', 'sale', 'doc', doc, 'at', {_ISO.format('deleted_at')})
+                              order by deleted_at), '[]'::jsonb)
+    from (select s.deleted_at, {SALE_DOC} as doc from sales s where s.deleted_at is not null) t),
+  true) where key = 'main'"""
+SALE_TRASH_LEFT = """select count(*) from compat_state where jsonb_typeof(data->'db'->'trash') = 'array'
+  and exists (select 1 from jsonb_array_elements(data->'db'->'trash') t where t->>'kind' = 'sale')"""
+
 
 def check(cond, msg):
     global ok, fail
@@ -435,6 +486,175 @@ def run():
                                capture_output=True, text=True)
         check(dupno.returncode != 0, "R5.3: the database refuses a duplicate document number (unique index), not just the API")
 
+    # R5.3: the sales invoices are rows too — the first revenue document out of the compat layer. The register, the
+    # branch stock, an item's ledger and the credit a customer carries still derive from *every* document through
+    # the in-memory copies the unported handlers read, so an invoice written natively has to reach them at once;
+    # and approving one writes the SKU counter it moves (`items.sold`) in the same transaction.
+    print("R5.3: sales invoices are rows, and the numbers derived from them follow")
+    # a finished good with stock at the branch: a sales line has to be saleable (Finished Goods) and coverable
+    def stock_rows():
+        return {x["id"]: x for x in arif.get(f"{BASE}/stock", params={"size": 200}).json()["data"]}
+
+    items_page = arif.get(f"{BASE}/items", params={"size": 200}).json()
+    rows = items_page["data"] if isinstance(items_page, dict) else items_page
+    sr = stock_rows()
+    siid = [x["id"] for x in rows if x["group"] == "Finished Goods" and sr.get(x["id"], {}).get("byBranch", {}).get(branch, 0) >= 10][0]
+
+    def sold_held():
+        r = stock_rows()[siid]
+        return r["remain"], r["byBranch"].get(branch, 0), r["byBranch"].get(other, 0)
+
+    def party(mode):
+        rows = arif.get(f"{BASE}/customers", params={"size": 100}).json()
+        return [c for c in (rows["data"] if isinstance(rows, dict) else rows) if c["mode"] == mode][0]
+
+    cust = party("Local")
+    sold0, split0 = (float(psql(f"select sold from items where id = '{siid}'")) if DB_URL else None), sold_held()
+    inv_body = {"customerId": cust["id"], "issueDate": tdate, "issueTime": "10:20", "deliveryAddress": "", "vehicle": "",
+                "method": "Cash", "discount": 0, "paid": 0, "vds": False, "issuedBy": "Arif Hossain",
+                "designation": "Sales Officer", "narration": f"R5.3 invoice {TAG}", "process": "Created",
+                "branchId": branch, "lines": [{"itemId": siid, "qty": 2, "price": 100, "sdRate": 0, "vatRate": 5}]}
+    si = arif.post(f"{BASE}/sales", json=inv_body)
+    sid, sno = si.json().get("id"), si.json().get("invoiceNo")
+    check(si.status_code == 201 and si.json()["process"] == "Created" and "export" not in si.json()
+          and str(sno).startswith("S-") and si.json()["challanNo"]
+          and [h["action"] for h in si.json()["history"]] == ["created"],
+          f"native (R5.3): a sales draft is created, numbered and challaned ({si.status_code} {sno})")
+    check(sold_held() == split0, "R5.3: a draft invoice moves no stock")
+    if DB_URL:
+        check(psql(f"select count(*) from sales where id = '{sid}' and process = 'Created' and export_deemed is null") == "1"
+              and psql(f"select count(*) from sale_lines where sale_id = '{sid}'") == "1",
+              "R5.3: the draft is a row in sales, and its line a row in sale_lines")
+    sa = arif.patch(f"{BASE}/sales/{sid}", json={"process": "Approved"})
+    check(sa.status_code == 200 and sa.json()["process"] == "Approved"
+          and sold_held() == (split0[0] - 2, split0[1] - 2, split0[2]),
+          f"R5.3: approving moves the stock out, and the branch split derived in memory follows ({sa.status_code})")
+    led = arif.get(f"{BASE}/items/{siid}/ledger").json()
+    check(any(e.get("ref") == sno for e in led["entries"]), "R5.3: …and the item's ledger, still derived from every document, quotes it")
+    if DB_URL:
+        check(psql(f"select sold = {sold0 + 2} from items where id = '{siid}'") == "t",
+              "R5.3: …and the counter it moved is written with it (items.sold)")
+        check(psql(f"select jsonb_array_length(history) from sales where id = '{sid}'") == "2",
+              "R5.3: the invoice's own history travels with the row")
+    sc = arif.patch(f"{BASE}/sales/{sid}", json={"process": "Cancelled", "reason": f"R5.3 cancelled {TAG}"})
+    check(sc.status_code == 200 and sold_held() == split0, "R5.3: cancelling brings the stock back")
+    if DB_URL:
+        check(psql(f"select count(*) from sales where id = '{sid}' and process = 'Cancelled' and cancel_reason is not null") == "1"
+              and psql(f"select sold = {sold0} from items where id = '{siid}'") == "t",
+              "R5.3: …and the cancellation and the counter are stored on the rows")
+    check(arif.patch(f"{BASE}/sales/{sid}", json={"process": "Cancelled", "reason": "again"}).status_code == 409,
+          "R5.3: an invoice that is already cancelled refuses a second cancellation (409)")
+    # editing a draft replaces its lines; deleting one stamps the row (its number stays retired) and the undo restores it
+    s2 = arif.post(f"{BASE}/sales", json={**inv_body, "lines": [{"itemId": siid, "qty": 3, "price": 100, "sdRate": 0, "vatRate": 5}]}).json()
+    se = arif.put(f"{BASE}/sales/{s2['id']}", json={**inv_body, "lines": [
+        {"itemId": siid, "qty": 4, "price": 100, "sdRate": 0, "vatRate": 5},
+        {"itemId": "i19", "qty": 1, "price": 50, "sdRate": 0, "vatRate": 5}]})
+    check(se.status_code == 200 and [l["qty"] for l in se.json()["lines"]] == [4, 1]
+          and [h["action"] for h in se.json()["history"]][-1] == "edited",
+          f"R5.3: editing a draft invoice replaces its lines ({se.status_code})")
+    if DB_URL:
+        check(psql(f"select string_agg(item_id || ':' || qty::text, ',' order by ord) from sale_lines where sale_id = '{s2['id']}'")
+              == f"{siid}:4.000,i19:1.000", "R5.3: …in the child table, in the order they are printed")
+    sd = arif.delete(f"{BASE}/sales/{s2['id']}")
+    check(sd.status_code == 200 and sd.json().get("ok") is True and arif.get(f"{BASE}/sales/{s2['id']}").status_code == 404,
+          "R5.3: a draft invoice is deleted and leaves the register")
+    if DB_URL:
+        check(psql(f"select count(*) from sales where id = '{s2['id']}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from sale_lines where sale_id = '{s2['id']}'") == "2",
+              "R5.3: …as a stamped row that keeps its lines, so its number stays retired")
+    s3 = arif.post(f"{BASE}/sales", json=inv_body).json()
+    check(s3["invoiceNo"] != s2["invoiceNo"], f"R5.3: the next invoice takes a new number ({s2['invoiceNo']} → {s3['invoiceNo']})")
+    sr = arif.post(f"{BASE}/sales/{s2['id']}/restore")
+    check(sr.status_code == 200 and sr.json()["process"] == "Created"
+          and [h["action"] for h in sr.json()["history"]][-1] == "restored"
+          and arif.get(f"{BASE}/sales/{s2['id']}").status_code == 200,
+          f"R5.3: the undo restores the draft, with its history ({sr.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from sales where id = '{s2['id']}' and deleted_at is null") == "1",
+              "R5.3: …by clearing the stamp on the row")
+    # an export invoice carries its shipping documents as columns and takes its proceeds (PRC) entries as rows
+    fcust = party("Foreign")
+    # dated like the demo's own exports: a proceeds entry has to fall between the invoice and the company's today,
+    # which is a fixed demo date, not the day the suite runs
+    xdate = arif.get(f"{BASE}/sales", params={"size": 5, "category": "all", "trade": "export,deemed",
+                                             "sort": "issueDate.desc"}).json()["data"][0]["issueDate"]
+    ex = arif.post(f"{BASE}/sales", json={**inv_body, "customerId": fcust["id"], "issueDate": xdate, "process": "Approved",
+                                          "export": {"deemed": False, "lcNo": f"LC{TAG}", "lcDate": xdate, "customsHouse": "CTG",
+                                                     "country": "Germany", "billNo": f"BE{TAG}", "billDate": xdate,
+                                                     "shippingAddress": "Hamburg", "currency": "USD", "fcValue": 1000,
+                                                     "exchangeRate": 119.5}})
+    xid = ex.json().get("id")
+    check(ex.status_code == 201 and ex.json()["mode"] == "Foreign" and ex.json()["vat"] == 0
+          and ex.json()["export"]["lcNo"] == f"LC{TAG}" and "realisations" not in ex.json()["export"],
+          f"native (R5.3): an export invoice is zero-rated and carries its shipping documents ({ex.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from sales where id = '{xid}' and export_deemed = false and export_lc_no = 'LC{TAG}'"
+                   f" and export_fc_value = 1000 and export_currency = 'USD'") == "1",
+              "R5.3: …as columns of its own row, so an LC, a country or an FC value is queryable")
+    rz = arif.post(f"{BASE}/sales/{xid}/realisations", json={"date": xdate, "bank": "Sonali Bank", "prcNo": f"prc{TAG}",
+                                                            "fcAmount": 400, "rate": 119.5})
+    entries = rz.json().get("export", {}).get("realisations", []) if rz.status_code == 201 else []
+    rid = entries[-1].get("id") if entries else None
+    check(rz.status_code == 201 and len(entries) == 1 and entries[0]["bdt"] == 47800.0
+          and entries[0]["prcNo"] == f"PRC{TAG}".upper()
+          and [h.get("note") or "" for h in rz.json()["history"]][-1].startswith("Proceeds realised:"),
+          f"R5.3: proceeds realised against the invoice, in BDT at the entered rate ({rz.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from sale_realisations where sale_id = '{xid}'"
+                   f" and prc_no = upper('PRC{TAG}') and bdt = 47800") == "1",
+              "R5.3: …as a row of its own, the PRC number upper-cased")
+    dup = arif.post(f"{BASE}/sales/{xid}/realisations", json={"date": xdate, "bank": "Sonali Bank", "prcNo": f"PRC{TAG}",
+                                                             "fcAmount": 10, "rate": 119.5})
+    check(dup.status_code == 422 and dup.json()["errors"].get("prcNo") == ["duplicate"],
+          "R5.3: a PRC already on an invoice is refused (422 duplicate)")
+    over = arif.post(f"{BASE}/sales/{xid}/realisations", json={"date": xdate, "bank": "Sonali Bank", "prcNo": f"prc2{TAG}",
+                                                              "fcAmount": 5000, "rate": 119.5})
+    check(over.status_code == 422 and over.json()["errors"].get("fcAmount") == ["exceedsOutstanding"],
+          "R5.3: …and so is more than the invoice's outstanding foreign-currency value")
+    rr = arif.delete(f"{BASE}/sales/{xid}/realisations", params={"rid": rid})
+    check(rr.status_code == 200 and rr.json()["export"]["realisations"] == []
+          and arif.post(f"{BASE}/sales/{xid}/realisations", json={"date": xdate, "bank": "Sonali Bank",
+                                                                 "prcNo": f"PRC{TAG}", "fcAmount": 10, "rate": 119.5}).status_code == 201,
+          "R5.3: removing an entry leaves the list on the invoice — and frees the PRC number again")
+    cr = arif.get(f"{BASE}/sales/{xid}/creditable")
+    check(cr.status_code == 200 and cr.json()["sale"]["invoiceNo"] == ex.json()["invoiceNo"]
+          and cr.json()["lines"][0]["remaining"] == cr.json()["lines"][0]["soldQty"],
+          f"R5.3: what is still returnable on an invoice is served from its rows ({cr.status_code})")
+    # a service sale is its own register and its own number series, and moves no stock
+    code = arif.get(f"{BASE}/sale-services").json()[0]
+    split1 = sold_held()   # the approved export invoice above moved stock out; a service sale must not move any
+    ss = arif.post(f"{BASE}/sales", json={**inv_body, "category": "service", "lines": [
+        {"itemId": code["id"], "qty": 1, "price": 5000, "sdRate": 0, "vatRate": 15}]})
+    check(ss.status_code == 201 and ss.json()["category"] == "service" and str(ss.json()["invoiceNo"]).startswith("SS-")
+          and sold_held() == split1, f"native (R5.3): a service sale is numbered in its own series and moves no stock ({ss.status_code})")
+    b1 = arif.post(f"{BASE}/sales", json=inv_body).json()
+    bk = arif.post(f"{BASE}/sales/bulk", json={"ids": [b1["id"], sid], "action": "approve"})
+    check(bk.status_code == 200 and bk.json() == {"done": [b1["id"]], "skipped": [sid]},
+          f"R5.3: bulk approve takes the drafts and reports the ones it skipped ({bk.status_code})")
+    rows0 = psql("select count(*) from sales") if DB_URL else None
+    sh = arif.post(f"{BASE}/sales", json={**inv_body, "process": "Approved", "lines": [
+        {"itemId": siid, "qty": 100000, "price": 1, "sdRate": 0, "vatRate": 5}]})
+    check(sh.status_code == 422 and "Insufficient stock" in sh.json().get("title", ""),
+          f"R5.3: approving more than the branch holds is a 422 ({sh.status_code})")
+    if DB_URL:
+        check(psql("select count(*) from sales") == rows0, "R5.3: …and the refused invoice left no row behind")
+        check(psql("select count(*) from compat_state where data->'db' ? 'sales'") == "0",
+              "R5.3: the snapshot carries no sales collection at all")
+        check(int(psql("select count(*) from sales")) >= 227 and int(psql("select count(*) from sale_lines")) >= 442
+              and int(psql("select count(*) from sales where export_deemed is not null")) >= 16
+              and int(psql("select count(*) from sales where category = 'service'")) >= 11
+              and int(psql("select count(*) from sale_realisations")) >= 12,
+              "R5.3: the demo invoices were seeded into their tables, export headers and proceeds entries included")
+        dupno = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                "insert into sales (id, invoice_no, challan_no, issue_date, issue_time, process, branch_id, "
+                                "branch_name, customer_id, customer_name, customer_bin, customer_address, delivery_address, "
+                                "mode, method, vds, subtotal, sd, vat, discount, net_total, paid, due, issued_by, designation, "
+                                "created_at) select 'dups" + TAG + "', invoice_no, challan_no, issue_date, issue_time, process, "
+                                "branch_id, branch_name, customer_id, customer_name, customer_bin, customer_address, "
+                                "delivery_address, mode, method, vds, 0, 0, 0, 0, 0, 0, 0, 'x', 'y', now() from sales limit 1"],
+                               capture_output=True, text=True)
+        check(dupno.returncode != 0, "R5.3: the database refuses a duplicate invoice number (unique index), not just the API")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -728,6 +948,59 @@ def run():
                                                   "lines": [{"itemId": iid, "qty": 1}], "process": "Created"})
         check(wt.status_code == 201 and psql(f"select count(*) from stock_documents where id = '{wt.json().get('id')}'") == "1",
               f"and writes land in the tables on the upgraded database ({wt.status_code})")
+
+        # … and the invoices, which the same release moved out: a database written before them holds them inside
+        # compat_state — lines and proceeds entries included, a draft deleted before the upgrade in the undo buffer.
+        print("\nR5.3: upgrading a pre-R5.3 database moves the sales invoices into their tables")
+        def sale_counts():
+            return (psql("select count(*) from sales"), psql("select count(*) from sale_lines"),
+                    psql("select count(*) from sale_realisations"))
+
+        def sale_registers():
+            return {"sales": arif.get(f"{BASE}/sales", params={"size": 300, "category": "all"}).json(),
+                    "services": arif.get(f"{BASE}/sales", params={"size": 100, "category": "service"}).json(),
+                    "customers": arif.get(f"{BASE}/customers", params={"size": 100}).json()}
+
+        gone = arif.post(f"{BASE}/sales", json={**inv_body, "narration": f"R5.3 deleted {TAG}"}).json()
+        arif.delete(f"{BASE}/sales/{gone['id']}")
+        def sale_shapes():
+            return (psql("select count(*) from sales where export_deemed is not null"),
+                    psql("select count(*) from sales where category = 'service'"),
+                    psql("select count(*) from sale_realisations"))
+
+        scounts, sbefore, ssplit, sboots, sshapes = sale_counts(), sale_registers(), sold_held(), stock_boots(), sale_shapes()
+        psql(PRE_R53_SALES)
+        psql(PRE_R53_SALE_TRASH)
+        psql("delete from sale_realisations")
+        psql("delete from sale_lines")
+        psql("delete from sales")
+        check(sale_counts() == ("0", "0", "0") and psql("select count(*) from compat_state where data->'db' ? 'sales'") == "1"
+              and psql(SALE_TRASH_LEFT) == "1",
+              f"the database is back in the pre-R5.3 shape ({scounts[0]} invoices, {scounts[1]} lines, "
+              f"{scounts[2]} proceeds entries inside the snapshot)")
+        restart()
+        check(sale_counts() == scounts,
+              f"the first boot moved every invoice into the tables ({scounts[0]} invoices, {scounts[1]} lines)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'sales'") == "0", "…and rewrote the snapshot without them")
+        check(psql(SALE_TRASH_LEFT) == "0", "…and took the deleted drafts out of the undo buffer, keeping its documents")
+        check(sale_registers() == sbefore, "…and serves the same three registers, row for row")
+        check(psql(f"select count(*) from sales where id = '{gone['id']}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from sale_lines where sale_id = '{gone['id']}'") == "1",
+              "an invoice deleted before the upgrade is still in the undo buffer, with its lines")
+        un = arif.post(f"{BASE}/sales/{gone['id']}/restore")
+        check(un.status_code == 200 and psql(f"select count(*) from sales where id = '{gone['id']}' and deleted_at is null") == "1",
+              f"…and its undo still works afterwards ({un.status_code})")
+        check(sale_shapes() == sshapes,
+              f"the export headers ({sshapes[0]}), the service sales ({sshapes[1]}) and the proceeds entries "
+              f"({sshapes[2]}) came back with their invoices")
+        check(sold_held() == ssplit, "…and the stock derived from them is unchanged — the branch split survived the round trip")
+        sboots_after, snow = stock_boots(), sale_counts()
+        restart()
+        check(sale_counts() == snow and (sboots is None or sboots_after == sboots + 1) and (sboots is None or stock_boots() == sboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        ws = arif.post(f"{BASE}/sales", json=inv_body)
+        check(ws.status_code == 201 and psql(f"select count(*) from sales where id = '{ws.json().get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({ws.status_code})")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

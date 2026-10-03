@@ -1,7 +1,7 @@
 /**
  * The in-process world shared with the compat bundle. Native modules own users, company, units, (R5.2) the
- * parties and items and (R5.3) the stock documents in PostgreSQL, and write every change through to these globals,
- * so unported handlers (which read them)
+ * parties and items and (R5.3) the stock documents and the sales invoices in PostgreSQL, and write every change
+ * through to these globals, so unported handlers (which read them)
  * see the same data. One instance per database — the compat layer is single-writer by design until R5.5 removes it.
  */
 import { createRequire } from "node:module"
@@ -10,7 +10,8 @@ import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type { AuditEvent, Company, Item, MasterItem, Party, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
-/** The undo buffer: deleted documents (compat state) and deleted parties (R5.2: `parties.deleted_at`). */
+/** The undo buffer: deleted documents (compat state), deleted parties (R5.2) and deleted sales (R5.3), the
+ *  latter two rebuilt from their table's `deleted_at`. */
 export interface TrashEntry { kind: PartyKind | "sale" | "purchase"; doc: Party | Sale | Purchase; at: string }
 
 export type CompatModule = typeof import("./compat/entry")
@@ -23,7 +24,7 @@ interface UserStore {
 interface Globals {
   __dzDb?: Record<string, unknown> & {
     units: Unit[]; customers: Party[]; vendors: Party[]; items: Item[]; masterItems: MasterItem[]
-    transfers: StockDoc[]; damages: StockDoc[]; trash: TrashEntry[]
+    transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; trash: TrashEntry[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -50,14 +51,15 @@ export const compat = (): CompatModule => {
 export function restoreGlobals(s: {
   db: Record<string, unknown>; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
-  transfers: StockDoc[]; damages: StockDoc[]; events: AuditEvent[]
+  transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]; events: AuditEvent[]
 }) {
-  // documents only: an older snapshot's deleted parties are rebuilt from `parties.deleted_at` (given separately)
-  const docsTrash = ((s.db as { trash?: TrashEntry[] }).trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor")
+  // documents only: an older snapshot's deleted parties and deleted sales are rebuilt from their `deleted_at` rows
+  const docsTrash = ((s.db as { trash?: TrashEntry[] }).trash ?? [])
+    .filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale")
   G.__dzDb = {
     ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, items: s.items, masterItems: s.masterItems,
-    transfers: s.transfers, damages: s.damages,
-    trash: [...docsTrash, ...s.partyTrash],
+    transfers: s.transfers, damages: s.damages, sales: s.sales,
+    trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
@@ -129,6 +131,22 @@ export const mirror = {
     if (cur) replaceObject(cur, m)
     else list.push(m)
     return cur ?? m
+  },
+  /** R5.3: the live sales invoices — every register, the ledger, the branch stock and the VAT returns read them */
+  sales: (): Sale[] => G.__dzDb!.sales,
+  putSales(list: Sale[]) { const a = mirror.sales(); a.splice(0, a.length, ...list) },
+  findSale: (idOrNo: string) => mirror.sales().find((s) => s.id === idOrNo || s.invoiceNo === idOrNo),
+  putSale(sale: Sale) {
+    const list = mirror.sales()
+    const cur = list.find((x) => x.id === sale.id)
+    if (cur) replaceObject(cur, sale)
+    else list.push(sale)
+    return cur ?? sale
+  },
+  removeSale(id: string) {
+    const list = mirror.sales()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
   },
   /** R5.3: the stock documents of one kind — the branch-stock split and an item's ledger derive from them */
   stockDocs: (kind: StockDocKind): StockDoc[] => (kind === "transfer" ? G.__dzDb!.transfers : G.__dzDb!.damages),

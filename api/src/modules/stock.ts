@@ -31,7 +31,7 @@ import { db, type Tx } from "../db/client"
 import { items, stockDocumentLines, stockDocuments } from "../db/schema"
 import { compat, mirror } from "../state"
 import { AuditService } from "./audit"
-import { markItems } from "./items"
+import { markItems, revertItemCounters } from "./items"
 
 type DocDb = typeof stockDocuments.$inferSelect
 type LineDb = typeof stockDocumentLines.$inferSelect
@@ -181,7 +181,7 @@ export class StockService {
    */
   async create(kind: StockDocKind, make: (id: string) => StockDoc): Promise<StockDoc> {
     let made: StockDoc | undefined
-    let counters: { it: Item; damage: number }[] = []
+    let counters: Item[] = []
     try {
       const saved = await db.transaction(async (tx) => {
         await lockState(tx)
@@ -196,13 +196,13 @@ export class StockService {
       })
       mirror.putStockDoc(saved)
       markStockDocs([saved])
-      markItems(counters.map((c) => c.it))
+      markItems(counters)
       const seq = compat().db.seq
       seq[kind] = Math.max(seq[kind] ?? 0, Number(saved.id.slice(1)) || 0)
       return saved
     } catch (e) {
       if (made) { mirror.removeStockDoc(kind, made.id); stockWb.forget(made.id) }
-      restoreCounters(counters)
+      await revertItemCounters(counters.map((it) => it.id))
       StockService.noConflict(e)
     }
   }
@@ -222,10 +222,10 @@ export class StockService {
       })
       mirror.putStockDoc(saved)
       markStockDocs([saved])
-      markItems(counters.map((c) => c.it))
+      markItems(counters)
       return saved
     } catch (e) {
-      restoreCounters(counters)
+      await revertItemCounters(counters.map((it) => it.id))
       throw e as Error
     }
   }
@@ -248,14 +248,11 @@ export class StockService {
   }
 }
 
-/** The item counters a document's lines move, captured so a failed transaction restores them. */
-function captureCounters(d: StockDoc) {
-  return d.lines.map((l) => mirror.findItem(l.itemId)).filter((it): it is Item => !!it).map((it) => ({ it, damage: it.damage }))
-}
-const restoreCounters = (saved: { it: Item; damage: number }[]) => { for (const s of saved) s.it.damage = s.damage }
+/** The SKUs whose counters a document's lines move — they are written with the document, in its transaction. */
+const captureCounters = (d: StockDoc) => d.lines.map((l) => mirror.findItem(l.itemId)).filter((it): it is Item => !!it)
 /** A damage write-off moves Item.damage; the rows follow the document, in its transaction. */
-async function writeCounters(tx: Tx, counters: { it: Item; damage: number }[]) {
-  for (const c of counters) await tx.update(items).set({ damage: c.it.damage }).where(eq(items.id, c.it.id))
+async function writeCounters(tx: Tx, list: Item[]) {
+  for (const it of list) await tx.update(items).set({ damage: it.damage }).where(eq(items.id, it.id))
 }
 
 /* ── controllers ───────────────────────────────────────────────────────── */

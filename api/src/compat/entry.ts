@@ -30,4 +30,17 @@ export {
   stockCsvColumns, stockCsvRows, stockDocs, stockDocDiff, stockSource, stockSpec,
   type DamageFields, type StockBuilt, type StockProblem, type TransferFields,
 } from "@/app/api/v1/_stock"
-export { branchLabels, stockShortfall } from "@/lib/mock/db"
+// R5.3: the sale rules, shared the same way — what an invoice body may contain and how its lines are priced
+// (_r3.parseSale), the numbers a new invoice takes, the stock and lot checks around approving and cancelling, the
+// notes and settlements that block a cancellation, the export proceeds (PRC) entries, the document's own history,
+// the diff an edit records and the register's spec, CSV columns and facet labels. The invoices themselves live in
+// `sales`; the branch stock, the ledger and the VAT returns still derive from every document, so they stay with the
+// compat layer until the rest have tables (R5.3–R5.5).
+export {
+  approveRule, buildRealisation, cancelRule, deleteRule, docDiff, editDraftRule, parseRealisation, purchaseCategoryRule,
+  realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows, saleFacetLabels,
+  saleIdentity, saleSpec, saleStockRule, stampDocHistory, purchaseIdentity,
+} from "@/app/api/v1/_docs"
+export { creditable, parseSale } from "@/app/api/v1/_r3"
+export { periodLocked } from "@/app/api/v1/_r4"
+export { branchLabels, postStock, stockShortfall } from "@/lib/mock/db"

@@ -20,6 +20,7 @@ import { UsersService } from "./identity"
 import { deltaEmpty } from "../common/writeback"
 import { applyItemDelta, applyMasterDelta, commitItemDelta, commitMasterDelta, itemDelta, masterDelta } from "./items"
 import { applyPartyDelta, commitPartyDelta, partyDelta } from "./parties"
+import { applySaleDelta, commitSaleDelta, saleDelta } from "./sales"
 import { applyStockDelta, commitStockDelta, stockDelta } from "./stock"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
@@ -27,14 +28,14 @@ interface Route { pattern: RegExp; names: string[]; statics: number; mod: Record
 
 const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "content-length", "expect", "te", "trailer", "proxy-connection"])
 
-/** The JSONB document saved for the unported modules (units, parties, items, master items and the stock
- *  documents have their own tables). */
+/** The JSONB document saved for the unported modules (units, parties, items, master items, the stock documents and
+ *  the sales invoices have their own tables). */
 export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { units, customers, vendors, items, masterItems, transfers, damages, ...rest } = G.__dzDb!
-  // R5.2: a deleted party is a `parties.deleted_at` row, so the undo buffer keeps documents only
+  const { units, customers, vendors, items, masterItems, transfers, damages, sales, ...rest } = G.__dzDb!
+  // R5.2/R5.3: a deleted party or sale is a `deleted_at` row, so the undo buffer keeps the other documents only
   const kept = rest as { trash?: TrashEntry[] }
-  kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor")
+  kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale")
   return JSON.stringify({ db: rest, notifRead: G.__dzUsers!.notifRead })
 }
 
@@ -108,13 +109,14 @@ export class CompatService {
 
   /** Inside the lock: saves the snapshot if it changed, together with any audit events the handler recorded and
    *  any row of a ported collection a compat handler touched (R5.2: the bulk import creates customers, vendors and
-   *  SKUs, and approving a document moves an item's counters; R5.3: a restored backup puts stock documents back —
-   *  all still through the in-memory world). */
+   *  SKUs, and approving a document moves an item's counters; R5.3: a restored backup puts stock documents back and
+   *  a bank file posts proceeds onto an export invoice — all still through the in-memory world). */
   async persist() {
     const json = compatSnapshot()
     const hash = createHash("sha1").update(json).digest("hex")
-    const parts = partyDelta(), its = itemDelta(), masters = masterDelta(), stock = stockDelta()
-    if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters) && deltaEmpty(stock)) return
+    const parts = partyDelta(), its = itemDelta(), masters = masterDelta(), stock = stockDelta(), sold = saleDelta()
+    if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
+      && deltaEmpty(stock) && deltaEmpty(sold)) return
     await db.transaction(async (tx) => {
       await lockState(tx) // cross-process: never overwrite a newer instance's re-seed with this process's state
       await this.audit.forwardPending(tx)
@@ -122,6 +124,7 @@ export class CompatService {
       await applyItemDelta(tx, its)
       await applyMasterDelta(tx, masters)
       await applyStockDelta(tx, stock)
+      await applySaleDelta(tx, sold)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
           .onConflictDoUpdate({ target: compatState.key, set: { data: JSON.parse(json) as unknown, updatedAt: new Date() } })
@@ -129,6 +132,7 @@ export class CompatService {
     })
     // committed: what memory holds now is the new baseline (a rolled-back transaction retries the same delta)
     commitPartyDelta(parts); commitItemDelta(its); commitMasterDelta(masters); commitStockDelta(stock)
+    commitSaleDelta(sold)
     lastSaved = hash
   }
 }

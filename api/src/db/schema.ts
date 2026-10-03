@@ -1,8 +1,8 @@
 /**
  * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables, R5.2 the
  * master data (customers and vendors as `parties`, SKUs as `items`, HS-code products as `master_items`) and R5.3
- * the first documents (transfers and damage entries as `stock_documents` with their lines); the remaining
- * documents still live in `compat_state` until R5.3–R5.5 give each module its own tables.
+ * the documents (transfers and damage entries as `stock_documents`, sales invoices as `sales`) with their lines;
+ * the remaining documents still live in `compat_state` until R5.3–R5.5 give each module its own tables.
  * Migrations are generated with `npm run db:generate` into ./drizzle and applied at boot.
  */
 import { sql } from "drizzle-orm"
@@ -339,7 +339,168 @@ export const stockDocumentLines = pgTable("stock_document_lines", {
 ])
 
 /**
- * Modules not yet migrated (sales, purchases, production, accounting, VAT returns…) keep their exact
+ * R5.3 — sales invoices: the first revenue document out of the compat layer. A sale is a header with its priced
+ * lines, and it moves stock only once approved (a service sale moves nothing). The export / deemed-export shipping
+ * documents are flattened onto the header — `export_deemed` is the presence marker, NULL when the invoice is a
+ * local or a service sale — so an LC number, a country or a foreign-currency value can be read in SQL, the way
+ * `master_items` flattened its rate block. The proceeds realised against an export invoice (R6.2, PRC entries) are
+ * rows of their own: they are added and removed one at a time, and one PRC may be split over several invoices.
+ *
+ * A deleted draft is a row with `deleted_at` set rather than a document in the undo buffer, exactly like a deleted
+ * party (R5.2): its number stays retired, and the restore route puts the row back.
+ */
+export const sales = pgTable("sales", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** S-MMYY#### (goods, exports) / SS-MMYY#### (services) — unique forever, so a deleted draft's number is not reused */
+  invoiceNo: text("invoice_no").notNull(),
+  /** delivery challan number, one above the highest ever used */
+  challanNo: text("challan_no").notNull(),
+  /** the invoice date the number is derived from, the registers filter by and the tax period follows */
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  issueTime: text("issue_time").notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** NULL (absent) for a goods sale, which is what every pre-R3 invoice is */
+  category: text("category", { enum: ["goods", "service"] }),
+  /** the branch / warehouse the goods leave */
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  customerId: text("customer_id").notNull(),
+  /** as printed on the invoice: the customer's name, BIN and address at issue */
+  customerName: text("customer_name").notNull(),
+  customerBin: text("customer_bin").notNull(),
+  customerAddress: text("customer_address").notNull(),
+  deliveryAddress: text("delivery_address").notNull(),
+  vehicle: text("vehicle"),
+  /** the customer's mode decides whether the invoice is zero-rated */
+  mode: text("mode", { enum: ["Local", "Foreign"] }).notNull(),
+  method: text("method", { enum: ["Bank", "Cash", "Cheque", "Mobile", "Transaction"] }).notNull(),
+  /** VDS withheld by the customer — never on a zero-rated invoice */
+  vds: boolean("vds").notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  discount: numeric("discount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  netTotal: numeric("net_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  paid: numeric("paid", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  due: numeric("due", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  narration: text("narration"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the invoice's own trail, shown on its register row; the same entries are in `audit_events` */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** the undo buffer: a draft deleted within the last seconds, restorable and still holding its number */
+  deletedAt: ts("deleted_at"),
+
+  /* export / deemed-export shipping documents (Mushak 4.1, zero-rated) — `exportDeemed` is the presence marker */
+  exportDeemed: boolean("export_deemed"),
+  exportLcNo: text("export_lc_no"),
+  exportLcDate: date("export_lc_date", { mode: "string" }),
+  exportCustomsHouse: text("export_customs_house"),
+  exportCountry: text("export_country"),
+  /** bill of export: its number and date (absent on a deemed export, which never leaves the country) */
+  exportBillNo: text("export_bill_no"),
+  /** text, not date: a deemed export carries no bill and the invoice stores an empty string, not NULL */
+  exportBillDate: text("export_bill_date"),
+  exportShippingAddress: text("export_shipping_address"),
+  exportCnfFirm: text("export_cnf_firm"),
+  /** R6 (RMG): the Utilization Declaration / Permission of the exporter that lists this deemed supply */
+  exportUdNo: text("export_ud_no"),
+  /** text, not date: the UD date is optional and the invoice stores an empty string when it is unknown */
+  exportUdDate: text("export_ud_date"),
+  /** R6 (RMG): EXP form number (direct export) */
+  exportExpNo: text("export_exp_no"),
+  /** R6 (RMG): invoice currency, foreign-currency value and exchange rate */
+  exportCurrency: text("export_currency", { enum: ["USD", "EUR", "GBP", "BDT"] }),
+  exportFcValue: numeric("export_fc_value", { precision: 18, scale: 2, mode: "number" }),
+  exportExchangeRate: numeric("export_exchange_rate", { precision: 18, scale: 6, mode: "number" }),
+  /** R6 (RMG): the exporter's bond licence (deemed export; defaults to the customer's) */
+  exportExporterBond: text("export_exporter_bond"),
+  /** R6.5 (RMG): our own UD / UP this shipment is made under — its bonded inputs are settled against it */
+  exportOwnUdNo: text("export_own_ud_no"),
+  /**
+   * Presence marker for the `export.realisations` array: the entries themselves are `sale_realisations` rows, and
+   * an invoice that had one entry and lost it again answers with an empty array, not with no array at all.
+   */
+  exportRealisations: boolean("export_realisations").notNull().default(false),
+}, (t) => [
+  uniqueIndex("sales_invoice_no_key").on(t.invoiceNo),
+  index("sales_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("sales_issue_date_idx").on(t.issueDate),
+  index("sales_customer_idx").on(t.customerId),
+  index("sales_branch_idx").on(t.branchId),
+  check("sales_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("sales_category_check", sql`${t.category} is null or ${t.category} in ('goods','service')`),
+  check("sales_mode_check", sql`${t.mode} in ('Local','Foreign')`),
+  check("sales_method_check", sql`${t.method} in ('Bank','Cash','Cheque','Mobile','Transaction')`),
+  // the shipping documents are a block: either all of the header is there, or none of it is
+  check("sales_export_check", sql`(${t.exportDeemed} is null and ${t.exportLcNo} is null) or (${t.exportDeemed} is not null and ${t.exportLcNo} is not null)`),
+  check("sales_export_currency_check", sql`${t.exportCurrency} is null or ${t.exportCurrency} in ('USD','EUR','GBP','BDT')`),
+])
+
+/**
+ * The lines of a sales invoice: the item (or service code), the quantity and the prices at issue, so the invoice
+ * keeps the values it was approved with even after the SKU's price moves. A child table rather than JSON — that is
+ * what lets the branch stock, an item's ledger and a customer's turnover be summed in SQL.
+ */
+export const saleLines = pgTable("sale_lines", {
+  saleId: text("sale_id").notNull(),
+  /** position on the invoice */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed on the invoice: the SKU's name, HS code and unit at issue (a service line carries its code) */
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** R3: the production batch (lot) the finished goods ship from */
+  batchId: text("batch_id"),
+  batchNo: text("batch_no"),
+}, (t) => [
+  primaryKey({ columns: [t.saleId, t.ord] }),
+  index("sale_lines_item_idx").on(t.itemId),
+])
+
+/**
+ * R6.2 (RMG) — export proceeds realised through the bank: one row per PRC entry against an export invoice. A PRC
+ * may be split over several invoices of the same buyer / LC (a bank file posts one batch), so the number is not
+ * unique here — the register groups by it. `batchId` names the bank file the entry came from, absent when it was
+ * typed in on the invoice.
+ */
+export const saleRealisations = pgTable("sale_realisations", {
+  id: text("id").primaryKey(),
+  saleId: text("sale_id").notNull(),
+  /** position in the invoice's list of entries */
+  ord: integer("ord").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  bank: text("bank").notNull(),
+  prcNo: text("prc_no").notNull(),
+  fcAmount: numeric("fc_amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** the exchange rate the proceeds were booked at */
+  rate: numeric("rate", { precision: 18, scale: 6, mode: "number" }).notNull(),
+  bdt: numeric("bdt", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+  by: text("by").notNull(),
+  at: ts("at").notNull(),
+  batchId: text("batch_id"),
+}, (t) => [
+  index("sale_realisations_sale_idx").on(t.saleId),
+  index("sale_realisations_prc_idx").on(t.prcNo),
+])
+
+/**
+ * Modules not yet migrated (purchases, production, accounting, VAT returns…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */
 export const compatState = pgTable("compat_state", {

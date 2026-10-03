@@ -18,6 +18,9 @@ export const NATIVE = [
   // R5.3: stock transfers and damage entries live in `stock_documents` (the ledger and the branch split derive
   // from every movement document, so they stay here until the rest have tables)
   "transfers", "transfers/[id]", "damage", "damage/[id]",
+  // R5.3: sales invoices live in `sales` (their lines in `sale_lines`, their proceeds entries in
+  // `sale_realisations`); the branch stock, the ledger and the VAT returns still derive from every document
+  "sales", "sales/[id]", "sales/[id]/creditable", "sales/[id]/realisations", "sales/[id]/restore", "sales/bulk",
 ]
 
 const found = []
