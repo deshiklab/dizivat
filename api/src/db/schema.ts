@@ -642,6 +642,115 @@ export const purchaseLines = pgTable("purchase_lines", {
 ])
 
 /**
+ * R5.3 — credit notes (Mushak 6.7, goods a customer returns against a sales invoice) and debit notes (Mushak 6.8,
+ * goods returned to a vendor against a purchase) in one table, `kind` telling them apart — the same choice the
+ * stock documents made, because the two registers, the two lists a document's `creditable` / `returnable` answer
+ * comes from and the input- and output-tax sides of a VAT return read them the same way.
+ *
+ * The document each note was raised against is `source_id` (a sale or a purchase) and the party is `party_id` (a
+ * customer or a vendor); the response names them by kind, as the mock's two shapes do. A debit note carries two
+ * totals a credit note does not — `tti` and the `rebate` it reverses — so they are NULL on the credit side and a
+ * check constraint says so.
+ */
+export const notes = pgTable("notes", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["credit", "debit"] }).notNull(),
+  /** CN-MMYY#### / DN-MMYY#### — unique, and never reused: the audit trail keeps a deleted draft's number */
+  no: text("no").notNull(),
+  /** the sales invoice (credit) or purchase (debit) the note was raised against */
+  sourceId: text("source_id").notNull(),
+  sourceNo: text("source_no").notNull(),
+  sourceDate: date("source_date", { mode: "string" }).notNull(),
+  sourceMode: text("source_mode").notNull(),
+  challanNo: text("challan_no").notNull(),
+  /** the customer (credit) or vendor (debit) as printed on the note */
+  partyId: text("party_id").notNull(),
+  partyName: text("party_name").notNull(),
+  partyBin: text("party_bin").notNull(),
+  partyAddress: text("party_address").notNull(),
+  /** branch the goods come back into (credit) or leave again from (debit) */
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  issueTime: text("issue_time").notNull(),
+  reason: text("reason").notNull(),
+  note: text("note"),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** debit notes only: the tax incidence of the returned goods, and the input tax credit this note reverses */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }),
+  rebate: numeric("rebate", { precision: 18, scale: 2, mode: "number" }),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the note's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later note taking the same id. There is no undo for a note.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("notes_no_key").on(t.no),
+  index("notes_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("notes_kind_idx").on(t.kind),
+  index("notes_issue_date_idx").on(t.issueDate),
+  /** the register's `?sale=` / `?purchase=` filter, and what a document's creditable / returnable deducts */
+  index("notes_source_idx").on(t.sourceId),
+  index("notes_party_idx").on(t.partyId),
+  index("notes_branch_idx").on(t.branchId),
+  check("notes_kind_check", sql`${t.kind} in ('credit','debit')`),
+  check("notes_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("notes_reason_check", sql`${t.reason} in ('damaged','quality','excess','wrongItem','priceAdjustment','priceDispute')`),
+  check("notes_source_mode_check", sql`${t.sourceMode} in ('Local','Foreign','Non-registered')`),
+  // the two totals only a debit note has
+  check("notes_debit_totals_check", sql`${t.kind} = 'debit' or (${t.tti} is null and ${t.rebate} is null)`),
+])
+
+/**
+ * The lines of a note: what came back, at the price and the rates the source document carried. The quantity the
+ * source document had (`sold_qty` on a credit note, `purchased_qty` on a debit note) is what the register's
+ * "remaining" column is measured against, so it stays on the line.
+ */
+export const noteLines = pgTable("note_lines", {
+  noteId: text("note_id").notNull(),
+  /** position on the note */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  /** credit note: the quantity the sales invoice sold */
+  soldQty: numeric("sold_qty", { precision: 18, scale: 3, mode: "number" }),
+  /** debit note: the quantity the purchase bought */
+  purchasedQty: numeric("purchased_qty", { precision: 18, scale: 3, mode: "number" }),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** debit notes only */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }),
+  rebate: numeric("rebate", { precision: 18, scale: 2, mode: "number" }),
+}, (t) => [
+  primaryKey({ columns: [t.noteId, t.ord] }),
+  index("note_lines_item_idx").on(t.itemId),
+  // exactly one of the two source quantities, and the debit-only totals, follow the note's kind
+  check("note_lines_qty_check", sql`(${t.soldQty} is null) <> (${t.purchasedQty} is null)`),
+  check("note_lines_debit_check", sql`(${t.tti} is null and ${t.rebate} is null) or ${t.purchasedQty} is not null`),
+])
+
+/**
  * Modules not yet migrated (purchases, production, accounting, VAT returns…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */

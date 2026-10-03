@@ -40,10 +40,22 @@ export {
   approveRule, buildRealisation, cancelRule, deleteRule, docDiff, editDraftRule, parseRealisation, purchaseCategory,
   purchaseCategoryRule, purchaseCsvColumns, purchaseCsvRows, purchaseFacetLabels, purchaseIdentity, parsePurchase,
   purchaseSpec, realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows,
-  saleFacetLabels, saleIdentity, saleSpec, saleStockRule, stampDocHistory,
+  saleFacetLabels, saleIdentity, saleSpec, saleStockRule, stampDocHistory, noteDiff, noteDraftRule, stampNoteHistory,
 } from "@/app/api/v1/_docs"
+// R5.3: the credit and debit note rules, shared the same way — what a note body may contain and how a returned line
+// is priced pro rata, the numbers a new note takes, the source document that has to still be approved, the stock a
+// cancellation needs, the registers' specs, filters and CSV columns. The notes themselves live in `notes`; what is
+// still returnable on an invoice, a customer's credit and the VAT returns still derive from every document.
+export {
+  buildCredit, claimCreditId, creditApproveRule, creditCancelRule, creditCsvColumns, creditDeleteRule,
+  creditFacetLabels, creditIdentity, creditMovedRule, creditSourceFilter, creditSpec, postCredit,
+} from "@/app/api/v1/_r3"
+export {
+  buildDebit, claimDebitId, debitApproveRule, debitCancelRule, debitCsvColumns, debitDeleteRule, debitFacetLabels,
+  debitIdentity, debitSourceFilter, debitSpec, debitStockRule, postDebit, returnable,
+} from "@/app/api/v1/_r2"
 export { creditable, parseSale } from "@/app/api/v1/_r3"
-export { returnable } from "@/app/api/v1/_r2"
+
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
 // duty per line) variants, priced by the same functions the mock and the static demo run.
 export { buildPurchaseFields } from "@/lib/mock/build"

@@ -16,7 +16,8 @@ backend**, including 520 contract checks, every end-to-end suite, axe, and all 3
 
 The API is built in slices. R5.1 moves **identity, security and reference data** into real tables, R5.2 the
 **master data** (customers and vendors, items and master items) and R5.3 the **first documents** (stock transfers and
-damage entries, sales invoices, purchases). The other modules keep their exact mock behaviour inside the API, and
+damage entries, sales invoices, purchases, credit and debit notes). The other modules keep their exact mock
+behaviour inside the API, and
 their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
 
 | Area | Endpoints | R5.1 |
@@ -34,8 +35,9 @@ their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
 | Stock transfers & damage (R5.3) | `transfers`, `transfers/{id}`, `damage`, `damage/{id}` | **native** — `stock_documents` + `stock_document_lines` (one table for both kinds, `kind` tells them apart) |
 | Sales invoices (R5.3) | `sales`, `sales/{id}`, `sales/{id}/creditable`, `sales/{id}/realisations`, `sales/{id}/restore`, `sales/bulk` | **native** — `sales` + `sale_lines` + `sale_realisations` |
 | Purchases (R5.3) | `purchases`, `purchases/{id}`, `purchases/{id}/returnable`, `purchases/{id}/restore`, `purchases/bulk` | **native** — `purchases` + `purchase_lines` (the Bill of Entry and each import line's duty are columns) |
+| Credit & debit notes (R5.3) | `credit-notes`, `credit-notes/{id}`, `debit-notes`, `debit-notes/{id}` | **native** — `notes` + `note_lines` (one table for both, `kind` tells them apart) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: the stock ledger and branches' stock, credit and debit notes, production, accounting, VAT returns, notifications, dashboard, search… | 73 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: the stock ledger and branches' stock, production, accounting, VAT returns, notifications, dashboard, search… | 69 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -66,7 +68,7 @@ their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
    - When the handler changes state, the JSONB snapshot and any new audit events are saved in one transaction.
    - A process-wide lock serialises compat requests.
 3. **Write-through** (both directions)
-   - Native modules own users, company, units, (R5.2) the parties, items and master items and (R5.3) the stock documents, the sales invoices and the purchases in PostgreSQL.
+   - Native modules own users, company, units, (R5.2) the parties, items and master items and (R5.3) the stock documents, the sales invoices, the purchases and both note families in PostgreSQL.
    - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table, and an invoice quotes a customer the `parties` table holds.
    - The other way round: when a compat handler writes a record a native module owns — the R6.2 bulk import creates
      customers, vendors and SKUs, approving a document moves an item's counters, a restored backup puts stock
@@ -246,6 +248,44 @@ the routes served natively, 676 with the mock handlers serving them.
 - **The upgrade is one boot**, as with the invoices: the first start moves every purchase and line out of
   `compat_state` and rewrites the snapshot without them, and `api_native.py` drills it in CI.
 
+## R5.3 — credit and debit notes on their own tables
+
+`api/src/modules/notes.ts` serves `credit-notes`, `credit-notes/{id}`, `debit-notes` and `debit-notes/{id}` from
+**`notes`** and **`note_lines`** — one table for both families, `kind` telling them apart, the same choice the stock
+documents made: the two registers, the two "what is still returnable" answers and the input- and output-tax sides of
+a VAT return read them the same way. The contract is unchanged and the rules are the mock's own
+(`src/app/api/v1/_r2.ts`, `_r3.ts`, `_r4.ts`, `_docs.ts`, re-exported by `api/src/compat/entry.ts`): `buildCredit` /
+`buildDebit` (the source document has to exist and still be approved, the note cannot predate it, the period has to
+be open, every line has to be returnable and within what is left of it, and a returned line is priced pro rata),
+`creditIdentity` / `debitIdentity`, `creditApproveRule` / `debitApproveRule`, `creditCancelRule` / `debitCancelRule`,
+`debitStockRule`, `postCredit` / `postDebit`, the registers' specs, filters and CSV columns cannot drift. Both sides
+were held against the same contract suite again: 676 checks with the routes served natively, 676 with the mock
+handlers serving them.
+
+- **The two shapes come out of one row.** The document a note was raised against is `source_id` (a sales invoice or a
+  purchase) and the party is `party_id` (a customer or a vendor); the response names them by kind, as the mock's two
+  shapes do. A debit note carries two totals a credit note does not — `tti` and the `rebate` (input tax credit) it
+  reverses — so they are NULL on the credit side and a check constraint says so; the same goes for a line's
+  `sold_qty` / `purchased_qty` and its debit-only `tti` and `rebate`.
+- **A deleted draft keeps its row.** Notes have no undo, and the mock removed one from its array for good — but its
+  id counter had moved on and its number lives on in the audit trail, so the row is stamped rather than dropped:
+  that is what stops a later note taking the same id, and the next number still skips the deleted draft's.
+- **Ids and numbers come from the mock's own counters.** `cn<n>` / `dn<n>` from the state's `db.seq`, claimed inside
+  the locked transaction and separately from the identity, so a debit note refused for want of stock consumes no id;
+  `CN-MMYY####` / `DN-MMYY####` from the live notes *and* the audit trail. A duplicate the application check missed
+  is a 409, not a 500.
+- **An approval writes what it moves.** A credit note takes `items.sold` down (the goods come back into the selling
+  branch), a debit note takes `items.purchased` down (they leave again), each with the note, in its transaction, and
+  reversed on cancellation. Approving a debit note needs the goods still on hand — 422 while saving, 409 when
+  approving a draft — and cancelling a credit note needs them still on hand too, because they leave the branch again.
+- **What is still derived stays derived:** what is returnable on an invoice or a purchase, a customer's credit, the
+  branch split and the ledger read the in-memory copies, which the module keeps in step, and the write-back adopts
+  whatever a compat handler writes — including a delete, which stamps the row exactly as the native delete does.
+- **The upgrade is one boot**, as with the other families: the first start moves both collections and their lines out
+  of `compat_state` and rewrites the snapshot without them, and `api_native.py` drills it in CI. A note deleted
+  before the upgrade has no place in the older snapshot, so what the drill requires back is the *counter*: the next
+  note takes a higher id and a new number.
+
 ## Tables
 
 | Table | Purpose |
@@ -269,7 +309,9 @@ the routes served natively, 676 with the mock handlers serving them.
 | `sale_realisations` | **R5.3:** export proceeds (PRC) recorded against an invoice — bank, PRC number, foreign-currency amount, rate and the BDT value at that rate, the R6.6 batch that posted it |
 | `purchases` | **R5.3:** purchases (Mushak 6.1 input side) — number (unique), challan / BoE number and date, vendor as printed, mode, money (`numeric`), the two totals a purchase adds (`tti`, `rebate`), the Bill of Entry an import clears as its own columns, own history (JSONB); `deleted_at` is the undo trash |
 | `purchase_lines` | **R5.3:** a purchase's lines — item, quantity, prices and rates, `rebateable` / `vds`, and an import line's duty breakdown (AV, CD, RD, AIT, AT and the rates) plus what a bonded entry left foregone; primary key (document, position) |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices or purchases since R5.3) |
+| `notes` | **R5.3:** credit notes (Mushak 6.7) and debit notes (6.8) — `kind` tells them apart; number (unique), the document each was raised against, the customer or vendor as printed, reason, money (`numeric`), the two totals only a debit note has (`tti`, `rebate`), own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired |
+| `note_lines` | **R5.3:** a note's lines — item, the quantity the source document had (`sold_qty` on a credit note, `purchased_qty` on a debit note), what came back, at the source document's price and rates; primary key (note, position) |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -301,7 +343,7 @@ npm run build && npx next start -p 3000             # → http://localhost:3000
 | --- | --- |
 | `node api/dist/main.js --reset` | drop everything and re-seed the demo data |
 | `node api/dist/main.js --migrate-only` | apply migrations and exit |
-| `npm --prefix api run typecheck` | type-checks the API **and** the 73 compat route modules |
+| `npm --prefix api run typecheck` | type-checks the API **and** the 69 compat route modules |
 
 ## Tests
 
@@ -312,7 +354,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 263 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 306 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -364,6 +406,21 @@ the live database is rewritten back into its pre-R5.3 shape (the documents with 
 breakdowns inside `compat_state`, the deleted drafts back in its undo buffer, the two tables empty), the API
 restarts, and the same documents, lines, three registers row for row, BoEs, duty columns and derived stock are
 required back, with a document deleted before the upgrade still undoable and a second boot adopting nothing again.
+
+It checks the notes the same way — a credit note is raised against an approved invoice and priced pro rata, a draft
+moves no stock, approving brings the goods back and takes `items.sold` down with the branch split and the ledger that
+still derive from every document, what is returnable on the invoice follows, cancelling sends the goods out again and
+stores the reason on the row, a second cancellation is a 409, editing a draft replaces the line rows, a note cannot
+move to another invoice, returning more than the document sold or bought is a 422, a note against a draft invoice is
+a 422, deleting a draft stamps the row and keeps its lines so the next note takes a new id and a new number; and on
+the debit side the two totals only a debit note has are columns of its row, returning more than the branch holds is a
+409, approving takes `items.purchased` down, a service purchase has no goods to return, and cancelling puts them back
+— plus the snapshot carrying neither collection, the demo notes seeded into their tables, the database refusing a
+duplicate note number, and a **fifth upgrade drill**: the live database is rewritten back into its pre-R5.3 shape
+(both collections with their lines inside `compat_state`, the two tables empty), the API restarts, and the same notes,
+lines and registers row for row are required back, with a note deleted before the upgrade staying deleted while its
+id and number stay retired, the derived stock unchanged, a second boot adopting nothing again, and writes landing in
+the tables.
 
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 

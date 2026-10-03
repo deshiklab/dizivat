@@ -188,6 +188,49 @@ PRE_R53_PURCHASE_TRASH = f"""update compat_state set data = jsonb_set(data, '{{d
 PURCHASE_TRASH_LEFT = """select count(*) from compat_state where jsonb_typeof(data->'db'->'trash') = 'array'
   and exists (select 1 from jsonb_array_elements(data->'db'->'trash') t where t->>'kind' = 'purchase')"""
 
+# ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
+# A database written before the notes had tables holds both families inside compat_state. These statements rebuild
+# that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
+# purchaseId, customerName / vendorName, soldQty / purchasedQty) come back out of the shared columns. Nothing here
+# ships either: it is the inverse of the notes half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+NOTE_LINES_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'hsCode', l.hs_code, 'uom', l.uom, 'soldQty', l.sold_qty,
+      'purchasedQty', l.purchased_qty, 'qty', l.qty, 'price', l.price, 'sdRate', l.sd_rate, 'vatRate', l.vat_rate,
+      'subtotal', l.subtotal, 'sd', l.sd, 'vat', l.vat, 'total', l.total, 'tti', l.tti, 'rebate', l.rebate)""")
+    + """ order by l.ord), '[]'::jsonb) from note_lines l where l.note_id = n.id)""")
+NOTE_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', n.id, 'no', n.no,
+    'saleId', case when n.kind = 'credit' then n.source_id end,
+    'saleNo', case when n.kind = 'credit' then n.source_no end,
+    'saleDate', case when n.kind = 'credit' then n.source_date end,
+    'saleMode', case when n.kind = 'credit' then n.source_mode end,
+    'purchaseId', case when n.kind = 'debit' then n.source_id end,
+    'purchaseNo', case when n.kind = 'debit' then n.source_no end,
+    'purchaseDate', case when n.kind = 'debit' then n.source_date end,
+    'purchaseMode', case when n.kind = 'debit' then n.source_mode end,
+    'challanNo', n.challan_no,
+    'customerId', case when n.kind = 'credit' then n.party_id end,
+    'customerName', case when n.kind = 'credit' then n.party_name end,
+    'customerBin', case when n.kind = 'credit' then n.party_bin end,
+    'customerAddress', case when n.kind = 'credit' then n.party_address end,
+    'vendorId', case when n.kind = 'debit' then n.party_id end,
+    'vendorName', case when n.kind = 'debit' then n.party_name end,
+    'vendorBin', case when n.kind = 'debit' then n.party_bin end,
+    'vendorAddress', case when n.kind = 'debit' then n.party_address end,
+    'branchId', n.branch_id, 'branchName', n.branch_name, 'issueDate', n.issue_date, 'issueTime', n.issue_time,
+    'reason', n.reason, 'note', n.note, 'issuedBy', n.issued_by, 'designation', n.designation, 'process', n.process,
+    'lines', """ + NOTE_LINES_DOC + """, 'subtotal', n.subtotal, 'sd', n.sd, 'vat', n.vat, 'total', n.total,
+    'tti', case when n.kind = 'debit' then n.tti end, 'rebate', case when n.kind = 'debit' then n.rebate end,
+    'createdAt', """ + _ISO.format("n.created_at") + """, 'updatedAt', """ + _ISO.format("n.updated_at") + """,
+    'cancelReason', n.cancel_reason, 'history', n.history)""") + ")")
+NOTE_AGG = lambda kind: (f"(select coalesce(jsonb_agg({NOTE_DOC} order by n.ord), '[]'::jsonb) "
+                         f"from notes n where n.kind = '{kind}' and n.deleted_at is null)")
+# both collections back inside the snapshot (a deleted draft has no place there: the mock removed it for good)
+PRE_R53_NOTES = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'creditNotes', {NOTE_AGG('credit')},
+  'debitNotes', {NOTE_AGG('debit')}
+)) where key = 'main'"""
+
 
 def check(cond, msg):
     global ok, fail
@@ -853,6 +896,166 @@ def run():
                                capture_output=True, text=True)
         check(dupno.returncode != 0, "R5.3: the database refuses a duplicate purchase number (unique index), not just the API")
 
+    # ── R5.3: the credit and debit notes ─────────────────────────────────────────────────────────────────────
+    print("R5.3: credit and debit notes are rows too — one table, `kind` telling them apart")
+    # an approved invoice and an approved purchase to raise notes against, on the SKUs these checks already use
+    csale = arif.post(f"{BASE}/sales", json={**inv_body, "process": "Approved", "lines": [
+        {"itemId": siid, "qty": 6, "price": 100, "sdRate": 0, "vatRate": 5}]}).json()
+    csale2 = arif.post(f"{BASE}/sales", json={**inv_body, "process": "Approved", "lines": [
+        {"itemId": siid, "qty": 6, "price": 100, "sdRate": 0, "vatRate": 5}]}).json()
+    cpur = arif.post(f"{BASE}/purchases", json={**pur_body, "process": "Approved", "challanNo": f"CHN{TAG}", "lines": [
+        {"itemId": piid, "qty": 6, "price": 100, "sdRate": 0, "vatRate": 5}]}).json()
+    unsold = arif.post(f"{BASE}/sales", json=inv_body).json()
+    cn_body = {"saleId": csale["id"], "issueDate": tdate, "issueTime": "11:00", "reason": "quality",
+               "note": f"R5.3 credit {TAG}", "issuedBy": "Arif Hossain", "designation": "Sales Officer",
+               "process": "Created", "lines": [{"itemId": siid, "qty": 2}]}
+    split4 = sold_held()
+    cn = arif.post(f"{BASE}/credit-notes", json=cn_body)
+    cnid, cno = cn.json().get("id"), cn.json().get("no")
+    cnline = cn.json()["lines"][0] if cn.status_code == 201 else {}
+    check(cn.status_code == 201 and cn.json()["process"] == "Created" and str(cno).startswith("CN-")
+          and cn.json()["saleNo"] == csale["invoiceNo"] and cnline.get("soldQty") == 6 and cnline.get("price") == 100
+          and "tti" not in cn.json() and [h["action"] for h in cn.json()["history"]] == ["created"],
+          f"native (R5.3): a credit note is raised against the invoice and priced pro rata ({cn.status_code} {cno})")
+    check(sold_held() == split4, "R5.3: a draft note moves no stock")
+    if DB_URL:
+        check(psql(f"select count(*) from notes where id = '{cnid}' and kind = 'credit' and process = 'Created'"
+                   f" and source_id = '{csale['id']}' and party_id = '{csale['customerId']}' and tti is null") == "1"
+              and psql(f"select count(*) from note_lines where note_id = '{cnid}' and sold_qty = 6"
+                       f" and purchased_qty is null") == "1",
+              "R5.3: the draft is a row in notes, and its line a row in note_lines")
+    si_sold = float(psql(f"select sold from items where id = '{siid}'")) if DB_URL else None
+    cna = arif.patch(f"{BASE}/credit-notes/{cnid}", json={"process": "Approved"})
+    check(cna.status_code == 200 and cna.json()["process"] == "Approved"
+          and sold_held() == (split4[0] + 2, split4[1] + 2, split4[2]),
+          f"R5.3: approving brings the goods back, and the branch split derived in memory follows ({cna.status_code})")
+    cnled = arif.get(f"{BASE}/items/{siid}/ledger").json()
+    check(any(e.get("ref") == cno for e in cnled["entries"]),
+          "R5.3: …and the item's ledger, still derived from every document, quotes the note")
+    if DB_URL:
+        check(psql(f"select sold = {si_sold - 2} from items where id = '{siid}'") == "t",
+              "R5.3: …and the counter it moved is written with it (items.sold)")
+        check(psql(f"select jsonb_array_length(history) from notes where id = '{cnid}'") == "2",
+              "R5.3: the note's own history travels with the row")
+    check(arif.get(f"{BASE}/sales/{csale['id']}/creditable").json()["lines"][0]["remaining"] == 4,
+          "R5.3: …and what is still returnable on the invoice is 4 of the 6 it sold")
+    cnc = arif.patch(f"{BASE}/credit-notes/{cnid}", json={"process": "Cancelled", "reason": f"R5.3 cancelled {TAG}"})
+    check(cnc.status_code == 200 and sold_held() == split4, "R5.3: cancelling sends the goods back out again")
+    if DB_URL:
+        check(psql(f"select count(*) from notes where id = '{cnid}' and process = 'Cancelled'"
+                   f" and cancel_reason is not null") == "1"
+              and psql(f"select sold = {si_sold} from items where id = '{siid}'") == "t",
+              "R5.3: …and the cancellation and the counter are stored on the rows")
+    check(arif.patch(f"{BASE}/credit-notes/{cnid}", json={"process": "Cancelled", "reason": "again"}).status_code == 409,
+          "R5.3: a note that is already cancelled refuses a second cancellation (409)")
+    # editing a draft replaces its lines; a note stays with the invoice it was raised against
+    cn2 = arif.post(f"{BASE}/credit-notes", json=cn_body).json()
+    cne = arif.put(f"{BASE}/credit-notes/{cn2['id']}", json={**cn_body, "lines": [{"itemId": siid, "qty": 3}]})
+    check(cne.status_code == 200 and [l["qty"] for l in cne.json()["lines"]] == [3]
+          and [h["action"] for h in cne.json()["history"]][-1] == "edited",
+          f"R5.3: editing a draft note replaces its lines ({cne.status_code})")
+    if DB_URL:
+        check(psql(f"select qty::text from note_lines where note_id = '{cn2['id']}' and ord = 1") == "3.000",
+              "R5.3: …in the child table")
+    moved = arif.put(f"{BASE}/credit-notes/{cn2['id']}", json={**cn_body, "saleId": csale2["id"]})
+    check(moved.status_code == 409, f"R5.3: a credit note cannot move to another invoice ({moved.status_code})")
+    over = arif.post(f"{BASE}/credit-notes", json={**cn_body, "lines": [{"itemId": siid, "qty": 1000}]})
+    check(over.status_code == 422 and over.json()["errors"].get("lines.0.qty") == ["exceedsRemaining"],
+          "R5.3: returning more than the invoice sold is a 422 (exceedsRemaining)")
+    notapp = arif.post(f"{BASE}/credit-notes", json={**cn_body, "saleId": unsold["id"]})
+    check(notapp.status_code == 422 and notapp.json()["errors"].get("saleId") == ["notApproved"],
+          "R5.3: a note against a draft invoice is a 422 (notApproved)")
+    cnd = arif.delete(f"{BASE}/credit-notes/{cn2['id']}")
+    check(cnd.status_code == 200 and cnd.json().get("ok") is True
+          and arif.get(f"{BASE}/credit-notes/{cn2['id']}").status_code == 404,
+          "R5.3: a draft note is deleted and leaves the register")
+    if DB_URL:
+        check(psql(f"select count(*) from notes where id = '{cn2['id']}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from note_lines where note_id = '{cn2['id']}'") == "1",
+              "R5.3: …as a stamped row that keeps its lines, so its id stays retired")
+    cn3 = arif.post(f"{BASE}/credit-notes", json=cn_body).json()
+    check(cn3["no"] != cn2["no"] and int(cn3["id"][2:]) > int(cn2["id"][2:]),
+          f"R5.3: the next note takes a new number and a new id ({cn2['no']} → {cn3['no']})")
+    # the debit side: the same table, the other kind, and the two totals only a debit note has
+    dn_body = {"purchaseId": cpur["id"], "issueDate": tdate, "issueTime": "11:00", "reason": "damaged",
+               "note": f"R5.3 debit {TAG}", "issuedBy": "Arif Hossain", "designation": "Purchase Officer",
+               "process": "Created", "lines": [{"itemId": piid, "qty": 2}]}
+    split5 = pheld()
+    dn = arif.post(f"{BASE}/debit-notes", json=dn_body)
+    dnid, dno = dn.json().get("id"), dn.json().get("no")
+    dnline = dn.json()["lines"][0] if dn.status_code == 201 else {}
+    check(dn.status_code == 201 and str(dno).startswith("DN-") and dn.json()["purchaseNo"] == cpur["invoiceNo"]
+          and dnline.get("purchasedQty") == 6 and dn.json()["tti"] == 0 and "rebate" in dn.json()
+          and [h["action"] for h in dn.json()["history"]] == ["created"],
+          f"native (R5.3): a debit note is raised against the purchase and reverses its input tax ({dn.status_code} {dno})")
+    if DB_URL:
+        check(psql(f"select count(*) from notes where id = '{dnid}' and kind = 'debit' and source_id = '{cpur['id']}'"
+                   f" and tti is not null and rebate is not null") == "1"
+              and psql(f"select count(*) from note_lines where note_id = '{dnid}' and purchased_qty = 6"
+                       f" and sold_qty is null and rebate is not null") == "1",
+              "R5.3: …as a row of the same table, with the two totals only a debit note has")
+    check(sold_held() == split4 and pheld() == split5, "R5.3: a draft debit note moves no stock either")
+    big = arif.post(f"{BASE}/debit-notes", json={**dn_body, "process": "Approved",
+                                                "lines": [{"itemId": piid, "qty": 100000}]})
+    check(big.status_code == 422 and big.json()["errors"].get("lines.0.qty") == ["exceedsRemaining"],
+          f"R5.3: returning more than the purchase bought is a 422 ({big.status_code})")
+    # 4, not 6: the draft above already has 2 of the purchase's 6 units earmarked
+    dn3 = arif.post(f"{BASE}/debit-notes", json={**dn_body, "lines": [{"itemId": piid, "qty": 4}]}).json()
+    away = pheld()[1]
+    out = arif.post(f"{BASE}/transfers", json={"fromBranchId": branch, "toBranchId": other, "date": tdate,
+                    "vehicle": "", "note": f"R5.3 stock away {TAG}", "lines": [{"itemId": piid, "qty": away}],
+                    "process": "Approved"})
+    shortdn = arif.patch(f"{BASE}/debit-notes/{dn3['id']}", json={"process": "Approved"})
+    back = arif.post(f"{BASE}/transfers", json={"fromBranchId": other, "toBranchId": branch, "date": tdate,
+                     "vehicle": "", "note": f"R5.3 stock back {TAG}", "lines": [{"itemId": piid, "qty": away}],
+                     "process": "Approved"})
+    check(out.status_code in (200, 201) and back.status_code in (200, 201) and shortdn.status_code == 409
+          and "Insufficient stock to return" in shortdn.json().get("title", ""),
+          f"R5.3: approving a return the branch no longer holds is a 409 ({shortdn.status_code})")
+    pi_pur = float(psql(f"select purchased from items where id = '{piid}'")) if DB_URL else None
+    dna = arif.patch(f"{BASE}/debit-notes/{dnid}", json={"process": "Approved"})
+    check(dna.status_code == 200 and pheld() == (split5[0] - 2, split5[1] - 2, split5[2]),
+          f"R5.3: approving a debit note takes the goods back out ({dna.status_code})")
+    if DB_URL:
+        check(psql(f"select purchased = {pi_pur - 2} from items where id = '{piid}'") == "t",
+              "R5.3: …and the counter it moved is written with it (items.purchased)")
+    check(arif.get(f"{BASE}/purchases/{cpur['id']}/returnable").json()["lines"][0]["remaining"] == 0,
+          "R5.3: …and what is still returnable on the purchase deducts every note that is not cancelled")
+    svc_pur = ps.json()["id"]
+    svcdn = arif.post(f"{BASE}/debit-notes", json={**dn_body, "purchaseId": svc_pur})
+    check(svcdn.status_code == 422 and svcdn.json()["errors"].get("purchaseId") == ["unknown"],
+          "R5.3: a service purchase has no goods to return (422)")
+    dnc = arif.patch(f"{BASE}/debit-notes/{dnid}", json={"process": "Cancelled", "reason": f"R5.3 cancelled {TAG}"})
+    check(dnc.status_code == 200 and pheld() == split5, "R5.3: cancelling puts the goods back on the books")
+    if DB_URL:
+        check(psql(f"select count(*) from notes where id = '{dnid}' and process = 'Cancelled'"
+                   f" and cancel_reason is not null") == "1"
+              and psql(f"select purchased = {pi_pur} from items where id = '{piid}'") == "t",
+              "R5.3: …and the cancellation and the counter are stored on the rows")
+    dn2 = arif.post(f"{BASE}/debit-notes", json=dn_body).json()
+    dnd = arif.delete(f"{BASE}/debit-notes/{dn2['id']}")
+    check(dnd.status_code == 200 and arif.get(f"{BASE}/debit-notes/{dn2['id']}").status_code == 404
+          and arif.delete(f"{BASE}/debit-notes/{dnid}").status_code == 409,
+          "R5.3: a draft debit note is deleted, and an approved one is not (409)")
+    if DB_URL:
+        check(psql("select count(*) from compat_state where data->'db' ? 'creditNotes'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'debitNotes'") == "0",
+              "R5.3: the snapshot carries neither note collection at all")
+        check(int(psql("select count(*) from notes where kind = 'credit'")) >= 5
+              and int(psql("select count(*) from notes where kind = 'debit'")) >= 5
+              and int(psql("select count(*) from note_lines")) >= 10,
+              "R5.3: the demo notes were seeded into their tables, both kinds with their lines")
+        dupno = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                "insert into notes (id, kind, no, source_id, source_no, source_date, source_mode, "
+                                "challan_no, party_id, party_name, party_bin, party_address, branch_id, branch_name, "
+                                "issue_date, issue_time, reason, issued_by, designation, process, subtotal, sd, vat, "
+                                "total, created_at) select 'dupn" + TAG + "', kind, no, source_id, source_no, "
+                                "source_date, source_mode, challan_no, party_id, party_name, party_bin, party_address, "
+                                "branch_id, branch_name, issue_date, issue_time, reason, issued_by, designation, "
+                                "process, 0, 0, 0, 0, now() from notes limit 1"],
+                               capture_output=True, text=True)
+        check(dupno.returncode != 0, "R5.3: the database refuses a duplicate note number (unique index), not just the API")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -1257,6 +1460,53 @@ def run():
         wp = arif.post(f"{BASE}/purchases", json=pur_body)
         check(wp.status_code == 201 and psql(f"select count(*) from purchases where id = '{wp.json().get('id')}'") == "1",
               f"and writes land in the tables on the upgraded database ({wp.status_code})")
+        # … and the notes, which the same release moved out: a database written before them holds both families
+        # inside compat_state. A draft deleted before the upgrade has no place there — the mock removed it for good
+        # — so what has to survive the round trip is the id counter, not the row.
+        print("\nR5.3: upgrading a pre-R5.3 database moves the credit and debit notes into their tables")
+        def note_counts():
+            return (psql("select count(*) from notes where kind = 'credit' and deleted_at is null"),
+                    psql("select count(*) from notes where kind = 'debit' and deleted_at is null"),
+                    psql("select count(*) from note_lines l join notes n on n.id = l.note_id"
+                         " where n.deleted_at is null"))
+
+        def note_registers():
+            return {"credit": arif.get(f"{BASE}/credit-notes", params={"size": 100}).json(),
+                    "debit": arif.get(f"{BASE}/debit-notes", params={"size": 100}).json(),
+                    "sales": arif.get(f"{BASE}/sales", params={"size": 300, "category": "all"}).json()}
+
+        goncn = arif.post(f"{BASE}/credit-notes", json={**cn_body, "note": f"R5.3 deleted {TAG}"}).json()
+        arif.delete(f"{BASE}/credit-notes/{goncn['id']}")
+        ncounts, nbefore, nsplit, nboots = note_counts(), note_registers(), sold_held(), stock_boots()
+        psql(PRE_R53_NOTES)
+        psql("delete from note_lines")
+        psql("delete from notes")
+        check(note_counts() == ("0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'creditNotes'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'debitNotes'") == "1",
+              f"the database is back in the pre-R5.3 shape ({ncounts[0]} credit notes, {ncounts[1]} debit notes, "
+              f"{ncounts[2]} lines inside the snapshot)")
+        restart()
+        check(note_counts() == ncounts,
+              f"the first boot moved every note into the tables ({ncounts[0]} + {ncounts[1]} notes, {ncounts[2]} lines)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'creditNotes'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'debitNotes'") == "0",
+              "…and rewrote the snapshot without them")
+        check(note_registers() == nbefore, "…and serves the same registers, row for row")
+        check(psql(f"select count(*) from notes where id = '{goncn['id']}'") == "0",
+              "a note deleted before the upgrade stays deleted — the mock kept no row for it either")
+        after = arif.post(f"{BASE}/credit-notes", json=cn_body).json()
+        check(int(after["id"][2:]) > int(goncn["id"][2:]) and after["no"] != goncn["no"],
+              f"…but its id and its number stay retired ({goncn['no']} → {after['no']})")
+        check(sold_held() == nsplit, "…and the stock derived from them is unchanged — the branch split survived the round trip")
+        nboots_after, nnow = stock_boots(), note_counts()
+        restart()
+        check(note_counts() == nnow and (nboots is None or nboots_after == nboots + 1)
+              and (nboots is None or stock_boots() == nboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        wn = arif.post(f"{BASE}/debit-notes", json=dn_body)
+        check(wn.status_code == 201 and psql(f"select count(*) from notes where id = '{wn.json().get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({wn.status_code})")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

@@ -1,14 +1,14 @@
 /**
  * The in-process world shared with the compat bundle. Native modules own users, company, units, (R5.2) the
- * parties and items and (R5.3) the stock documents, the sales invoices and the purchases in PostgreSQL, and write
- * every change
+ * parties and items and (R5.3) the stock documents, the sales invoices, the purchases and the credit and debit
+ * notes in PostgreSQL, and write every change
  * through to these globals, so unported handlers (which read them)
  * see the same data. One instance per database — the compat layer is single-writer by design until R5.5 removes it.
  */
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
-import type { AuditEvent, Company, Item, MasterItem, Party, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
+import type { AuditEvent, Company, CreditNote, DebitNote, Item, MasterItem, Party, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
 /** The undo buffer: deleted documents (compat state), deleted parties (R5.2) and deleted sales and purchases
@@ -25,7 +25,8 @@ interface UserStore {
 interface Globals {
   __dzDb?: Record<string, unknown> & {
     units: Unit[]; customers: Party[]; vendors: Party[]; items: Item[]; masterItems: MasterItem[]
-    transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; purchases: Purchase[]; trash: TrashEntry[]
+    transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; purchases: Purchase[]
+    creditNotes: CreditNote[]; debitNotes: DebitNote[]; trash: TrashEntry[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -53,7 +54,8 @@ export function restoreGlobals(s: {
   db: Record<string, unknown>; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
-  purchases: Purchase[]; purchaseTrash: TrashEntry[]; events: AuditEvent[]
+  purchases: Purchase[]; purchaseTrash: TrashEntry[]
+  creditNotes: CreditNote[]; debitNotes: DebitNote[]; events: AuditEvent[]
 }) {
   // documents only: an older snapshot's deleted parties, sales and purchases are rebuilt from their `deleted_at` rows
   const docsTrash = ((s.db as { trash?: TrashEntry[] }).trash ?? [])
@@ -61,6 +63,7 @@ export function restoreGlobals(s: {
   G.__dzDb = {
     ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, items: s.items, masterItems: s.masterItems,
     transfers: s.transfers, damages: s.damages, sales: s.sales, purchases: s.purchases,
+    creditNotes: s.creditNotes, debitNotes: s.debitNotes,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
@@ -163,6 +166,38 @@ export const mirror = {
   },
   removePurchase(id: string) {
     const list = mirror.purchases()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.3: the credit notes — what is still returnable on an invoice, a customer's credit and the VAT return read them */
+  creditNotes: (): CreditNote[] => G.__dzDb!.creditNotes,
+  putCreditNotes(list: CreditNote[]) { const a = mirror.creditNotes(); a.splice(0, a.length, ...list) },
+  findCreditNote: (idOrNo: string) => mirror.creditNotes().find((n) => n.id === idOrNo || n.no === idOrNo),
+  putCreditNote(n: CreditNote) {
+    const list = mirror.creditNotes()
+    const cur = list.find((x) => x.id === n.id)
+    if (cur) replaceObject(cur, n)
+    else list.push(n)
+    return cur ?? n
+  },
+  removeCreditNote(id: string) {
+    const list = mirror.creditNotes()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.3: the debit notes — what is still returnable on a purchase and the input tax a period reverses */
+  debitNotes: (): DebitNote[] => G.__dzDb!.debitNotes,
+  putDebitNotes(list: DebitNote[]) { const a = mirror.debitNotes(); a.splice(0, a.length, ...list) },
+  findDebitNote: (idOrNo: string) => mirror.debitNotes().find((n) => n.id === idOrNo || n.no === idOrNo),
+  putDebitNote(n: DebitNote) {
+    const list = mirror.debitNotes()
+    const cur = list.find((x) => x.id === n.id)
+    if (cur) replaceObject(cur, n)
+    else list.push(n)
+    return cur ?? n
+  },
+  removeDebitNote(id: string) {
+    const list = mirror.debitNotes()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },

@@ -205,11 +205,12 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
 
 - **R5.3 — Backend: the first documents on real tables (branch `r5-nestjs`):** stock transfers and damage entries
   leave the compat layer for `stock_documents` + `stock_document_lines`, the sales invoices (Mushak 6.3) for
-  `sales` + `sale_lines` + `sale_realisations`, and the purchases (local, service and import) for `purchases` +
-  `purchase_lines`. See
+  `sales` + `sale_lines` + `sale_realisations`, the purchases (local, service and import) for `purchases` +
+  `purchase_lines`, and the credit and debit notes (Mushak 6.7/6.8) for `notes` + `note_lines`. See
   [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--stock-documents-on-their-own-tables) (stock documents),
   [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--sales-invoices-on-their-own-tables) (sales invoices) and
-  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--purchases-on-their-own-tables) (purchases).
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--purchases-on-their-own-tables) (purchases) and
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--credit-and-debit-notes-on-their-own-tables) (the notes).
   - **One table for both kinds** (`kind` tells a transfer from a damage entry), because that is how the registers and
     the branch-stock derivation read them. The branch a document consumes is `from_branch_id` for either kind — a
     transfer's origin, a damage entry's own branch — and only a transfer has a destination. `ord` keeps the insertion
@@ -283,7 +284,29 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     facets and CSV columns) through the compat bundle, and both sides were held against the same contract suite:
     676 checks natively, 676 again with the mock handlers serving them (which also proved the write-back for an
     import: a compat-created BoE reached the table with its duty columns and the header's `tti` and `rebate`).
-  - **Tests:** `api_native.py` 263 checks (+116 over the pre-R5.3 147: a stock draft is a row with its lines and moves no stock, approving it moves
+  - **Both note families are one table:** `kind` tells a credit note (goods a customer returns against a sales
+    invoice — the sold quantity and the output VAT come down) from a debit note (goods returned to a vendor against a
+    purchase — the purchased quantity comes down and the input tax credit is reversed), because the two registers,
+    the two "what is still returnable" answers and the two sides of a VAT return read them the same way. The document
+    a note was raised against is `source_id` and the party is `party_id`; the response names them by kind, as the
+    mock's two shapes do. The two totals only a debit note has (`tti`, `rebate`), a line's `sold_qty` /
+    `purchased_qty` and its debit-only totals are NULL on the other side, and check constraints say so.
+  - **A deleted draft keeps its row:** notes have no undo and the mock removed one from its array for good, but its
+    id counter had moved on and its number lives on in the audit trail — so the row is stamped rather than dropped,
+    which is what stops a later note taking the same id, while the next number still skips the deleted draft's. Ids
+    come from the state's own counter, claimed inside the locked transaction and separately from the identity, so a
+    debit note refused for want of stock consumes no id.
+  - **An approval writes what it moves:** a credit note takes `items.sold` down, a debit note `items.purchased`, each
+    with the note, in its transaction, and reversed on cancellation. Approving a debit note needs the goods still on
+    hand (422 while saving, 409 when approving a draft), and cancelling a credit note needs them still on hand too,
+    because they leave the branch again. The rules are the mock's own (`buildCredit` / `buildDebit` — the source
+    document has to exist and still be approved, the note cannot predate it, the period has to be open, every line
+    has to be returnable and priced pro rata — plus the identities, the approve / cancel / stock / delete rules and
+    both registers' specs and CSV columns) through the compat bundle, and both sides were held against the same
+    contract suite: 676 checks natively, 676 again with the mock handlers serving them (which also proved the
+    write-back: a compat-raised note reached the table with its kind, its source, its party and its lines, its
+    approval moved `items.sold`, and its delete stamped the row while the next note took a higher id).
+  - **Tests:** `api_native.py` 306 checks (+159 over the pre-R5.3 147: a stock draft is a row with its lines and moves no stock, approving it moves
     the branch split the still-unported endpoints derive in memory, cancelling gives the stock back, a write-off
     reaches `items.damage` and is taken back, editing a draft replaces the line rows, deleting one removes them and
     retires its number, a create that cannot be approved leaves no row, the database refusing a duplicate document
@@ -311,8 +334,21 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     rewritten into its pre-R5.3 shape (documents, lines, Bills of Entry and duty breakdowns inside `compat_state`,
     the deleted drafts back in its undo buffer, the two tables empty), the API restarted, and the same rows, three
     registers row for row, BoEs, duty columns and derived stock are required back, with a document deleted before
-    the upgrade still undoable afterwards). Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.3:** credit and debit notes (Mushak 6.7/6.8), then the derived stock itself (R5.4).
+    the upgrade still undoable afterwards; then the notes the same way — a credit note is raised against an approved
+    invoice and priced pro rata, a draft moves no stock, approving brings the goods back and takes `items.sold` down
+    with the branch split, the ledger and the invoice's returnable quantity following, cancelling sends the goods out
+    again and stores the reason, editing replaces the line rows, a note cannot move to another invoice, returning more
+    than the document sold or bought is a 422, a note against a draft invoice is a 422, deleting stamps the row and
+    keeps its lines so the next note takes a new id and a new number; and on the debit side `tti` and `rebate` are
+    columns of its row, a return the branch no longer holds is a 409, approving takes `items.purchased` down, a
+    service purchase has no goods to return, the snapshot carries neither collection, the database refuses a duplicate
+    note number — and a **fifth upgrade drill**: both collections with their lines back inside `compat_state`, the two
+    tables empty, the API restarted, and the same notes, lines and registers row for row required back, with a note
+    deleted before the upgrade staying deleted while its id and number stay retired). Contract unchanged: 676 checks /
+    226 endpoints.
+  - **Next:** the remaining document families (production — BOMs, work orders, batches — and opening entries), and
+    then the derived stock itself, the branch split and the ledger, which become relational once every document is a
+    row (R5.4).
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

@@ -8,16 +8,17 @@ import { gzip } from "node:zlib"
 import { asc, eq, sql } from "drizzle-orm"
 import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
-import type { AuditEvent, Damage, Item, MasterItem, Party, Purchase, Sale, StockDoc, Transfer, Unit } from "@/lib/types"
+import type { AuditEvent, CreditNote, Damage, DebitNote, Item, MasterItem, Party, Purchase, Sale, StockDoc, Transfer, Unit } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, compatState, items, masterItems, meta, parties, purchaseLines, purchases, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users } from "./db/schema"
+import { auditEvents, backups, compatState, items, masterItems, meta, noteLines, notes, parties, purchaseLines, purchases, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
 import { compatSnapshot, markSaved } from "./modules/compat"
 import { toUser } from "./modules/identity"
 import { itemValues, markItems, markMasters, masterValues, toItem, toMaster } from "./modules/items"
+import { assembleNotes, markCreditNotes, markDebitNotes, noteLineValues, noteValues, type Note, type NoteKind } from "./modules/notes"
 import { markParties, partyValues, toParty } from "./modules/parties"
 import { assemblePurchases, markPurchases, purchaseLineValues, purchaseValues } from "./modules/purchases"
 import { assembleSales, markSales, realisationValues, saleLineValues, saleValues } from "./modules/sales"
@@ -80,12 +81,17 @@ async function seed(log: (m: string) => void) {
     ...demoPurchaseTrash.map((t) => ({ ...purchaseValues(t.doc as Purchase), deletedAt: new Date(t.at) })),
   ]
   const demoPurchaseLines = demoPurchases.flatMap(purchaseLineValues)
+  // the two note families share one table: a deleted draft the demo data set has is seeded as a stamped row, so its
+  // id and its number stay retired
+  const demoNotes: Note[] = [...m.db.creditNotes, ...m.db.debitNotes]
+  const demoNoteRows = demoNotes.map((x) => noteValues(x))
+  const demoNoteLines = demoNotes.flatMap(noteLineValues)
   const seededAt = new Date().toISOString()
   await db.transaction(async (tx) => {
     await lockState(tx, { checkEpoch: false }) // waits for any other instance's in-flight write (deploy overlap)
     // the append-only guard on audit_events lets this transaction (and only it) clear the table
     await tx.execute(sql`set local dizivat.reseed = 'on'`)
-    for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "sales", "sale_lines", "sale_realisations", "purchases", "purchase_lines", "tariff_lines", "audit_events", "compat_state", "meta"])
+    for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "sales", "sale_lines", "sale_realisations", "purchases", "purchase_lines", "notes", "note_lines", "tariff_lines", "audit_events", "compat_state", "meta"])
       await tx.execute(sql.raw(`delete from ${t}`))
     await tx.insert(users).values(m.userStore.users.map((u, i) => ({
       id: u.id, username: u.username, name: u.name, designation: u.designation, initials: u.initials, email: u.email, role: u.role,
@@ -106,6 +112,8 @@ async function seed(log: (m: string) => void) {
     for (let i = 0; i < demoSaleReals.length; i += 500) await tx.insert(saleRealisations).values(demoSaleReals.slice(i, i + 500))
     for (let i = 0; i < demoPurchaseRows.length; i += 500) await tx.insert(purchases).values(demoPurchaseRows.slice(i, i + 500))
     for (let i = 0; i < demoPurchaseLines.length; i += 500) await tx.insert(purchaseLines).values(demoPurchaseLines.slice(i, i + 500))
+    for (let i = 0; i < demoNoteRows.length; i += 500) await tx.insert(notes).values(demoNoteRows.slice(i, i + 500))
+    for (let i = 0; i < demoNoteLines.length; i += 500) await tx.insert(noteLines).values(demoNoteLines.slice(i, i + 500))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -134,10 +142,12 @@ async function seed(log: (m: string) => void) {
   markStockDocs(demoStock)
   markSales(m.db.sales)
   markPurchases(m.db.purchases)
+  markCreditNotes(m.db.creditNotes)
+  markDebitNotes(m.db.debitNotes)
   G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
   markPersisted(events)
   markSaved(snapshot)
-  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 async function restore(state: { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log: (m: string) => void) {
@@ -172,6 +182,18 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   const purchaseTrash: TrashEntry[] = allPurchases.filter((x) => stampedPurchases.has(x.id))
     .map((x) => ({ kind: "purchase" as const, doc: x, at: stampedPurchases.get(x.id)! }))
     .sort((a, b) => a.at.localeCompare(b.at))
+  const noteRows = await db.select().from(notes).orderBy(asc(notes.ord))
+  const allNotes = await assembleNotes(noteRows.filter((r) => !r.deletedAt))
+  const creditNotes = allNotes.filter((n): n is CreditNote => "saleId" in n)
+  const debitNotes = allNotes.filter((n): n is DebitNote => "purchaseId" in n)
+  // a note deleted before this release left no trace but its number in the audit trail; the stamped rows now hold
+  // the ids, so the counter the mock keeps in `db.seq` is never lower than the highest id the table has seen
+  const seq = (state.db as { seq?: Record<string, number> }).seq ?? {}
+  for (const [key, prefix, list] of [["creditNote", "cn", creditNotes], ["debitNote", "dn", debitNotes]] as const) {
+    const highest = noteRows.filter((r) => r.kind === (prefix === "cn" ? "credit" : "debit"))
+      .reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0)
+    seq[key] = Math.max(seq[key] ?? list.length, highest)
+  }
   const [ep] = await db.select().from(meta).where(eq(meta.key, "seeded_at"))
   setEpoch(ep?.value)
   const raw = await db.execute(sql`select * from audit_events order by id`)
@@ -179,7 +201,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   restoreGlobals({
     db: state.db as never, notifRead: state.notifRead, users: list, prefs, company: await loadCompany(), units: unitRows,
     customers, vendors, partyTrash, items: itemRows, masterItems: masterRows, transfers, damages,
-    sales: liveSales, saleTrash, purchases: livePurchases, purchaseTrash, events,
+    sales: liveSales, saleTrash, purchases: livePurchases, purchaseTrash, creditNotes, debitNotes, events,
   })
   loadCompat()
   markParties([...mirror.parties("customer"), ...mirror.parties("vendor")])
@@ -188,6 +210,8 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   markStockDocs(stockRows)
   markSales(liveSales)
   markPurchases(livePurchases)
+  markCreditNotes(creditNotes)
+  markDebitNotes(debitNotes)
   markPersisted(events)
   const json = compatSnapshot()
   // an adopted snapshot still carries the adopted collections — replace it with the one this version writes. Under
@@ -203,11 +227,12 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     })
   }
   markSaved(json)
-  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 /** The collections R5.2 and R5.3 moved out of `compat_state` into their own tables. */
-const ADOPTED = ["customers", "vendors", "items", "masterItems", "transfers", "damages", "sales", "purchases"] as const
+const ADOPTED = ["customers", "vendors", "items", "masterItems", "transfers", "damages", "sales", "purchases",
+  "creditNotes", "debitNotes"] as const
 
 /**
  * Upgrade: a database written before these tables holds the collections inside `compat_state` (and deleted
@@ -219,7 +244,8 @@ const ADOPTED = ["customers", "vendors", "items", "masterItems", "transfers", "d
 async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: string) => void): Promise<boolean> {
   const s = state.db as {
     customers?: Party[]; vendors?: Party[]; items?: Item[]; masterItems?: MasterItem[]; transfers?: StockDoc[]
-    damages?: StockDoc[]; sales?: Sale[]; purchases?: Purchase[]; trash?: TrashEntry[]
+    damages?: StockDoc[]; sales?: Sale[]; purchases?: Purchase[]; creditNotes?: CreditNote[]; debitNotes?: DebitNote[]
+    trash?: TrashEntry[]
   }
   if (!ADOPTED.some((k) => Array.isArray(s[k]))) return false
   const trashed = (Array.isArray(s.trash) ? s.trash : []).filter((t) => t.kind === "customer" || t.kind === "vendor")
@@ -248,15 +274,20 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
     ...trashedPurchases.map((t) => ({ ...purchaseValues(t.doc as Purchase), deletedAt: new Date(t.at) })),
   ]
   const purchaseLineRows = purchaseDocs.flatMap(purchaseLineValues)
+  const noteDocs: Note[] = [...(s.creditNotes ?? []), ...(s.debitNotes ?? [])]
+  const noteRows = noteDocs.map(noteValues)
+  const noteLineRows = noteDocs.flatMap(noteLineValues)
   const [{ n: haveParties }] = await db.select({ n: sql<number>`count(*)::int` }).from(parties)
   const [{ n: haveItems }] = await db.select({ n: sql<number>`count(*)::int` }).from(items)
   const [{ n: haveMasters }] = await db.select({ n: sql<number>`count(*)::int` }).from(masterItems)
   const [{ n: haveStock }] = await db.select({ n: sql<number>`count(*)::int` }).from(stockDocuments)
   const [{ n: haveSales }] = await db.select({ n: sql<number>`count(*)::int` }).from(sales)
   const [{ n: havePurchases }] = await db.select({ n: sql<number>`count(*)::int` }).from(purchases)
+  const [{ n: haveNotes }] = await db.select({ n: sql<number>`count(*)::int` }).from(notes)
   const moved: string[] = [], movedDocs: string[] = []
   if ((!haveParties && partyRows.length) || (!haveItems && itemRows.length) || (!haveMasters && masterRows.length)
-    || (!haveStock && stockRows.length) || (!haveSales && saleRows.length) || (!havePurchases && purchaseRows.length)) {
+    || (!haveStock && stockRows.length) || (!haveSales && saleRows.length) || (!havePurchases && purchaseRows.length)
+    || (!haveNotes && noteRows.length)) {
     await db.transaction(async (tx) => {
       await lockState(tx) // waits out any other instance's in-flight write; the epoch is not set yet
       if (!haveParties && partyRows.length) {
@@ -286,6 +317,12 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
         for (let i = 0; i < purchaseRows.length; i += 500) await tx.insert(purchases).values(purchaseRows.slice(i, i + 500))
         for (let i = 0; i < purchaseLineRows.length; i += 500) await tx.insert(purchaseLines).values(purchaseLineRows.slice(i, i + 500))
         movedDocs.push(`${purchaseRows.length - trashedPurchases.length} purchases (+ ${trashedPurchases.length} deleted, ${purchaseLineRows.length} lines)`)
+      }
+      if (!haveNotes && noteRows.length) {
+        for (let i = 0; i < noteRows.length; i += 500) await tx.insert(notes).values(noteRows.slice(i, i + 500))
+        for (let i = 0; i < noteLineRows.length; i += 500) await tx.insert(noteLines).values(noteLineRows.slice(i, i + 500))
+        const cn = (s.creditNotes ?? []).length
+        movedDocs.push(`${cn} credit notes and ${(s.debitNotes ?? []).length} debit notes (${noteLineRows.length} lines)`)
       }
     })
     if (moved.length) log(`R5.2 upgrade: ${moved.join(", ")} moved out of compat_state into their own tables`)

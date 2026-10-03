@@ -22,6 +22,7 @@ export const NATIVE = [
   // `sale_realisations`); the branch stock, the ledger and the VAT returns still derive from every document
   "sales", "sales/[id]", "sales/[id]/creditable", "sales/[id]/realisations", "sales/[id]/restore", "sales/bulk",
   "purchases", "purchases/[id]", "purchases/[id]/restore", "purchases/[id]/returnable", "purchases/bulk",
+  "credit-notes", "credit-notes/[id]", "debit-notes", "debit-notes/[id]",
 ]
 
 const found = []
