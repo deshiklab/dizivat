@@ -7,8 +7,8 @@ import { csvResponse, delay, runQuery, toCSV, type QuerySpec } from "@/lib/mock/
 import { batchInput, batchReceiveInput, bomInput, cancelInput, creditNoteInput, productionConfigInput, saleInput, workOrderInput } from "@/lib/schemas"
 import type { AuditChange, Batch, BatchLine, Bom, BomRow, BomStatus, Consumption, CreditLine, CreditNote, HistoryEntry, Lot, Party, Sale, WorkOrder } from "@/lib/types"
 import { calcBom, calcCreditLine, round2, round4 } from "@/lib/vat"
-import { deny, json, problem, withAuth, zodProblem } from "./_lib"
-import { lockedConflict, lockedField } from "./_r4"
+import { deny, invalidRule, json, problem, withAuth, zodErrors, zodProblem, type RuleProblem } from "./_lib"
+import { lockedConflict, lockedField, lockedFieldRule } from "./_r4"
 
 type Ctx = { params: Promise<{ id: string }> }
 type Entity = "creditNote" | "bom" | "workOrder" | "batch"
@@ -39,32 +39,40 @@ export type SaleData = z.output<typeof saleInput>
  * Validates a sales-invoice body for every R3 variant. Foreign customers need export documents (zero-rated);
  * deemed exports (back-to-back LC) go to local customers; service sales use the sale-service list and move no stock.
  */
-export function parseSale(body: unknown, self?: Sale): Response | { data: SaleData; cust: Party; fields: ReturnType<typeof buildSaleFields> } {
+/** What a sale's lines become once priced: the fields buildSaleFields produces. */
+export type SaleFields = ReturnType<typeof buildSaleFields>
+
+/**
+ * Validates a sale body (goods, export / deemed export, or service) and prices it. R5.3: returns the rejection as
+ * data (`RuleProblem`) instead of a Response, so the API's native sale module raises the same 422/409 from the same
+ * rules — the mock's side turns it back into a Response with `ruleResponse`.
+ */
+export function parseSale(body: unknown, self?: Sale): RuleProblem | { data: SaleData; cust: Party; fields: SaleFields } {
   const parsed = saleInput.safeParse(body)
-  if (!parsed.success) return zodProblem(parsed.error)
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
   const d = parsed.data
   const cust = db.customers.find((c) => c.id === d.customerId && c.active !== false)
-  if (!cust) return invalid({ customerId: ["unknown"] })
+  if (!cust) return invalidRule({ customerId: ["unknown"] })
   const service = d.category === "service"
-  if (self && service !== (self.category === "service")) return problem(409, "A goods sale cannot become a service sale (or vice versa).")
+  if (self && service !== (self.category === "service")) return { status: 409, title: "A goods sale cannot become a service sale (or vice versa)." }
   const bad = (service ? unknownSaleServices(d.lines) : unknownItems(d.lines, "Finished Goods")) ?? unknownBranch(d.branchId)
-  if (bad) return invalid(bad)
+  if (bad) return invalidRule(bad)
   if (service) {
-    if (cust.mode === "Foreign") return invalid({ customerId: ["foreignService"] })
+    if (cust.mode === "Foreign") return invalidRule({ customerId: ["foreignService"] })
     d.export = undefined
   } else {
-    if (cust.mode === "Foreign" && !d.export) return invalid({ export: ["exportRequired"] })
+    if (cust.mode === "Foreign" && !d.export) return invalidRule({ export: ["exportRequired"] })
     if (d.export) {
-      if (d.export.deemed && cust.mode === "Foreign") return invalid({ "export.deemed": ["deemedLocalOnly"] })
-      if (!d.export.deemed && cust.mode !== "Foreign") return invalid({ "export.deemed": ["exportForeignOnly"] })
-      if (d.export.lcDate > d.issueDate) return invalid({ "export.lcDate": ["lcAfterInvoice"] })
-      if (!d.export.deemed && d.export.billDate && d.export.billDate < d.issueDate) return invalid({ "export.billDate": ["beforeInvoice"] })
+      if (d.export.deemed && cust.mode === "Foreign") return invalidRule({ "export.deemed": ["deemedLocalOnly"] })
+      if (!d.export.deemed && cust.mode !== "Foreign") return invalidRule({ "export.deemed": ["exportForeignOnly"] })
+      if (d.export.lcDate > d.issueDate) return invalidRule({ "export.lcDate": ["lcAfterInvoice"] })
+      if (!d.export.deemed && d.export.billDate && d.export.billDate < d.issueDate) return invalidRule({ "export.billDate": ["beforeInvoice"] })
       // R6.5: our own UD / UP — must be on file and not settled yet (unless this invoice was already on it)
       const own = d.export.ownUdNo?.trim().toUpperCase()
       if (own) {
         const u = db.bondUds.find((x) => x.no.toUpperCase() === own)
-        if (!u) return invalid({ "export.ownUdNo": ["unknownUd"] })
-        if (u.settlement && self?.export?.ownUdNo?.toUpperCase() !== own) return invalid({ "export.ownUdNo": ["settledUd"] })
+        if (!u) return invalidRule({ "export.ownUdNo": ["unknownUd"] })
+        if (u.settlement && self?.export?.ownUdNo?.toUpperCase() !== own) return invalidRule({ "export.ownUdNo": ["settledUd"] })
       }
     }
     const errors: Record<string, string[]> = {}
@@ -73,9 +81,9 @@ export function parseSale(body: unknown, self?: Sale): Response | { data: SaleDa
       const b = db.batches.find((x) => x.id === l.batchId && x.process === "Approved")
       if (!b || !b.lines.some((bl) => bl.itemId === l.itemId && bl.receiveQty > 0)) errors[`lines.${i}.batchId`] = ["unknownBatch"]
     })
-    if (has(errors)) return invalid(errors)
+    if (has(errors)) return invalidRule(errors)
   }
-  const lock = lockedField(d.issueDate, "issueDate"); if (lock) return lock
+  const lock = lockedFieldRule(d.issueDate, "issueDate"); if (lock) return invalidRule(lock)
   return { data: d, cust, fields: buildSaleFields(d, cust) }
 }
 

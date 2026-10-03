@@ -5,7 +5,7 @@ import { stockLine } from "@/lib/mock/seed-stock"
 import { csvResponse, delay, runQuery, toCSV, type QuerySpec } from "@/lib/mock/query"
 import { cancelInput, damageInput, transferInput } from "@/lib/schemas"
 import type { AuditChange, Damage, HistoryEntry, Process, StockDoc, StockDocKind, Transfer } from "@/lib/types"
-import { deny, json, problem, withAuth, zodErrors, zodProblem } from "./_lib"
+import { deny, json, problem, ruleResponse, withAuth, zodErrors, zodProblem, type RuleProblem } from "./_lib"
 
 type Ctx = { params: Promise<{ id: string }> }
 type TransferData = z.output<typeof transferInput>
@@ -23,7 +23,7 @@ type DamageData = z.output<typeof damageInput>
 export const LABEL: Record<StockDocKind, string> = { transfer: "Stock transfer", damage: "Damage entry" }
 export const PREFIX: Record<StockDocKind, "TR" | "DM"> = { transfer: "TR", damage: "DM" }
 /** A rejection as data: the status, title and field → codes both sides answer with. */
-export type StockProblem = { status: 400 | 409 | 422; title: string; errors?: Record<string, string[]> }
+export type StockProblem = RuleProblem
 
 /** The documents of one kind, in insertion order — the order a sorted list falls back to. */
 export const stockDocs = (k: StockDocKind): StockDoc[] => (k === "transfer" ? db.transfers : db.damages)
@@ -133,7 +133,7 @@ export function approveDoc(d: StockDoc, by: string, at: string, status: 409 | 42
 function approve(d: StockDoc, by: string, status: 409 | 422 = 409) {
   const at = new Date().toISOString()
   const p = approveDoc(d, by, at, status)
-  if (p) return problem(p.status, p.title, p.errors)
+  if (p) return ruleResponse(p)
   recordAudit({ at, actor: by, entity: d.kind, entityId: d.id, ref: d.no, action: "approved" })
   return null
 }
@@ -209,7 +209,7 @@ export function stockListRoutes(k: StockDocKind) {
 
   const POST = withAuth("doc.create", async (req, _ctx, user) => {
     const r = buildStock(k, await req.json().catch(() => ({})))
-    if ("status" in r) return problem(r.status, r.title, r.errors)
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
     db.seq[k] += 1
     const base = { id: `${k === "transfer" ? "t" : "d"}${db.seq[k]}`, no: nextStockNo(k, r.fields!.date), process: "Created" as const, issuedBy: user.name, createdAt: new Date().toISOString(), history: [] }
@@ -241,7 +241,7 @@ export function stockDocRoutes(k: StockDocKind) {
     if (!d) return problem(404, `${LABEL[k]} not found`)
     if (d.process !== "Created") return problem(409, `Only drafts can be edited — ${d.no} is ${d.process}.`)
     const r = buildStock(k, await req.json().catch(() => ({})))
-    if ("status" in r) return problem(r.status, r.title, r.errors)
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") {
       const no = deny(user, "doc.approve"); if (no) return no
       const probe = { ...d, ...r.fields } as StockDoc
@@ -272,7 +272,7 @@ export function stockDocRoutes(k: StockDocKind) {
       if (!r.success) return zodProblem(r.error)
       const at = new Date().toISOString()
       const p = cancelDoc(d, user.name, r.data.reason, at)
-      if (p) return problem(p.status, p.title, p.errors)
+      if (p) return ruleResponse(p)
       recordAudit({ at, actor: user.name, entity: d.kind, entityId: d.id, ref: d.no, action: "cancelled", note: r.data.reason })
       return json(d)
     }

@@ -2,7 +2,7 @@ import { addHistory, branchLabels, db, nextDocId, nextNo, postStock } from "@/li
 import { buildPurchaseFields } from "@/lib/mock/build"
 import { csvResponse, delay, runQuery, toCSV } from "@/lib/mock/query"
 import type { Purchase } from "@/lib/types"
-import { deny, json, withAuth } from "../_lib"
+import { deny, json, ruleResponse, withAuth } from "../_lib"
 import { parsePurchase } from "../_docs"
 
 const spec = {
@@ -41,7 +41,7 @@ export const GET = withAuth(null, async (req) => {
 
 export const POST = withAuth("doc.create", async (req, _ctx, user) => {
   const parsed = parsePurchase(await req.json().catch(() => ({})))
-  if (parsed instanceof Response) return parsed
+  if ("status" in parsed) return ruleResponse(parsed)
   const { data: d, vendor: v } = parsed
   if (d.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
   const p: Purchase = {

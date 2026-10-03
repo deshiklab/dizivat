@@ -1,7 +1,7 @@
 import { addHistory, branchLabels, db, nextDocId, nextNo, postStock, stockShortfall } from "@/lib/mock/db"
 import { csvResponse, delay, runQuery, toCSV } from "@/lib/mock/query"
 import type { Sale } from "@/lib/types"
-import { deny, json, problem, withAuth } from "../_lib"
+import { deny, json, problem, ruleResponse, withAuth } from "../_lib"
 import { lotShortfall, parseSale } from "../_r3"
 
 const spec = {
@@ -42,7 +42,7 @@ export const GET = withAuth(null, async (req) => {
 
 export const POST = withAuth("doc.create", async (req, _ctx, user) => {
   const r = parseSale(await req.json().catch(() => ({})))
-  if (r instanceof Response) return r
+  if ("status" in r) return ruleResponse(r)
   const { data: d, fields } = r
   if (d.process === "Approved") {
     const no = deny(user, "doc.approve"); if (no) return no
