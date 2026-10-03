@@ -3,7 +3,7 @@ import { diff } from "@/lib/mock/audit"
 import { buildPurchaseFields, unknownBranch, unknownItems, unknownServices } from "@/lib/mock/build"
 import { delay } from "@/lib/mock/query"
 import { cancelInput, importInput, purchaseInput, realisationInput } from "@/lib/schemas"
-import type { ExportInfo, HistoryEntry, Line, Party, Purchase, Realisation, Sale } from "@/lib/types"
+import type { CreditNote, DebitNote, ExportInfo, HistoryEntry, Line, Party, Purchase, Realisation, Sale } from "@/lib/types"
 import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
 import { lotShortfall, parseSale } from "./_r3"
 import { lockedConflictProblem, lockedFieldRule, settlementsOf } from "./_r4"
@@ -288,12 +288,37 @@ export function stampDocHistory(doc: Doc, by: string, action: HistoryEntry["acti
 }
 
 const DOC_FIELDS = ["branchName", "customerName", "vendorName", "issueDate", "issueTime", "challanNo", "challanDate", "method", "deliveryAddress", "vehicle", "mode", "narration", "subtotal", "sd", "vat", "discount", "netTotal", "paid"]
+/** R5.3: what an edit of a credit or debit note records — its header fields plus a one-line summary of the lines. */
+const NOTE_FIELDS = ["issueDate", "issueTime", "reason", "note", "subtotal", "vat", "total"]
 /** Header-field diff plus a one-line summary of line changes (count / qty / price). */
 export function docDiff(a: Doc, b: Doc) {
   const out = diff(a, b, DOC_FIELDS)
   const sig = (d: Doc) => d.lines.map((l) => `${l.name} × ${l.qty} @ ${l.price}`).join("; ")
   if (sig(a) !== sig(b)) out.push({ field: "lines", from: sig(a), to: sig(b) })
   return out
+}
+
+/** Only a draft note may be edited — checked before the body is parsed, exactly as the mock checked it. */
+export function noteDraftRule(n: CreditNote | DebitNote): RuleProblem | undefined {
+  return n.process !== "Created" ? { status: 409, title: `Only drafts can be edited — ${n.no} is ${n.process}.` } : undefined
+}
+
+export function noteDiff(a: CreditNote | DebitNote, b: CreditNote | DebitNote) {
+  const out = diff(a, b, NOTE_FIELDS)
+  const sig = (d: CreditNote | DebitNote) => d.lines.map((l) => `${l.name} × ${l.qty}`).join("; ")
+  if (sig(a) !== sig(b)) out.push({ field: "lines", from: sig(a), to: sig(b) })
+  return out
+}
+
+/**
+ * Appends to a note's own history and stamps `updatedAt`, without recording an audit event — the API's native note
+ * module records the event itself (through AuditService, into `audit_events`), so it needs the history half on its
+ * own. Same entry, same timestamp as the audit event.
+ */
+export function stampNoteHistory(doc: CreditNote | DebitNote, by: string, action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) {
+  doc.history = [...(doc.history ?? []), { at, by, action, note }]
+  doc.updatedAt = at
+  return at
 }
 
 export function docRoutes(k: Kind) {
