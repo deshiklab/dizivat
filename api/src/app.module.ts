@@ -7,19 +7,32 @@ import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
 import { CompatController, CompatService } from "./modules/compat"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
+import { CustomersController, PartiesService, VendorsController } from "./modules/parties"
+import { ItemsController, ItemsService, MasterItemsController } from "./modules/items"
+import { DamageController, StockService, TransfersController } from "./modules/stock"
+import { PurchasesController, PurchasesService } from "./modules/purchases"
+import { SalesController, SalesService } from "./modules/sales"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
 import { SEED_VERSION } from "./boot"
 
 export const VERSION = "0.15.0"
-const NATIVE_CONTROLLERS = [AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController]
+const NATIVE_CONTROLLERS = [
+  AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController,
+  CustomersController, VendorsController, ItemsController, MasterItemsController, TransfersController, DamageController,
+  PurchasesController,
+  SalesController,
+]
 
 @Global()
 @Module({
   providers: [
-    SessionService, AuditService, UsersService, UnitsService, CompatService, BackupsService,
-    { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
+    PurchasesService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [SessionService, AuditService, UsersService, UnitsService, CompatService, BackupsService],
+  exports: [
+    SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
+    PurchasesService, CompatService, BackupsService,
+  ],
 })
 class CoreModule {}
 
