@@ -8,7 +8,7 @@
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
-import type { AuditEvent, Company, CreditNote, DebitNote, Item, MasterItem, Party, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
+import type { AuditEvent, Company, CreditNote, DebitNote, Item, MasterItem, OpeningEntry, Party, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
 /** The undo buffer: deleted documents (compat state), deleted parties (R5.2) and deleted sales and purchases
@@ -26,7 +26,7 @@ interface Globals {
   __dzDb?: Record<string, unknown> & {
     units: Unit[]; customers: Party[]; vendors: Party[]; items: Item[]; masterItems: MasterItem[]
     transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; purchases: Purchase[]
-    creditNotes: CreditNote[]; debitNotes: DebitNote[]; trash: TrashEntry[]
+    creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; trash: TrashEntry[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -55,7 +55,7 @@ export function restoreGlobals(s: {
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
-  creditNotes: CreditNote[]; debitNotes: DebitNote[]; events: AuditEvent[]
+  creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; events: AuditEvent[]
 }) {
   // documents only: an older snapshot's deleted parties, sales and purchases are rebuilt from their `deleted_at` rows
   const docsTrash = ((s.db as { trash?: TrashEntry[] }).trash ?? [])
@@ -63,7 +63,7 @@ export function restoreGlobals(s: {
   G.__dzDb = {
     ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, items: s.items, masterItems: s.masterItems,
     transfers: s.transfers, damages: s.damages, sales: s.sales, purchases: s.purchases,
-    creditNotes: s.creditNotes, debitNotes: s.debitNotes,
+    creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
@@ -198,6 +198,22 @@ export const mirror = {
   },
   removeDebitNote(id: string) {
     const list = mirror.debitNotes()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.4: the opening stock entries — the branch split and an item's ledger read them first */
+  openings: (): OpeningEntry[] => G.__dzDb!.openings,
+  putOpenings(list: OpeningEntry[]) { const a = mirror.openings(); a.splice(0, a.length, ...list) },
+  findOpening: (idOrNo: string) => mirror.openings().find((o) => o.id === idOrNo || o.no === idOrNo),
+  putOpening(o: OpeningEntry) {
+    const list = mirror.openings()
+    const cur = list.find((x) => x.id === o.id)
+    if (cur) replaceObject(cur, o)
+    else list.push(o)
+    return cur ?? o
+  },
+  removeOpening(id: string) {
+    const list = mirror.openings()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },

@@ -751,6 +751,66 @@ export const noteLines = pgTable("note_lines", {
 ])
 
 /**
+ * R5.4 — an opening stock entry (legacy "Opening Stock"): the quantity a SKU was brought forward with at go-live,
+ * its purchase value and the input-tax class that value belongs to. One row per entry, one item each — the branch
+ * stock and an item's ledger both read them, which is why they are the first of the two collections the derivation
+ * still needed (the other is the production batches).
+ */
+export const openingEntries = pgTable("opening_entries", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** OS-MMYY#### — unique, and never reused: the audit trail keeps a deleted draft's number */
+  no: text("no").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed: the SKU's name, HS code, SKU and unit when the entry was made */
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  /** the input-tax class the opening value belongs to in Mushak 6.1 */
+  inputTax: text("input_tax", { enum: ["standard", "reduced", "zero", "exempt"] }).notNull(),
+  /** rounded to the unit's own decimals, as the mock rounded it */
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** VAT paid on this stock when it was bought — the 6.1 opening value's tax column */
+  vatPaid: numeric("vat_paid", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+  /* R6.4: the part of this opening stock still warehoused under the customs bond at go-live */
+  bondBoeNo: text("bond_boe_no"),
+  bondBoeDate: date("bond_boe_date", { mode: "string" }),
+  bondQty: numeric("bond_qty", { precision: 18, scale: 3, mode: "number" }),
+  bondDutyForegone: numeric("bond_duty_foregone", { precision: 18, scale: 2, mode: "number" }),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the entry's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later entry taking the same id. There is no undo for an entry.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("opening_entries_no_key").on(t.no),
+  index("opening_entries_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("opening_entries_date_idx").on(t.date),
+  /** the register's `?item=` filter, and the ledger's opening rows */
+  index("opening_entries_item_idx").on(t.itemId),
+  index("opening_entries_branch_idx").on(t.branchId),
+  check("opening_entries_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("opening_entries_input_tax_check", sql`${t.inputTax} in ('standard','reduced','zero','exempt')`),
+  // the bond block is all there or not at all
+  check("opening_entries_bond_check", sql`(${t.bondBoeNo} is null and ${t.bondQty} is null) or (${t.bondBoeNo} is not null and ${t.bondQty} is not null)`),
+])
+
+/**
  * Modules not yet migrated (purchases, production, accounting, VAT returns…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */

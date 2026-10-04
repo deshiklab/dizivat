@@ -188,6 +188,28 @@ PRE_R53_PURCHASE_TRASH = f"""update compat_state set data = jsonb_set(data, '{{d
 PURCHASE_TRASH_LEFT = """select count(*) from compat_state where jsonb_typeof(data->'db'->'trash') = 'array'
   and exists (select 1 from jsonb_array_elements(data->'db'->'trash') t where t->>'kind' = 'purchase')"""
 
+# ── R5.4 upgrade drill: the opening stock entries ────────────────────────────────────────────────────────────
+# A database written before the entries had a table holds them inside compat_state, the R6.4 bond block of a go-live
+# entry included. These statements rebuild that shape from the live table, so the first boot on this code has to
+# adopt it. Nothing here ships either: it is the inverse of the opening-stock half of `adoptCompatRows()` in
+# api/src/boot.ts, for the test only.
+OPENING_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', o.id, 'no', o.no, 'itemId', o.item_id, 'name', o.name, 'hsCode', o.hs_code, 'sku', o.sku, 'uom', o.uom,
+    'branchId', o.branch_id, 'branchName', o.branch_name, 'date', o.date, 'inputTax', o.input_tax, 'qty', o.qty,
+    'price', o.price, 'value', o.value, 'vatPaid', o.vat_paid, 'note', o.note,
+    'bond', case when o.bond_boe_no is null then null else jsonb_build_object(
+      'boeNo', o.bond_boe_no, 'boeDate', o.bond_boe_date, 'qty', o.bond_qty,
+      'dutyForegone', o.bond_duty_foregone) end,
+    'process', o.process, 'issuedBy', o.issued_by, 'createdAt', """ + _ISO.format("o.created_at") + """,
+    'updatedAt', """ + _ISO.format("o.updated_at") + """, 'cancelReason', o.cancel_reason,
+    'history', o.history)""") + ")")
+OPENING_AGG = (f"(select coalesce(jsonb_agg({OPENING_DOC} order by o.ord), '[]'::jsonb) "
+               f"from opening_entries o where o.deleted_at is null)")
+# the entries back inside the snapshot (a deleted draft has no place there: the mock removed it for good)
+PRE_R54_OPENINGS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'openings', {OPENING_AGG}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -1056,6 +1078,92 @@ def run():
                                capture_output=True, text=True)
         check(dupno.returncode != 0, "R5.3: the database refuses a duplicate note number (unique index), not just the API")
 
+    # ── R5.4: the opening stock entries ───────────────────────────────────────────────────────────────────────
+    print("R5.4: opening stock entries are rows, and the stock derived from them follows")
+    osplit0 = held()
+    oopen0 = float(psql(f"select opening from items where id = '{iid}'")) if DB_URL else None
+    os_body = {"itemId": iid, "branchId": branch, "date": tdate, "inputTax": "standard", "qty": 7, "price": 12.5,
+               "vatPaid": 3.25, "note": f"R5.4 opening {TAG}", "process": "Created"}
+    os1 = arif.post(f"{BASE}/opening-stock", json=os_body)
+    oid, ono = os1.json().get("id"), os1.json().get("no")
+    check(os1.status_code == 201 and os1.json()["process"] == "Created" and str(ono).startswith("OS-")
+          and os1.json()["value"] == 87.5 and os1.json()["branchName"]
+          and [h["action"] for h in os1.json()["history"]] == ["created"],
+          f"native (R5.4): an opening entry is created and numbered ({os1.status_code} {ono})")
+    check(held() == osplit0, "R5.4: a draft entry moves no stock")
+    if DB_URL:
+        check(psql(f"select count(*) from opening_entries where id = '{oid}' and process = 'Created'"
+                   f" and item_id = '{iid}' and value = 87.5 and vat_paid = 3.25 and bond_boe_no is null") == "1",
+              "R5.4: the draft is a row in opening_entries, with its value and the VAT paid on it")
+    osa = arif.patch(f"{BASE}/opening-stock/{oid}", json={"process": "Approved"})
+    check(osa.status_code == 200 and osa.json()["process"] == "Approved"
+          and held() == (osplit0[0] + 7, osplit0[1] + 7, osplit0[2]),
+          f"R5.4: approving brings the quantity in, and the branch split derived in memory follows ({osa.status_code})")
+    oled = arif.get(f"{BASE}/items/{iid}/ledger").json()
+    check(any(e.get("ref") == ono and e.get("type") == "opening" for e in oled["entries"]),
+          "R5.4: …and the item's ledger quotes the entry as its opening row")
+    if DB_URL:
+        check(psql(f"select opening = {oopen0 + 7} from items where id = '{iid}'") == "t",
+              "R5.4: …and the counter it moved is written with it (items.opening)")
+        check(psql(f"select jsonb_array_length(history) from opening_entries where id = '{oid}'") == "2",
+              "R5.4: the entry's own history travels with the row")
+    osc = arif.patch(f"{BASE}/opening-stock/{oid}", json={"process": "Cancelled", "reason": f"R5.4 cancelled {TAG}"})
+    check(osc.status_code == 200 and held() == osplit0, "R5.4: cancelling takes the quantity back out")
+    if DB_URL:
+        check(psql(f"select count(*) from opening_entries where id = '{oid}' and process = 'Cancelled'"
+                   f" and cancel_reason is not null") == "1"
+              and psql(f"select opening = {oopen0} from items where id = '{iid}'") == "t",
+              "R5.4: …and the cancellation and the counter are stored on the rows")
+    check(arif.patch(f"{BASE}/opening-stock/{oid}", json={"process": "Cancelled", "reason": "again"}).status_code == 409,
+          "R5.4: an entry that is already cancelled refuses a second cancellation (409)")
+    check(arif.patch(f"{BASE}/opening-stock/{oid}", json={"process": "Approved"}).status_code == 409,
+          "R5.4: …and a cancelled entry cannot be approved again (409)")
+    # editing a draft replaces its fields; deleting one stamps the row, so its id and number stay retired
+    os2 = arif.post(f"{BASE}/opening-stock", json=os_body).json()
+    ose = arif.put(f"{BASE}/opening-stock/{os2['id']}", json={**os_body, "qty": 3, "price": 10, "inputTax": "exempt"})
+    check(ose.status_code == 200 and ose.json()["qty"] == 3 and ose.json()["value"] == 30
+          and ose.json()["inputTax"] == "exempt" and [h["action"] for h in ose.json()["history"]][-1] == "edited",
+          f"R5.4: editing a draft entry replaces its fields ({ose.status_code})")
+    if DB_URL:
+        check(psql(f"select qty::text || '/' || value::text || '/' || input_tax from opening_entries"
+                   f" where id = '{os2['id']}'") == "3.000/30.00/exempt", "R5.4: …on the row")
+    bad_item = arif.post(f"{BASE}/opening-stock", json={**os_body, "itemId": "nosuchitem"})
+    bad_branch = arif.post(f"{BASE}/opening-stock", json={**os_body, "branchId": "nosuchbranch"})
+    check(bad_item.status_code == 422 and bad_item.json()["errors"].get("itemId") == ["unknown"]
+          and bad_branch.status_code == 422 and bad_branch.json()["errors"].get("branchId") == ["unknownBranch"],
+          "R5.4: an unknown SKU or branch is a 422, from the mock's own rules")
+    osd = arif.delete(f"{BASE}/opening-stock/{os2['id']}")
+    check(osd.status_code == 200 and osd.json().get("ok") is True
+          and arif.get(f"{BASE}/opening-stock/{os2['id']}").status_code == 404,
+          "R5.4: a draft entry is deleted and leaves the register")
+    if DB_URL:
+        check(psql(f"select count(*) from opening_entries where id = '{os2['id']}' and deleted_at is not null") == "1",
+              "R5.4: …as a stamped row, so its id stays retired")
+    os3 = arif.post(f"{BASE}/opening-stock", json=os_body).json()
+    check(os3["no"] != os2["no"] and int(os3["id"][2:]) > int(os2["id"][2:]),
+          f"R5.4: the next entry takes a new number and a new id ({os2['no']} → {os3['no']})")
+    check(arif.delete(f"{BASE}/opening-stock/{os3['id']}").status_code == 200
+          and arif.get(f"{BASE}/opening-stock", params={"item": iid, "size": 100}).json()["total"]
+          == int(psql(f"select count(*) from opening_entries where item_id = '{iid}' and deleted_at is null")) if DB_URL else True,
+          "R5.4: the register's ?item= filter serves one SKU's entries from the table")
+    if DB_URL:
+        check(psql("select count(*) from compat_state where data->'db' ? 'openings'") == "0",
+              "R5.4: the snapshot carries no openings collection at all")
+        check(int(psql("select count(*) from opening_entries")) >= 24
+              and int(psql("select count(*) from opening_entries where bond_boe_no is not null")) >= 2,
+              "R5.4: the demo entries were seeded into their table, the R6.4 bond blocks with them")
+        check(len(arif.get(f"{BASE}/vat/bond").json().get("rows", []) or []) >= 0
+              and arif.get(f"{BASE}/vat/bond").status_code == 200,
+              "R5.4: …and the bond register, which reads those blocks, still answers")
+        dupno = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                "insert into opening_entries (id, no, item_id, name, hs_code, sku, uom, branch_id, "
+                                "branch_name, date, input_tax, qty, price, value, vat_paid, process, issued_by, "
+                                "created_at) select 'dupo" + TAG + "', no, item_id, name, hs_code, sku, uom, branch_id, "
+                                "branch_name, date, input_tax, 0, 0, 0, 0, process, issued_by, now() "
+                                "from opening_entries limit 1"],
+                               capture_output=True, text=True)
+        check(dupno.returncode != 0, "R5.4: the database refuses a duplicate entry number (unique index), not just the API")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -1507,6 +1615,56 @@ def run():
         wn = arif.post(f"{BASE}/debit-notes", json=dn_body)
         check(wn.status_code == 201 and psql(f"select count(*) from notes where id = '{wn.json().get('id')}'") == "1",
               f"and writes land in the tables on the upgraded database ({wn.status_code})")
+        # ── R5.4 ───────────────────────────────────────────────────────────────────────────────────────────────
+        # The release after the documents: a database written before the opening entries had a table holds them
+        # inside compat_state, the R6.4 bond block of a go-live entry included. A draft deleted before the upgrade
+        # has no place there — the mock removed it for good — so what has to survive is the id counter, not the row.
+        print("\nR5.4: upgrading a pre-R5.4 database moves the opening stock entries into their table")
+        def opening_counts():
+            return (psql("select count(*) from opening_entries where deleted_at is null"),
+                    psql("select count(*) from opening_entries where bond_boe_no is not null"))
+
+        def opening_registers():
+            return {"openings": arif.get(f"{BASE}/opening-stock", params={"size": 200}).json(),
+                    "stock": arif.get(f"{BASE}/stock", params={"size": 200}).json(),
+                    "items": arif.get(f"{BASE}/items", params={"size": 200}).json()}
+
+        goneo = arif.post(f"{BASE}/opening-stock", json={**os_body, "note": f"R5.4 deleted {TAG}"}).json()
+        arif.delete(f"{BASE}/opening-stock/{goneo['id']}")
+        def opening_boots():
+            """How many boots adopted the opening entries — one `R5.4 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return fh.read().count("R5.4 upgrade:")
+
+        ocounts, obefore, osplit, oboots = opening_counts(), opening_registers(), held(), opening_boots()
+        psql(PRE_R54_OPENINGS)
+        psql("delete from opening_entries")
+        check(opening_counts() == ("0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'openings'") == "1",
+              f"the database is back in the pre-R5.4 shape ({ocounts[0]} entries, {ocounts[1]} of them bonded, "
+              f"inside the snapshot)")
+        restart()
+        check(opening_counts() == ocounts, f"the first boot moved every entry into the table ({ocounts[0]} entries)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'openings'") == "0",
+              "…and rewrote the snapshot without them")
+        check(opening_registers() == obefore,
+              "…and serves the same three registers, row for row — the branch split and the items with them")
+        check(psql(f"select count(*) from opening_entries where id = '{goneo['id']}'") == "0",
+              "an entry deleted before the upgrade stays deleted — the mock kept no row for it either")
+        aftero = arif.post(f"{BASE}/opening-stock", json=os_body).json()
+        check(int(aftero["id"][2:]) > int(goneo["id"][2:]) and aftero["no"] != goneo["no"],
+              f"…but its id and its number stay retired ({goneo['no']} → {aftero['no']})")
+        check(held() == osplit, "…and the stock derived from them is unchanged")
+        oboots_after, onow = opening_boots(), opening_counts()
+        restart()
+        check(opening_counts() == onow and (oboots is None or oboots_after == oboots + 1)
+              and (oboots is None or opening_boots() == oboots_after),
+              "a second boot adopts nothing again — the table is the only copy from then on")
+        wo = arif.post(f"{BASE}/opening-stock", json=os_body)
+        check(wo.status_code == 201 and psql(f"select count(*) from opening_entries where id = '{wo.json().get('id')}'") == "1",
+              f"and writes land in the table on the upgraded database ({wo.status_code})")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

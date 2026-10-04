@@ -78,6 +78,13 @@
       "when": 1791054573425,
       "tag": "0010_r53_notes",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791083409498,
+      "tag": "0011_r54_opening_entries",
+      "breakpoints": true
     }
   ]
 }

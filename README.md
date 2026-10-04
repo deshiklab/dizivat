@@ -346,9 +346,47 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     tables empty, the API restarted, and the same notes, lines and registers row for row required back, with a note
     deleted before the upgrade staying deleted while its id and number stay retired). Contract unchanged: 676 checks /
     226 endpoints.
-  - **Next:** the remaining document families (production — BOMs, work orders, batches — and opening entries), and
-    then the derived stock itself, the branch split and the ledger, which become relational once every document is a
-    row (R5.4).
+  - **Next:** the derived stock itself — the branch split and the item ledger — which becomes relational once the
+    two collections they still read from memory (the opening entries and the production batches) are rows too (R5.4).
+
+- **R5.4 — Backend: the derived stock starts with the opening entries (branch `r5-nestjs`):** the opening stock
+  entries leave the compat layer for `opening_entries` — the first of the two collections the branch split (`stock`)
+  and an item's ledger (`items/{id}/ledger`) still read from memory. See
+  [docs/BACKEND.md › R5.4](docs/BACKEND.md#r54--opening-stock-entries-on-their-own-table).
+  - **One row per entry, one item each** — there are no lines to hold. The quantity brought forward, its purchase
+    price, the value and the VAT paid on the stock are `numeric` columns and the input-tax class is a column too, so
+    the opening value a Mushak 6.1 return quotes is a `SUM`, not a walk over every entry in memory.
+  - **The R6.4 bond block is columns as well:** a go-live entry can say how much of its stock was still warehoused
+    under the customs bond, under which Bill of Entry, and what duty that suspended. `bond_boe_no` is the block's
+    presence marker and a check constraint keeps it all there or not at all — the bond register reads those columns
+    unchanged.
+  - **The same discipline as the notes:** the number (`OS-MMYY####`) is unique in the database and comes from the live
+    entries *and* the audit trail, so a deleted draft's is not reused; the draft itself is stamped rather than
+    dropped, because entries have no undo but the mock's id counter had moved on, and the row is what keeps a later
+    entry from taking its id (on restore the counter is lifted to the highest id the table has seen, so it can never
+    go back). The id is claimed inside the locked transaction and separately from the identity, and `items.opening`
+    is written with an approval and taken back on cancellation — which first checks the stock is still on hand at its
+    branch, because the derived split loses it.
+  - **The rules are the mock's own:** `buildOpening` (the SKU has to exist and be active, the branch a stock-holding
+    one, the quantity rounded to the unit's own decimals), the identity, the approve / cancel / draft / delete rules,
+    the register's spec, its `?item=` filter and its CSV columns, all through the compat bundle. Both sides were held
+    against the same contract suite: 676 checks natively, 676 again with the mock handlers serving them — which also
+    proved the write-back, since a compat-created entry reached the table, its approval moved `items.opening`
+    900 → 904 and the derived branch split 2,917.55 → 2,921.55 with it, and its delete stamped the row while the next
+    entry took a higher id and a new number.
+  - **Tests:** `api_native.py` 337 checks (+31: a draft is a row with its value and the VAT paid on it and moves no
+    stock, approving brings the quantity into the branch split the still-derived endpoints read and writes
+    `items.opening` with it, the ledger quotes the entry as its opening row, cancelling takes the quantity back out
+    and stores the reason, a cancelled entry is neither cancelled twice nor approved again, editing a draft replaces
+    its fields on the row, an unknown SKU or branch is a 422, deleting stamps the row so the next entry takes a new id
+    and number, the `?item=` filter is served from the table, the snapshot carries no openings collection, the demo
+    entries were seeded with their bond blocks and the bond register still answers, the database refuses a duplicate
+    entry number — and the **R5.4 upgrade drill**: the database is rewritten into its pre-R5.4 shape, the API
+    restarted, and the same entries, the same three registers row for row (the entries, the branch split and the
+    items with them) and the same derived stock are required back, with an entry deleted before the upgrade staying
+    deleted while its id and number stay retired). Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.4:** the production batches — the last collection the derivation reads — and then the branch split
+    and the ledger themselves, served from the database.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

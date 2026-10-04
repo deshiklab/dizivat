@@ -11,6 +11,7 @@ import { CustomersController, PartiesService, VendorsController } from "./module
 import { ItemsController, ItemsService, MasterItemsController } from "./modules/items"
 import { DamageController, StockService, TransfersController } from "./modules/stock"
 import { CreditNotesController, DebitNotesController, NotesService } from "./modules/notes"
+import { OpeningsController, OpeningsService } from "./modules/openings"
 import { PurchasesController, PurchasesService } from "./modules/purchases"
 import { SalesController, SalesService } from "./modules/sales"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
@@ -23,6 +24,7 @@ const NATIVE_CONTROLLERS = [
   PurchasesController,
   CreditNotesController,
   DebitNotesController,
+  OpeningsController,
   SalesController,
 ]
 
@@ -30,11 +32,11 @@ const NATIVE_CONTROLLERS = [
 @Module({
   providers: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
-    PurchasesService, NotesService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    PurchasesService, NotesService, OpeningsService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
-    PurchasesService, NotesService, CompatService, BackupsService,
+    PurchasesService, NotesService, OpeningsService, CompatService, BackupsService,
   ],
 })
 class CoreModule {}

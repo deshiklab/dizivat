@@ -16,9 +16,9 @@ backend**, including 520 contract checks, every end-to-end suite, axe, and all 3
 
 The API is built in slices. R5.1 moves **identity, security and reference data** into real tables, R5.2 the
 **master data** (customers and vendors, items and master items) and R5.3 the **first documents** (stock transfers and
-damage entries, sales invoices, purchases, credit and debit notes). The other modules keep their exact mock
-behaviour inside the API, and
-their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
+damage entries, sales invoices, purchases, credit and debit notes) and R5.4 the **derived stock**, starting with
+the opening entries the branch split and an item's ledger read. The other modules keep their exact mock behaviour
+inside the API, and their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
 
 | Area | Endpoints | R5.1 |
 | --- | --- | --- |
@@ -36,8 +36,9 @@ their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
 | Sales invoices (R5.3) | `sales`, `sales/{id}`, `sales/{id}/creditable`, `sales/{id}/realisations`, `sales/{id}/restore`, `sales/bulk` | **native** — `sales` + `sale_lines` + `sale_realisations` |
 | Purchases (R5.3) | `purchases`, `purchases/{id}`, `purchases/{id}/returnable`, `purchases/{id}/restore`, `purchases/bulk` | **native** — `purchases` + `purchase_lines` (the Bill of Entry and each import line's duty are columns) |
 | Credit & debit notes (R5.3) | `credit-notes`, `credit-notes/{id}`, `debit-notes`, `debit-notes/{id}` | **native** — `notes` + `note_lines` (one table for both, `kind` tells them apart) |
+| Opening stock (R5.4) | `opening-stock`, `opening-stock/{id}` | **native** — `opening_entries` (the R6.4 bond block of a go-live entry is columns of its row) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: the stock ledger and branches' stock, production, accounting, VAT returns, notifications, dashboard, search… | 69 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: the stock ledger and branches' stock, production, accounting, VAT returns, notifications, dashboard, search… | 67 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -68,7 +69,7 @@ their data is saved to PostgreSQL so nothing is lost on restart or redeploy.
    - When the handler changes state, the JSONB snapshot and any new audit events are saved in one transaction.
    - A process-wide lock serialises compat requests.
 3. **Write-through** (both directions)
-   - Native modules own users, company, units, (R5.2) the parties, items and master items and (R5.3) the stock documents, the sales invoices, the purchases and both note families in PostgreSQL.
+   - Native modules own users, company, units, (R5.2) the parties, items and master items and (R5.3) the stock documents, the sales invoices, the purchases and both note families, and (R5.4) the opening stock entries in PostgreSQL.
    - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table, and an invoice quotes a customer the `parties` table holds.
    - The other way round: when a compat handler writes a record a native module owns — the R6.2 bulk import creates
      customers, vendors and SKUs, approving a document moves an item's counters, a restored backup puts stock
@@ -165,9 +166,10 @@ behaviour for behaviour.
 - **The derived stock still reads every document.** The branch split (`stock`) and an item's ledger
   (`items/{id}/ledger`) add up *all* movement documents — sales (their own rows since R5.3, but still read through the
   in-memory copy the module keeps in step), purchases, credit and debit notes, opening entries,
-  production batches — so they stay derived in memory until every document family has a table (R5.3–R5.4). A document
-  written natively reaches them at once (the module keeps the in-memory copy in step), and the write-back covers the
-  other direction, so a compat handler writing through the mock's arrays cannot leave the table behind.
+  production batches — so they stay derived in memory until every document family has a table. Since R5.4 only the
+  batches are left: the opening entries are rows too. A document written natively reaches the derivation at once (the
+  module keeps the in-memory copy in step), and the write-back covers the other direction, so a compat handler writing
+  through the mock's arrays cannot leave the table behind.
 - **The upgrade is one boot.** A database written before this slice holds both collections inside `compat_state`; the
   first start moves every document and line into the tables and rewrites the snapshot without them. Restoring a
   pre-R5.3 backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI.
@@ -286,6 +288,37 @@ handlers serving them.
   before the upgrade has no place in the older snapshot, so what the drill requires back is the *counter*: the next
   note takes a higher id and a new number.
 
+## R5.4 — opening stock entries on their own table
+
+`api/src/modules/openings.ts` serves `opening-stock` and `opening-stock/{id}` from **`opening_entries`**: the
+quantities the SKUs were brought forward with at go-live, their purchase value and the input-tax class that value
+belongs to in Mushak 6.1. They are the first of the two collections the derived stock still read from memory — the
+branch split (`stock`) and an item's ledger (`items/{id}/ledger`) add up every movement document, and after R5.3 only
+the opening entries and the production batches were left. The contract is unchanged and the rules are the mock's own
+(`src/app/api/v1/_r2.ts`, re-exported by `api/src/compat/entry.ts`): `buildOpening` (the SKU has to exist and be
+active, the branch has to be a stock-holding one, the quantity is rounded to the unit's own decimals),
+`openingIdentity`, the approve / cancel / draft / delete rules, `postOpening`, the register's spec, its `?item=`
+filter and its CSV columns cannot drift. Both sides were held against the same contract suite again: 676 checks with
+the routes served natively, 676 with the mock handlers serving them.
+
+- **One row per entry, one item each** — there are no lines to hold. The value (`qty × price`) and the VAT paid on the
+  stock are `numeric(18,2)` columns, so the opening value a Mushak 6.1 return quotes is a `SUM`, not a walk.
+- **The R6.4 bond block is columns too:** a go-live entry can say how much of its stock was still warehoused under the
+  customs bond, under which Bill of Entry, and what duty that suspended. `bond_boe_no` is the block's presence marker
+  and a check constraint keeps it all there or not at all — the bond register reads those columns unchanged.
+- **Numbers are unique in the database and stay retired** (`OS-MMYY####`, taken from the live entries *and* the audit
+  trail), and a deleted draft keeps its row with `deleted_at`: entries have no undo, and the mock removed one from its
+  array for good — but its id counter had moved on, so the stamped row is what stops a later entry taking the same id.
+  On restore the counter is lifted to the highest id the table has seen, so it can never go back.
+- **An approval writes what it moves:** `items.opening` goes with the entry, in its transaction, and is taken back on
+  cancellation — which first checks the stock is still on hand at its branch, because the derived split loses it.
+- **What is still derived stays derived:** the branch split and the ledger read the in-memory copies, which the module
+  keeps in step, and the write-back adopts whatever a compat handler writes — including a delete, which stamps the row
+  exactly as the native delete does. Once the production batches have a table too, both endpoints can be served from
+  the database.
+- **The upgrade is one boot**, as with every family: the first start moves the entries out of `compat_state` and
+  rewrites the snapshot without them, and `api_native.py` drills it in CI.
+
 ## Tables
 
 | Table | Purpose |
@@ -311,7 +344,8 @@ handlers serving them.
 | `purchase_lines` | **R5.3:** a purchase's lines — item, quantity, prices and rates, `rebateable` / `vds`, and an import line's duty breakdown (AV, CD, RD, AIT, AT and the rates) plus what a bonded entry left foregone; primary key (document, position) |
 | `notes` | **R5.3:** credit notes (Mushak 6.7) and debit notes (6.8) — `kind` tells them apart; number (unique), the document each was raised against, the customer or vendor as printed, reason, money (`numeric`), the two totals only a debit note has (`tti`, `rebate`), own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired |
 | `note_lines` | **R5.3:** a note's lines — item, the quantity the source document had (`sold_qty` on a credit note, `purchased_qty` on a debit note), what came back, at the source document's price and rates; primary key (note, position) |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3) |
+| `opening_entries` | **R5.4:** opening stock — one SKU, one branch, the quantity brought forward, its purchase price and value, the VAT paid on it and its input-tax class; the R6.4 bond block of a go-live entry (BoE, quantity still warehoused, duty suspended) as columns; `deleted_at` keeps a deleted draft's id and number retired |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries since R5.4) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -343,7 +377,7 @@ npm run build && npx next start -p 3000             # → http://localhost:3000
 | --- | --- |
 | `node api/dist/main.js --reset` | drop everything and re-seed the demo data |
 | `node api/dist/main.js --migrate-only` | apply migrations and exit |
-| `npm --prefix api run typecheck` | type-checks the API **and** the 69 compat route modules |
+| `npm --prefix api run typecheck` | type-checks the API **and** the 67 compat route modules |
 
 ## Tests
 
@@ -354,7 +388,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 306 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 337 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -421,6 +455,20 @@ duplicate note number, and a **fifth upgrade drill**: the live database is rewri
 lines and registers row for row are required back, with a note deleted before the upgrade staying deleted while its
 id and number stay retired, the derived stock unchanged, a second boot adopting nothing again, and writes landing in
 the tables.
+
+Since R5.4 it checks the opening entries the same way — a draft is a row with its value and the VAT paid on it and
+moves no stock, approving brings the quantity into the branch split that the still-derived `stock` and ledger
+endpoints read and writes `items.opening` with it, the ledger quotes the entry as its opening row, cancelling takes
+the quantity back out and stores the reason on the row, a cancelled entry is neither cancelled twice nor approved
+again, editing a draft replaces its fields on the row, an unknown SKU or branch is a 422 from the mock's own rules,
+deleting a draft stamps the row so the next entry takes a new id and a new number, the register's `?item=` filter is
+served from the table, the snapshot carries no openings collection, the demo entries were seeded with their R6.4 bond
+blocks and the bond register that reads them still answers, and the database refuses a duplicate entry number — and
+it **drills the R5.4 upgrade**: the live database is rewritten back into its pre-R5.4 shape (the entries inside
+`compat_state`, the table empty), the API restarts, and the same entries, the same three registers row for row (the
+entries, the branch split and the items with them) and the same derived stock are required back, with an entry
+deleted before the upgrade staying deleted while its id and number stay retired, a second boot adopting nothing
+again, and writes landing in the table.
 
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 

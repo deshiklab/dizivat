@@ -5,7 +5,7 @@ import { csvResponse, delay, runQuery, toCSV, type QuerySpec } from "@/lib/mock/
 import { cancelInput, debitNoteInput, openingInput } from "@/lib/schemas"
 import type { AuditChange, DebitLine, DebitNote, HistoryEntry, OpeningEntry, Purchase } from "@/lib/types"
 import { calcDebitLine, round2 } from "@/lib/vat"
-import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, zodProblem, type RuleProblem } from "./_lib"
+import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
 import { noteDiff, noteDraftRule } from "./_docs"
 import { lockedConflictProblem, lockedFieldRule } from "./_r4"
 
@@ -247,27 +247,31 @@ export function debitDocRoutes() {
 
 /* ── Opening stock ─────────────────────────────────────────────────────── */
 
-function buildOpening(body: unknown) {
+/** What `buildOpening` returns: every field of the entry but the identity and the lifecycle the caller adds. */
+export type OpeningFields = Omit<OpeningEntry, "id" | "no" | "process" | "issuedBy" | "createdAt" | "history">
+
+export function buildOpening(body: unknown): RuleProblem | { process: "Created" | "Approved"; fields: OpeningFields } {
   const parsed = openingInput.safeParse(body)
-  if (!parsed.success) return { error: zodProblem(parsed.error) }
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
   const d: z.output<typeof openingInput> = parsed.data
   const errors: Record<string, string[]> = {}
   const it = db.items.find((i) => i.id === d.itemId && i.active)
   if (!it) errors.itemId = ["unknown"]
   if (!resolveBranch(d.branchId)) errors.branchId = ["unknownBranch"]
-  if (Object.keys(errors).length || !it) return { error: problem(422, "Validation failed", errors) }
+  if (Object.keys(errors).length || !it) return invalidRule(errors)
   const dec = db.units.find((u) => u.code === it.unit)?.decimals ?? 2
   const qty = Math.round(d.qty * 10 ** dec) / 10 ** dec
-  if (qty <= 0) return { error: problem(422, "Validation failed", { qty: ["positive"] }) }
+  if (qty <= 0) return invalidRule({ qty: ["positive"] })
   return {
     process: d.process,
     fields: {
       itemId: it.id, name: it.name, hsCode: it.hsCode, sku: it.sku, uom: it.unit, branchId: d.branchId, branchName: branchName(d.branchId),
       date: d.date, inputTax: d.inputTax, qty, price: d.price, value: round2(qty * d.price), vatPaid: round2(d.vatPaid ?? 0), note: d.note || undefined,
-    } satisfies Partial<OpeningEntry>,
+    } satisfies OpeningFields as OpeningFields,
   }
 }
-function postOpening(o: OpeningEntry, sign: 1 | -1) {
+/** An approved entry adds to the item's opening quantity; cancelling takes it back. */
+export function postOpening(o: OpeningEntry, sign: 1 | -1) {
   const it = db.items.find((i) => i.id === o.itemId)
   if (it) it.opening = round2(it.opening + sign * o.qty)
 }
@@ -277,37 +281,92 @@ function approveOpening(o: OpeningEntry, by: string) {
   addHistory("opening", o, o.no, by, "approved")
 }
 
-const osSpec: QuerySpec<OpeningEntry> = {
+/**
+ * A new entry's identity: the next id in the `os` series (the counter lives in the state, because a deleted entry
+ * leaves no row behind) and the next OS-MMYY#### — which the audit trail takes part in, so a deleted draft's number
+ * is not reused. Claimed separately, so a create refused after this point consumes nothing.
+ */
+export function openingIdentity(date: string) {
+  return { id: `os${db.seq.opening + 1}`, no: nextNo("OS", "opening", db.openings, date) }
+}
+export const claimOpeningId = () => { db.seq.opening += 1 }
+
+/** Only a draft may be edited — checked before the body is parsed, exactly as the mock checked it. */
+export function openingDraftRule(o: OpeningEntry): RuleProblem | undefined {
+  return o.process !== "Created" ? { status: 409, title: `Only drafts can be edited — ${o.no} is ${o.process}.` } : undefined
+}
+
+export function openingApproveRule(o: OpeningEntry): RuleProblem | undefined {
+  return o.process !== "Created" ? { status: 409, title: `Cannot approve — ${o.no} is ${o.process}.` } : undefined
+}
+
+/**
+ * Cancelling: never twice, a mandatory reason, and an approved entry's stock must still be on hand at its branch —
+ * cancelling takes the quantity back out of the opening the derived stock reads.
+ */
+export function openingCancelRule(o: OpeningEntry, reason: string): RuleProblem | { reason: string } {
+  if (o.process === "Cancelled") return { status: 409, title: `${o.no} is already cancelled.` }
+  const parsed = cancelInput.safeParse({ reason })
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  if (o.process === "Approved") {
+    const short = stockShortfall([{ itemId: o.itemId, qty: o.qty }], o.branchId)
+    if (short) return { status: 409, title: `This opening stock has already been used — ${short.detail}`, errors: short.errors }
+  }
+  return { reason: parsed.data.reason }
+}
+
+/** Only a draft may be deleted; its number lives on in the audit trail. */
+export function openingDeleteRule(o: OpeningEntry): RuleProblem | undefined {
+  return o.process !== "Created"
+    ? { status: 409, title: `Only drafts can be deleted — cancel ${o.no} instead.` } : undefined
+}
+
+/** What an edit of an opening entry records in the audit trail. */
+export const OPENING_DIFF_FIELDS = ["name", "branchName", "date", "inputTax", "qty", "price", "value", "vatPaid", "note"]
+
+export const openingSpec: QuerySpec<OpeningEntry> = {
   search: (o) => `${o.no} ${o.name} ${o.sku} ${o.hsCode} ${o.note ?? ""}`,
   dateField: "date",
   facets: { process: (o) => o.process, branch: (o) => o.branchId, inputTax: (o) => o.inputTax },
   totals: ["value", "vatPaid"],
 }
 
+/** The register's `?item=` filter: one SKU's entries, taken out of the params before the query runs. */
+export const openingItemFilter = (params: URLSearchParams, src: OpeningEntry[]) => {
+  const item = params.get("item")
+  params.delete("item")
+  return item ? src.filter((o) => o.itemId === item) : src
+}
+
+export const openingCsvColumns: { key: string; label: string; get?: (o: OpeningEntry) => unknown }[] = [
+  { key: "date", label: "Date" }, { key: "no", label: "Entry No" }, { key: "hsCode", label: "HS Code" }, { key: "sku", label: "SKU" }, { key: "name", label: "Item" },
+  { key: "branchName", label: "Branch" }, { key: "inputTax", label: "Input tax" }, { key: "qty", label: "Qty" }, { key: "uom", label: "Unit" },
+  { key: "price", label: "Purchase price" }, { key: "value", label: "Value" }, { key: "vatPaid", label: "VAT paid" }, { key: "process", label: "Process" },
+]
+
+export const openingFacetLabels = () => ({ branch: branchLabels() })
+
+/** What an edit of an opening entry records in the audit trail. */
+export const openingDiff = (a: OpeningEntry, b: OpeningEntry) => diff(a, b, OPENING_DIFF_FIELDS)
+
 export function openingListRoutes() {
   const GET = withAuth(null, async (req) => {
     const sp = new URL(req.url).searchParams
     if (!sp.get("sort")) sp.set("sort", "createdAt.desc")
-    const item = sp.get("item"); sp.delete("item")
-    const r = runQuery(item ? db.openings.filter((o) => o.itemId === item) : db.openings, sp, osSpec)
-    if (sp.get("format") === "csv") {
-      return csvResponse(toCSV(r.all, [
-        { key: "date", label: "Date" }, { key: "no", label: "Entry No" }, { key: "hsCode", label: "HS Code" }, { key: "sku", label: "SKU" }, { key: "name", label: "Item" },
-        { key: "branchName", label: "Branch" }, { key: "inputTax", label: "Input tax" }, { key: "qty", label: "Qty" }, { key: "uom", label: "Unit" },
-        { key: "price", label: "Purchase price" }, { key: "value", label: "Value" }, { key: "vatPaid", label: "VAT paid" }, { key: "process", label: "Process" },
-      ]), `opening-stock-${new Date().toISOString().slice(0, 10)}.csv`)
-    }
+    const r = runQuery(openingItemFilter(sp, db.openings), sp, openingSpec)
+    if (sp.get("format") === "csv")
+      return csvResponse(toCSV(r.all, openingCsvColumns), `opening-stock-${new Date().toISOString().slice(0, 10)}.csv`)
     await delay()
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { all, ...page } = r
-    return json({ ...page, facetLabels: { branch: branchLabels() } })
+    return json({ ...page, facetLabels: openingFacetLabels() })
   })
   const POST = withAuth("doc.create", async (req, _ctx, user) => {
     const r = buildOpening(await req.json().catch(() => ({})))
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
-    db.seq.opening += 1
-    const o: OpeningEntry = { ...r.fields!, id: `os${db.seq.opening}`, no: nextNo("OS", "opening", db.openings, r.fields!.date), process: "Created", issuedBy: user.name, createdAt: new Date().toISOString(), history: [] }
+    const o: OpeningEntry = { ...r.fields, ...openingIdentity(r.fields.date), process: "Created", issuedBy: user.name, createdAt: new Date().toISOString(), history: [] }
+    claimOpeningId()
     addHistory("opening", o, o.no, user.name, "created")
     if (r.process === "Approved") approveOpening(o, user.name)
     db.openings.push(o)
@@ -327,13 +386,13 @@ export function openingDocRoutes() {
     const { id } = await params
     const o = find(id)
     if (!o) return problem(404, "Opening entry not found")
-    if (o.process !== "Created") return problem(409, `Only drafts can be edited — ${o.no} is ${o.process}.`)
+    const draft = openingDraftRule(o); if (draft) return ruleResponse(draft)
     const r = buildOpening(await req.json().catch(() => ({})))
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
     const before = structuredClone(o)
     Object.assign(o, r.fields)
-    addHistory("opening", o, o.no, user.name, "edited", undefined, diff(before, o, ["name", "branchName", "date", "inputTax", "qty", "price", "value", "vatPaid", "note"]))
+    addHistory("opening", o, o.no, user.name, "edited", undefined, diff(before, o, OPENING_DIFF_FIELDS))
     if (r.process === "Approved") approveOpening(o, user.name)
     return json(o)
   })
@@ -344,23 +403,18 @@ export function openingDocRoutes() {
     const body = (await req.json().catch(() => ({}))) as { process?: string; reason?: string }
     if (body.process === "Approved") {
       const no = deny(user, "doc.approve"); if (no) return no
-      if (o.process !== "Created") return problem(409, `Cannot approve — ${o.no} is ${o.process}.`)
+      const rule = openingApproveRule(o); if (rule) return ruleResponse(rule)
       approveOpening(o, user.name)
       return json(o)
     }
     if (body.process === "Cancelled") {
       const no = deny(user, "doc.cancel"); if (no) return no
-      if (o.process === "Cancelled") return problem(409, `${o.no} is already cancelled.`)
-      const r = cancelInput.safeParse({ reason: body.reason ?? "" })
-      if (!r.success) return zodProblem(r.error)
-      if (o.process === "Approved") {
-        const short = stockShortfall([{ itemId: o.itemId, qty: o.qty }], o.branchId)
-        if (short) return problem(409, `This opening stock has already been used — ${short.detail}`)
-        postOpening(o, -1)
-      }
+      const r = openingCancelRule(o, body.reason ?? "")
+      if ("status" in r) return ruleResponse(r)
+      if (o.process === "Approved") postOpening(o, -1)
       o.process = "Cancelled"
-      o.cancelReason = r.data.reason
-      addHistory("opening", o, o.no, user.name, "cancelled", r.data.reason)
+      o.cancelReason = r.reason
+      addHistory("opening", o, o.no, user.name, "cancelled", r.reason)
       return json(o)
     }
     return problem(400, "process must be Approved or Cancelled")
@@ -369,7 +423,7 @@ export function openingDocRoutes() {
     const { id } = await params
     const i = db.openings.findIndex((x) => x.id === id)
     if (i < 0) return problem(404, "Opening entry not found")
-    if (db.openings[i].process !== "Created") return problem(409, `Only drafts can be deleted — cancel ${db.openings[i].no} instead.`)
+    const gone = openingDeleteRule(db.openings[i]); if (gone) return ruleResponse(gone)
     const [o] = db.openings.splice(i, 1)
     addHistory("opening", o, o.no, user.name, "deleted")
     return json({ ok: true })

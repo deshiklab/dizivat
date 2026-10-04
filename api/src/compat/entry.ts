@@ -41,6 +41,7 @@ export {
   purchaseCategoryRule, purchaseCsvColumns, purchaseCsvRows, purchaseFacetLabels, purchaseIdentity, parsePurchase,
   purchaseSpec, realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows,
   saleFacetLabels, saleIdentity, saleSpec, saleStockRule, stampDocHistory, noteDiff, noteDraftRule, stampNoteHistory,
+  stampOpeningHistory,
 } from "@/app/api/v1/_docs"
 // R5.3: the credit and debit note rules, shared the same way — what a note body may contain and how a returned line
 // is priced pro rata, the numbers a new note takes, the source document that has to still be approved, the stock a
@@ -53,6 +54,15 @@ export {
 export {
   buildDebit, claimDebitId, debitApproveRule, debitCancelRule, debitCsvColumns, debitDeleteRule, debitFacetLabels,
   debitIdentity, debitSourceFilter, debitSpec, debitStockRule, postDebit, returnable,
+} from "@/app/api/v1/_r2"
+// R5.4: the opening stock rules, shared the same way — what an entry body may contain, how the quantity is rounded
+// to the unit's own decimals, the number a new entry takes, the stock an approval adds and a cancellation needs, and
+// the register's spec, filter and CSV columns. The entries themselves live in `opening_entries`; the branch stock and
+// an item's ledger still derive from every document, so they stay with the compat layer until the batches have a
+// table too (R5.4).
+export {
+  buildOpening, claimOpeningId, openingApproveRule, openingCancelRule, openingCsvColumns, openingDeleteRule,
+  openingDiff, openingDraftRule, openingFacetLabels, openingIdentity, openingItemFilter, openingSpec, postOpening,
 } from "@/app/api/v1/_r2"
 export { creditable, parseSale } from "@/app/api/v1/_r3"
 
