@@ -241,10 +241,20 @@ export function branchLabels() { return Object.fromEntries(company.branches.map(
 export function resolveBranch(id?: string) { return stockBranches().find((b) => b.id === (id || mainBranchId())) ?? null }
 
 /**
+ * The movement documents the derived stock and an item's ledger add up (R5.4): the mock passes its own in-memory
+ * copies, the PostgreSQL API passes the same documents read back from its tables, so both derive the same numbers
+ * from the same code. Every family here has a table of its own now.
+ */
+export type MovementSource = {
+  items: Item[]; sales: Sale[]; purchases: Purchase[]; transfers: Transfer[]; damages: Damage[]
+  debitNotes: DebitNote[]; creditNotes: CreditNote[]; openings: OpeningEntry[]; batches: Batch[]
+}
+
+/**
  * Stock of every item split by branch. Non-main branches = their approved documents
  * (purchases in, sales out, transfers in/out, damage out); the main branch holds the rest.
  */
-export function stockByBranch(): Map<string, Record<string, number>> {
+export function branchSplit(src: MovementSource): Map<string, Record<string, number>> {
   const main = mainBranchId()
   const moves = new Map<string, Record<string, number>>()
   const add = (itemId: string, b: string, q: number) => {
@@ -253,19 +263,19 @@ export function stockByBranch(): Map<string, Record<string, number>> {
     r[b] = (r[b] ?? 0) + q
     moves.set(itemId, r)
   }
-  for (const s of db.sales) if (s.process === "Approved") for (const l of s.lines) add(l.itemId, s.branchId, -l.qty)
-  for (const p of db.purchases) if (p.process === "Approved") for (const l of p.lines) add(l.itemId, p.branchId, l.qty)
-  for (const t of db.transfers) if (t.process === "Approved") for (const l of t.lines) { add(l.itemId, t.fromBranchId, -l.qty); add(l.itemId, t.toBranchId, l.qty) }
-  for (const d of db.damages) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
-  for (const d of db.debitNotes) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
-  for (const o of db.openings) if (o.process === "Approved") add(o.itemId, o.branchId, o.qty)
-  for (const c of db.creditNotes) if (c.process === "Approved") for (const l of c.lines) add(l.itemId, c.branchId, l.qty)
-  for (const b of db.batches) if (b.process === "Approved") {
+  for (const s of src.sales) if (s.process === "Approved") for (const l of s.lines) add(l.itemId, s.branchId, -l.qty)
+  for (const p of src.purchases) if (p.process === "Approved") for (const l of p.lines) add(l.itemId, p.branchId, l.qty)
+  for (const t of src.transfers) if (t.process === "Approved") for (const l of t.lines) { add(l.itemId, t.fromBranchId, -l.qty); add(l.itemId, t.toBranchId, l.qty) }
+  for (const d of src.damages) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
+  for (const d of src.debitNotes) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
+  for (const o of src.openings) if (o.process === "Approved") add(o.itemId, o.branchId, o.qty)
+  for (const c of src.creditNotes) if (c.process === "Approved") for (const l of c.lines) add(l.itemId, c.branchId, l.qty)
+  for (const b of src.batches) if (b.process === "Approved") {
     for (const x of b.consumption) add(x.itemId, b.branchId, -x.qty)
     for (const l of b.lines) add(l.itemId, b.branchId, l.receiveQty)
   }
   const out = new Map<string, Record<string, number>>()
-  for (const it of db.items) {
+  for (const it of src.items) {
     const r = moves.get(it.id) ?? {}
     const others = Object.values(r).reduce((a, q) => a + q, 0)
     const row: Record<string, number> = { [main]: Math.round((withStock(it).remain - others) * 100) / 100 }
@@ -274,6 +284,9 @@ export function stockByBranch(): Map<string, Record<string, number>> {
   }
   return out
 }
+
+/** The same split over the mock's own in-memory documents — what the Next.js handlers and the rule checks use. */
+export function stockByBranch(): Map<string, Record<string, number>> { return branchSplit(db) }
 
 /** Returns field errors for lines that would drive stock negative (aggregated per item) — at one branch when given. */
 export function stockShortfall(lines: { itemId: string; qty: number }[], branchId?: string) {

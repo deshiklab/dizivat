@@ -138,7 +138,7 @@ export const mirror = {
     else list.push(m)
     return cur ?? m
   },
-  /** R5.3: the live sales invoices — every register, the ledger, the branch stock and the VAT returns read them */
+  /** R5.3: the live sales invoices — every register, a customer's credit and the VAT returns read them */
   sales: (): Sale[] => G.__dzDb!.sales,
   putSales(list: Sale[]) { const a = mirror.sales(); a.splice(0, a.length, ...list) },
   findSale: (idOrNo: string) => mirror.sales().find((s) => s.id === idOrNo || s.invoiceNo === idOrNo),
@@ -154,7 +154,7 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
-  /** R5.3: the live purchases — the ledger, the branch stock, the debit notes and the bond register read them */
+  /** R5.3: the live purchases — the debit notes, the bond register and the VAT returns read them */
   purchases: (): Purchase[] => G.__dzDb!.purchases,
   putPurchases(list: Purchase[]) { const a = mirror.purchases(); a.splice(0, a.length, ...list) },
   findPurchase: (idOrNo: string) => mirror.purchases().find((p) => p.id === idOrNo || p.invoiceNo === idOrNo),
@@ -202,7 +202,7 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
-  /** R5.4: the opening stock entries — the branch split and an item's ledger read them first */
+  /** R5.4: the opening stock entries — the VAT returns and the Mushak books read them (the derived stock reads the rows) */
   openings: (): OpeningEntry[] => G.__dzDb!.openings,
   putOpenings(list: OpeningEntry[]) { const a = mirror.openings(); a.splice(0, a.length, ...list) },
   findOpening: (idOrNo: string) => mirror.openings().find((o) => o.id === idOrNo || o.no === idOrNo),
@@ -218,7 +218,7 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
-  /** R5.4: the production batches — the branch stock, the ledger, the lots and a work order's progress read them */
+  /** R5.4: the production batches — the lots, a work order's progress and the VAT returns read them */
   batches: (): Batch[] => G.__dzDb!.batches,
   putBatches(list: Batch[]) { const a = mirror.batches(); a.splice(0, a.length, ...list) },
   findBatch: (idOrNo: string) => mirror.batches().find((b) => b.id === idOrNo || b.no === idOrNo),
@@ -234,7 +234,7 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
-  /** R5.3: the stock documents of one kind — the branch-stock split and an item's ledger derive from them */
+  /** R5.3: the stock documents of one kind — the VAT returns and the Mushak books derive from them */
   stockDocs: (kind: StockDocKind): StockDoc[] => (kind === "transfer" ? G.__dzDb!.transfers : G.__dzDb!.damages),
   putStockDocs(kind: StockDocKind, list: StockDoc[]) { const a = mirror.stockDocs(kind); a.splice(0, a.length, ...list) },
   findStockDoc: (kind: StockDocKind, id: string) => mirror.stockDocs(kind).find((d) => d.id === id || d.no === id),

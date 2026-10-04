@@ -423,12 +423,50 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     register, and comes back on a receipt of its own — once per challan — an opening batch is created and approved in
     one step with no consumption, the snapshot carries no batches collection, the demo batches were seeded with their
     contractors and consumption, the database refuses a duplicate batch number — and the **R5.4 upgrade drill**: the
-    database is rewritten into its pre-R5.4 shape, the API restarted, and the same batches and the same five registers
-    row for row (the batches, the lots, the work orders' progress, the subcontracting register and the derived stock)
-    are required back, with a batch deleted before the upgrade staying deleted while its id and number stay retired).
+    database is rewritten into its pre-R5.4 shape, the API restarted, and the same batches and the same six registers
+    row for row (the batches, the lots, the work orders' progress, the subcontracting register, the derived stock and
+    one SKU's ledger) are required back, with a batch deleted before the upgrade staying deleted while its id and
+    number stay retired).
     Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.4:** serve the two derived endpoints — `stock` and `items/{id}/ledger` — from the tables, then the
-    rest of production (BOMs and 4.3 versions, work orders, the production configuration).
+  - **Next in R5.4:** serve the two derived endpoints themselves — `stock` and `items/{id}/ledger` — from the tables
+    (below).
+
+- **R5.4 — Backend: the derived stock itself, served from the tables (branch `r5-nestjs`):** `stock` (every SKU with
+  its quantity at each stock-holding branch) and `items/{id}/ledger` (one SKU's movement register) leave the compat
+  layer — **62 route modules left, 54 native**. Neither stores anything of its own: each adds up *every* movement
+  document, and every family has a table now, so both read the documents back from the ten tables and hand them to the
+  mock's own derivation. See
+  [docs/BACKEND.md › R5.4](docs/BACKEND.md#r54--the-derived-stock-served-from-the-tables).
+  - **The derivation takes its documents as data:** `branchSplit(src)`, `ledgerRows(item, src)` and `itemLedger(item,
+    branch, src)` are the mock's own functions over a `MovementSource` — the nine collections they add up. The Next.js
+    handlers pass their in-memory copies, the API passes what it read from the tables, and the third caller
+    (`buildBook`, the Mushak 6.1 and 6.2 books) is unchanged. Everything the two responses are made of moved into
+    `src/app/api/v1/_derived.ts` — the register's spec and rows, the valuation at cost and at sale price, the value
+    each branch holds, the CSV's column per branch, and the ledger's assembly: which rows a `?branch=` shows, the
+    running balance, the totals and the closing quantity — so the two route files that used to hold them are a dozen
+    lines each.
+  - **No migration, and nothing to adopt:** the endpoints have no tables of their own, so the slice adds no schema, no
+    snapshot change and no upgrade path of its own — what they read is what R5.2–R5.4 already put there. The
+    in-memory copies stay, because the readers that are still compat use them: the VAT returns, the Mushak books, the
+    finished-goods lots, the work orders' progress, the subcontracting register, and the stock checks around approving
+    a document.
+  - **Proved both ways, byte for byte:** 676 contract checks with the two routes served natively, 676 again with the
+    mock handlers serving them, and **83 captured answers compared across the two configurations** — every filter and
+    sort, both CSV exports, every SKU's ledger company-wide and per branch, the 404s — with **0 differences**.
+  - **Tests:** `api_native.py` 406 checks (+20: `/stock` answers a page of every SKU with the branches and the value
+    each holds, valued at cost and at sale price, with facets that count the same rows and `?stock=`, `?branch=`,
+    `?q=`, paging and a CSV column per branch; every quantity away from the factory is that branch's own approved
+    documents summed in SQL over the ten families, the factory holds whatever is not explicitly elsewhere, and
+    `remain` is the counters on the SKU's own row; a ledger is sorted by date and type, quotes the document each row
+    came from, keeps the pre-R3 production as a monthly summary and closes on the quantity its SKU's row says is left
+    — for *every* SKU — while `?branch=` closes on that branch's quantity with the transfers shown; an unknown SKU and
+    a branch that cannot hold stock are 404s; a damage entry approved at the other branch is in both answers at once
+    and cancelling takes both back; and **a line changed in SQL alone, with the in-memory copies left stale on
+    purpose, moves the answer at once** — a transfer line the branch split and that branch's ledger but not the
+    company-wide one, an invoice line the ledger but not the split, and putting both back restores every number).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next:** the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots
+    and subcontracting registers — then accounting and the VAT returns (R5.5), which is what removes `compat_state`.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

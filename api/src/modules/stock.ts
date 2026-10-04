@@ -12,9 +12,9 @@
  *     values a movement carries can be summed in SQL instead of walked in memory;
  *   - the document number is unique in the database as well, so two requests cannot share one;
  *   - the counters an approval moves are written with the document, in the same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step — the branch split and an
- *     item's ledger still derive from *every* movement document, and the ones without tables yet (sales, purchases,
- *     returns, production, opening entries) are compat state until R5.3–R5.4 finish.
+ *   - every write goes through the state guard, and the in-memory copies stay in step — the VAT returns, the Mushak
+ *     books, the finished-goods lots and the work orders' progress still derive from *every* movement document
+ *     through them (the branch split and an item's ledger read the rows themselves since R5.4, see derived.ts).
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, sql, type SQL } from "drizzle-orm"
@@ -94,8 +94,9 @@ export const stockLineValues = (d: StockDoc) => d.lines.map((l, i) => ({
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * The documents are rows now, but the in-memory copies stay: the branch split (`stockByBranch`) and an item's
- * ledger derive from every movement document, and the ones still in compat state are read together with these.
+ * The documents are rows now, but the in-memory copies stay: the VAT returns, the Mushak books and the production
+ * registers derive from every movement document, and read the families still in compat state together with these.
+ * The branch split (`branchSplit`) and an item's ledger read the rows themselves since R5.4 — see derived.ts.
  * A compat handler that writes through the mock's arrays — a restored backup, the demo seed — is written back
  * here. See common/writeback.ts.
  */

@@ -17,10 +17,9 @@
  *   - the bill number is unique in the database as well, so two requests cannot share one;
  *   - a deleted draft is a row with `deleted_at` — its number stays retired and the undo restores the row;
  *   - the item counter an approval moves (`purchased`) is written with the document, in the same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step: the branch stock, the
- *     ledger, the debit notes, the bond register and the VAT returns still read *every* document, and the ones
- *     without tables yet (credit and debit notes, production, opening entries) are compat state until R5.3–R5.4
- *     finish.
+ *   - every write goes through the state guard, and the in-memory copies stay in step: the debit notes, the bond
+ *     register and the VAT returns still read *every* document (the branch split and an item's ledger read the rows
+ *     themselves since R5.4 — see derived.ts).
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
@@ -154,9 +153,9 @@ export const purchaseLineValues = (p: Purchase) => p.lines.map((l, i) => {
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * The purchases are rows now, but the in-memory copies stay: the branch stock, an item's ledger, the debit notes
- * that return against a purchase, the bond register, the drawback claims and every VAT return derive from all of
- * them, together with the documents that are still compat state. A compat handler that writes through the mock's
+ * The purchases are rows now, but the in-memory copies stay: the debit notes that return against a purchase, the
+ * bond register, the drawback claims and every VAT return derive from all of them, together with the documents that
+ * are still compat state — while the branch split and an item's ledger read the rows themselves (derived.ts, R5.4). A compat handler that writes through the mock's
  * array — a restored backup, the demo runtime — is written back here. See common/writeback.ts.
  */
 const purchaseWb = new WriteBack<Purchase>("purchases", () => mirror.purchases(), (p) => p.id)

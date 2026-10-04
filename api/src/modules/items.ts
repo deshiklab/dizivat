@@ -11,8 +11,8 @@
  *   - every write goes through the state guard, and the in-memory copies the unported handlers read are kept in
  *     step — documents still move an item's counters, and those changes are written back to the table.
  *
- * The stock ledger and the branch split stay derived from documents, which are compat state until R5.3; so those
- * two endpoints (`items/[id]/ledger`, `stock`) are still served by the compat layer.
+ * The stock ledger and the branch split are derived from documents: every family has a table since R5.4, so those
+ * two endpoints (`items/[id]/ledger`, `stock`) are served from the rows by modules/derived.ts.
  */
 import { Controller, Get, Inject, Injectable, Param, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, sql } from "drizzle-orm"

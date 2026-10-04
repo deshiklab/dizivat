@@ -15,9 +15,9 @@
  *   - the invoice number is unique in the database as well, so two requests cannot share one;
  *   - a deleted draft is a row with `deleted_at` — its number stays retired and the undo restores the row;
  *   - the item counters an approval moves (`sold`) are written with the invoice, in the same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step: the branch stock, the
- *     ledger, the credit notes, the settlements and the VAT returns still read *every* document, and the ones
- *     without tables yet (purchases, production, opening entries) are compat state until R5.3–R5.4 finish.
+ *   - every write goes through the state guard, and the in-memory copies stay in step: a customer's credit, the
+ *     credit notes, the settlements and the VAT returns still read *every* document (the branch split and an item's
+ *     ledger read the rows themselves since R5.4 — see derived.ts).
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
@@ -155,9 +155,9 @@ export const realisationValues = (s: Sale) => (s.export?.realisations ?? []).map
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * The invoices are rows now, but the in-memory copies stay: the branch stock, an item's ledger, a customer's credit,
- * the credit notes, the settlements and every VAT return derive from all of them, together with the documents that
- * are still compat state. A compat handler that writes through the mock's array — a bank file posting proceeds
+ * The invoices are rows now, but the in-memory copies stay: a customer's credit, the credit notes, the settlements
+ * and every VAT return derive from all of them, together with the documents that are still compat state — while the
+ * branch split and an item's ledger read the rows themselves (derived.ts, R5.4). A compat handler that writes through the mock's array — a bank file posting proceeds
  * (R6.6), a restored backup — is written back here. See common/writeback.ts.
  */
 const saleWb = new WriteBack<Sale>("sales", () => mirror.sales(), (s) => s.id)

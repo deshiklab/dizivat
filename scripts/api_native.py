@@ -7,7 +7,7 @@ Runs through the Next.js frontend (BASE_URL, default http://localhost:3000), whi
   SESSION_SECRET   enables the forged-token check (must equal the API's secret)
 Run on a freshly seeded database (`node api/dist/main.js --reset`); it creates its own users and records.
 """
-import base64, hashlib, hmac, json, os, subprocess, sys, time, uuid
+import base64, hashlib, hmac, json, math, os, subprocess, sys, time, uuid
 import requests
 
 BASE = os.environ.get("BASE_URL", "http://localhost:3000") + "/api/v1"
@@ -308,6 +308,19 @@ def session(user, pw=PW, remember=False):
     return s
 
 
+def flush_snapshot(s):
+    """Ask a compat route to save the in-memory state, the way the all-compat code saved it after every request.
+
+    A native write does not save the snapshot: its own tables are the durable copy, and a stamped row is what retires
+    a deleted draft's id in production (boot lifts `db.seq` from the highest id each table has seen). A drill that
+    rewinds those tables into their pre-release shape therefore has to flush the snapshot first, or the database it
+    pretends to be — one the old code wrote, saving after every request — would hold a counter the real one never
+    lost. Read-only: /notifications changes nothing, it just runs the compat path's persist().
+    """
+    r = s.get(f"{BASE}/notifications")
+    assert r.status_code == 200, r.text
+
+
 def token_of(s):
     return s.cookies.get("dizivat_session")
 
@@ -538,9 +551,9 @@ def run():
           "a duplicate name/BIN is refused (422) — the rules the mock handlers use")
 
     # R5.3: transfers and damage entries are the first documents with their own tables. Their registers read
-    # PostgreSQL; the branch split and an item's ledger still derive from *every* movement document through the
-    # in-memory copies the unported handlers read, so a document written natively has to reach them at once; and an
-    # approval writes the item counter it moves in the same transaction as the document.
+    # PostgreSQL; the branch split and an item's ledger derive from *every* movement document (served from the tables
+    # themselves since R5.4), so a document written natively has to reach both copies at once; and an approval writes
+    # the item counter it moves in the same transaction as the document.
     print("R5.3: stock documents are rows, and the derived stock follows them")
     other = [b["id"] for b in arif.get(f"{BASE}/stock").json()["branches"] if b["id"] != branch][0]
 
@@ -564,10 +577,10 @@ def run():
               "R5.3: …and its lines are rows in stock_document_lines")
     ap = arif.patch(f"{BASE}/transfers/{tid}", json={"process": "Approved"})
     check(ap.status_code == 200 and ap.json()["process"] == "Approved" and held() == (t0[0], t0[1] - 6, t0[2] + 6),
-          f"R5.3: approving moves the stock, and the branch split derived in memory follows ({ap.status_code})")
+          f"R5.3: approving moves the stock, and the branch split, served from the tables, follows ({ap.status_code})")
     led = arif.get(f"{BASE}/items/{iid}/ledger", params={"branch": other}).json()
     check(any(e["type"] == "transferIn" and e["ref"] == tno for e in led["entries"]),
-          "R5.3: …and the item's ledger, still derived from every document, quotes it")
+          "R5.3: …and the item's ledger, derived from every document, quotes it")
     if DB_URL:
         check(psql(f"select jsonb_array_length(history) from stock_documents where id = '{tid}'") == "2",
               "R5.3: the document's own history travels with the row")
@@ -672,9 +685,9 @@ def run():
     sa = arif.patch(f"{BASE}/sales/{sid}", json={"process": "Approved"})
     check(sa.status_code == 200 and sa.json()["process"] == "Approved"
           and sold_held() == (split0[0] - 2, split0[1] - 2, split0[2]),
-          f"R5.3: approving moves the stock out, and the branch split derived in memory follows ({sa.status_code})")
+          f"R5.3: approving moves the stock out, and the branch split, served from the tables, follows ({sa.status_code})")
     led = arif.get(f"{BASE}/items/{siid}/ledger").json()
-    check(any(e.get("ref") == sno for e in led["entries"]), "R5.3: …and the item's ledger, still derived from every document, quotes it")
+    check(any(e.get("ref") == sno for e in led["entries"]), "R5.3: …and the item's ledger, derived from every document, quotes it")
     if DB_URL:
         check(psql(f"select sold = {sold0 + 2} from items where id = '{siid}'") == "t",
               "R5.3: …and the counter it moved is written with it (items.sold)")
@@ -837,10 +850,10 @@ def run():
     pa = arif.patch(f"{BASE}/purchases/{pid}", json={"process": "Approved"})
     check(pa.status_code == 200 and pa.json()["process"] == "Approved"
           and pheld() == (split2[0] + 5, split2[1] + 5, split2[2]),
-          f"R5.3: approving moves the stock in, and the branch split derived in memory follows ({pa.status_code})")
+          f"R5.3: approving moves the stock in, and the branch split, served from the tables, follows ({pa.status_code})")
     pled = arif.get(f"{BASE}/items/{piid}/ledger").json()
     check(any(e.get("ref") == pno for e in pled["entries"]),
-          "R5.3: …and the item's ledger, still derived from every document, quotes it")
+          "R5.3: …and the item's ledger, derived from every document, quotes it")
     if DB_URL:
         check(psql(f"select purchased = {bought0 + 5} from items where id = '{piid}'") == "t",
               "R5.3: …and the counter it moved is written with it (items.purchased)")
@@ -981,10 +994,10 @@ def run():
     cna = arif.patch(f"{BASE}/credit-notes/{cnid}", json={"process": "Approved"})
     check(cna.status_code == 200 and cna.json()["process"] == "Approved"
           and sold_held() == (split4[0] + 2, split4[1] + 2, split4[2]),
-          f"R5.3: approving brings the goods back, and the branch split derived in memory follows ({cna.status_code})")
+          f"R5.3: approving brings the goods back, and the branch split, served from the tables, follows ({cna.status_code})")
     cnled = arif.get(f"{BASE}/items/{siid}/ledger").json()
     check(any(e.get("ref") == cno for e in cnled["entries"]),
-          "R5.3: …and the item's ledger, still derived from every document, quotes the note")
+          "R5.3: …and the item's ledger, derived from every document, quotes the note")
     if DB_URL:
         check(psql(f"select sold = {si_sold - 2} from items where id = '{siid}'") == "t",
               "R5.3: …and the counter it moved is written with it (items.sold)")
@@ -1129,7 +1142,7 @@ def run():
     osa = arif.patch(f"{BASE}/opening-stock/{oid}", json={"process": "Approved"})
     check(osa.status_code == 200 and osa.json()["process"] == "Approved"
           and held() == (osplit0[0] + 7, osplit0[1] + 7, osplit0[2]),
-          f"R5.4: approving brings the quantity in, and the branch split derived in memory follows ({osa.status_code})")
+          f"R5.4: approving brings the quantity in, and the branch split, served from the tables, follows ({osa.status_code})")
     oled = arif.get(f"{BASE}/items/{iid}/ledger").json()
     check(any(e.get("ref") == ono and e.get("type") == "opening" for e in oled["entries"]),
           "R5.4: …and the item's ledger quotes the entry as its opening row")
@@ -1413,6 +1426,217 @@ def run():
                                 "0, 0, 0, 0, process, branch_id, branch_name, now() from batches limit 1"],
                                capture_output=True, text=True)
         check(dupno.returncode != 0, "R5.4: the database refuses a duplicate batch number (unique index), not just the API")
+
+    # ── R5.4: the derived stock — the branch split and an item's ledger ───────────────────────────────────────
+    # Neither endpoint stores anything of its own: each adds up every movement document — purchases, sales, both
+    # note kinds, transfers, damage entries, opening entries and the production batches — and every one of those
+    # families has a table now, so both are served from the database instead of walked through the in-memory
+    # copies. Two proofs follow: the numbers agree with the same sums written in SQL over the tables, and a row
+    # changed in SQL alone (the in-memory copies left stale on purpose) moves the answer at once.
+    print("R5.4: the branch split and an item's ledger are derived from the tables")
+
+    dpage = arif.get(f"{BASE}/stock", params={"size": 200}).json()
+    drows = dpage["data"]
+    dbranches = dpage["branches"]
+    dmain = [b["id"] for b in dbranches if b["category"] == "factory"][0]
+    dside = [b["id"] for b in dbranches if b["id"] != dmain]
+    dsku = [r["sku"] for r in drows]
+
+    def jr(x):
+        """The mock's Math.round — halves go up, which Python's round() does not do."""
+        return math.floor(x + 0.5)
+
+    def jr2(x):
+        """The mock's round2."""
+        return math.floor(x * 100 + 0.5) / 100
+
+    def dstatus(r):
+        return "out" if r["remain"] <= 0 else ("low" if r["remain"] < r["reorderLevel"] else "ok")
+
+    def tally(rows, key):
+        out = {}
+        for r in rows:
+            out[key(r)] = out.get(key(r), 0) + 1
+        return out
+
+    check(sorted(dpage) == ["branchValue", "branches", "data", "facets", "page", "size", "total", "totals"]
+          and dpage["total"] == len(drows) and dsku == sorted(dsku),
+          f"native (R5.4): /stock answers a page of every SKU — {dpage['total']} rows, sorted by SKU — with the "
+          f"stock-holding branches and the value each holds, and nothing else in the body")
+    if DB_URL:
+        check(dpage["total"] == int(psql("select count(*) from items")),
+              f"R5.4: …one row per SKU in the items table ({dpage['total']})")
+    check(all(r["value"] == jr(max(0, r["remain"]) * r["costPrice"]) and r["saleValue"] == jr(max(0, r["remain"]) * r["salePrice"]) for r in drows)
+          and dpage["totals"]["value"] == jr2(sum(r["value"] for r in drows))
+          and dpage["totals"]["saleValue"] == jr2(sum(r["saleValue"] for r in drows))
+          and dpage["branchValue"] == {b["id"]: jr(sum(max(0, r["byBranch"].get(b["id"], 0)) * r["costPrice"] for r in drows)) for b in dbranches},
+          f"R5.4: every row is valued at cost and at sale price over what is left, the register totals both "
+          f"({dpage['totals']['value']} at cost, {dpage['totals']['saleValue']} at sale), and each branch's value is its own quantity at cost")
+    dfac = dpage["facets"]
+    check(sorted(dfac) == ["group", "stock", "unit"] and all(sum(v.values()) == dpage["total"] for v in dfac.values())
+          and dfac["group"] == tally(drows, lambda r: r["group"]) and dfac["unit"] == tally(drows, lambda r: r["unit"])
+          and dfac["stock"] == tally(drows, dstatus),
+          f"R5.4: the facets count the same rows — {dfac['stock']} by stock status, {len(dfac['group'])} groups, {len(dfac['unit'])} units")
+    dlow = arif.get(f"{BASE}/stock", params={"size": 200, "stock": "low"}).json()
+    check(dlow["total"] == dfac["stock"].get("low", 0) and all(dstatus(r) == "low" for r in dlow["data"])
+          and dlow["facets"]["stock"] == dfac["stock"] and dlow["facets"]["group"] == tally(dlow["data"], lambda r: r["group"])
+          and dlow["totals"]["value"] == jr2(sum(r["value"] for r in dlow["data"])),
+          f"R5.4: ?stock=low keeps the {dlow['total']} SKUs below their re-order level, the other facet counts respect the filter and the totals follow the rows kept")
+    dat = arif.get(f"{BASE}/stock", params={"size": 200, "branch": dside[0]}).json()
+    check(dat["total"] < dpage["total"] and all(r["byBranch"].get(dside[0], 0) > 0 for r in dat["data"])
+          and dat["branchValue"][dside[0]] == jr(sum(max(0, r["byBranch"].get(dside[0], 0)) * r["costPrice"] for r in dat["data"])),
+          f"R5.4: ?branch= keeps the {dat['total']} SKUs held at {dside[0]}, and the branch values are over the rows kept")
+    dhit = arif.get(f"{BASE}/stock", params={"size": 200, "q": drows[0]["sku"]}).json()
+    dpage2 = arif.get(f"{BASE}/stock", params={"page": 2, "size": 5}).json()
+    check(dhit["total"] >= 1 and all(drows[0]["sku"].lower() in f"{r['name']} {r['sku']} {r['hsCode']}".lower() for r in dhit["data"])
+          and dpage2["page"] == 2 and dpage2["size"] == 5 and dpage2["total"] == dpage["total"]
+          and [r["sku"] for r in dpage2["data"]] == dsku[5:10],
+          f"R5.4: ?q= searches the name, the SKU and the HS code ({dhit['total']} hits for {drows[0]['sku']}), and paging slices the same sorted rows")
+    dcsv = arif.get(f"{BASE}/stock", params={"format": "csv"})
+    dlines = [l for l in dcsv.text.split("\n") if l.strip()]
+    dcols = dlines[0].lstrip("\ufeff").split(",")
+    check(dcsv.status_code == 200 and dcsv.headers["content-type"].startswith("text/csv")
+          and "stock-by-branch-" in dcsv.headers["content-disposition"]
+          and dcols[:4] == ["SKU", "Item", "Group", "Unit"] and dcols[4:4 + len(dbranches)] == [b["name"] for b in dbranches]
+          and dcols[-4:] == ["Total", "Unit cost", "Value at cost", "Re-order level"] and len(dlines) - 1 == dpage["total"],
+          f"R5.4: the CSV has a column per stock-holding branch and a row per SKU ({len(dlines) - 1} rows)")
+
+    # The same sums, written in SQL over the ten tables the derivation reads — one query per SKU per branch.
+    SPLIT = """with m as (
+      select -l.qty as q from sales s join sale_lines l on l.sale_id = s.id
+        where s.process = 'Approved' and s.deleted_at is null and s.branch_id = '{b}' and l.item_id = '{i}'
+      union all select l.qty from purchases p join purchase_lines l on l.purchase_id = p.id
+        where p.process = 'Approved' and p.deleted_at is null and p.branch_id = '{b}' and l.item_id = '{i}'
+      union all select -l.qty from stock_documents d join stock_document_lines l on l.doc_id = d.id
+        where d.kind = 'transfer' and d.process = 'Approved' and d.from_branch_id = '{b}' and l.item_id = '{i}'
+      union all select l.qty from stock_documents d join stock_document_lines l on l.doc_id = d.id
+        where d.kind = 'transfer' and d.process = 'Approved' and d.to_branch_id = '{b}' and l.item_id = '{i}'
+      union all select -l.qty from stock_documents d join stock_document_lines l on l.doc_id = d.id
+        where d.kind = 'damage' and d.process = 'Approved' and d.from_branch_id = '{b}' and l.item_id = '{i}'
+      union all select -l.qty from notes n join note_lines l on l.note_id = n.id
+        where n.kind = 'debit' and n.process = 'Approved' and n.deleted_at is null and n.branch_id = '{b}' and l.item_id = '{i}'
+      union all select l.qty from notes n join note_lines l on l.note_id = n.id
+        where n.kind = 'credit' and n.process = 'Approved' and n.deleted_at is null and n.branch_id = '{b}' and l.item_id = '{i}'
+      union all select o.qty from opening_entries o
+        where o.process = 'Approved' and o.deleted_at is null and o.branch_id = '{b}' and o.item_id = '{i}'
+      union all select -c.qty from batches b join batch_consumption c on c.batch_id = b.id
+        where b.process = 'Approved' and b.deleted_at is null and b.branch_id = '{b}' and c.item_id = '{i}'
+      union all select l.receive_qty from batches b join batch_lines l on l.batch_id = b.id
+        where b.process = 'Approved' and b.deleted_at is null and b.branch_id = '{b}' and l.item_id = '{i}'
+    ) select round(coalesce(sum(q), 0)::numeric, 2) from m"""
+    if DB_URL:
+        dbad = [(r["sku"], b, float(psql(SPLIT.format(i=r["id"], b=b))), r["byBranch"].get(b, 0))
+                for r in drows for b in dside
+                if abs(float(psql(SPLIT.format(i=r["id"], b=b))) - round(r["byBranch"].get(b, 0), 2)) > 0.005]
+        check(not dbad,
+              f"R5.4: every quantity away from the factory is that branch's own approved documents, summed in SQL over the ten families "
+              f"({len(drows)} SKUs × {len(dside)} branches){'' if not dbad else ' — mismatched: ' + str(dbad[:3])}")
+        check(all(round(r["byBranch"].get(dmain, 0), 2) == jr2(r["remain"] - sum(v for k, v in r["byBranch"].items() if k != dmain))
+                  and abs(float(psql("select opening + purchased + prod_receive - prod_issue - sold - damage "
+                                     f"from items where id = '{r['id']}'")) - r["remain"]) < 0.005 for r in drows),
+              "R5.4: the factory holds whatever is not explicitly at another branch, and `remain` is the counters on the SKU's own row")
+
+    # One SKU's ledger: the item with the most stock away from the factory, so the branch side of it has rows too.
+    drow = max(drows, key=lambda r: max((v for k, v in r["byBranch"].items() if k != dmain), default=0))
+    ORDER = {"opening": 0, "purchase": 1, "prodReceive": 2, "saleReturn": 2.5, "transferIn": 3, "sale": 4,
+             "purchaseReturn": 5, "transferOut": 6, "prodIssue": 7, "damage": 8}
+    dled = arif.get(f"{BASE}/items/{drow['id']}/ledger")
+    dledb = dled.json()
+    dlets = dledb["entries"]
+    check(dled.status_code == 200 and sorted(dledb) == ["branches", "byBranch", "closing", "entries", "item", "totals"]
+          and dledb["item"]["id"] == drow["id"] and dledb["item"]["remain"] == drow["remain"]
+          and dledb["byBranch"] == drow["byBranch"] and [b["id"] for b in dledb["branches"]] == [b["id"] for b in dbranches]
+          and not any({"at", "transfer", "value", "sd", "vat", "challan"} & set(e) for e in dlets),
+          f"native (R5.4): the ledger of {drow['sku']} — {len(dlets)} entries, the SKU and its branch split with it, "
+          f"and none of the value, tax or challan details a Mushak book carries")
+    check(dlets == sorted(dlets, key=lambda e: (e["date"], ORDER[e["type"]])) and all(e.get("refId") for e in dlets if not e.get("summary"))
+          and dlets[0]["type"] == "opening" and any(e.get("summary") for e in dlets),
+          "R5.4: the entries are sorted by date and type, every document row quotes the document it came from, the "
+          "first is the opening balance and the production posted before R3 stays a monthly summary")
+    dbal, dbal_ok = 0, True
+    for e in dlets:
+        dbal = jr2(dbal + e["in"] - e["out"])
+        dbal_ok = dbal_ok and e["balance"] == dbal
+    check(dbal_ok and dledb["totals"] == {"in": jr2(sum(e["in"] for e in dlets)), "out": jr2(sum(e["out"] for e in dlets))}
+          and dledb["closing"] == dbal == jr2(dledb["item"]["remain"]),
+          f"R5.4: the balance runs through the entries to {dledb['closing']} — in {dledb['totals']['in']}, out "
+          f"{dledb['totals']['out']} — and closes on the SKU's own remaining quantity")
+    dcloses = [r["sku"] for r in drows if jr2(arif.get(f"{BASE}/items/{r['id']}/ledger").json()["closing"]) != jr2(r["remain"])]
+    check(not dcloses,
+          f"R5.4: …for every SKU — {len(drows)} ledgers, each closing on the quantity its own row's counters say is left"
+          f"{'' if not dcloses else ' (apart from ' + ', '.join(dcloses) + ')'}")
+    dside_led = arif.get(f"{BASE}/items/{drow['id']}/ledger", params={"branch": dside[0]}).json()
+    check(dside_led["branchId"] == dside[0] and dside_led["closing"] == jr2(drow["byBranch"][dside[0]])
+          and not any(e["type"].startswith("transfer") for e in dlets)
+          and (not drow["byBranch"][dside[0]] or any(e["type"].startswith("transfer") for e in dside_led["entries"])),
+          f"R5.4: ?branch= closes on the {dside[0]} quantity ({dside_led['closing']}) and shows the transfers in and out, "
+          f"which company-wide net to zero and so stay out of the register")
+    doffice = [b["id"] for b in arif.get(f"{BASE}/company").json()["branches"] if b["category"] == "office"]
+    dx1 = arif.get(f"{BASE}/items/nosuchitem/ledger")
+    dx2 = arif.get(f"{BASE}/items/{drow['id']}/ledger", params={"branch": "nosuchbranch"})
+    dx3 = arif.get(f"{BASE}/items/{drow['id']}/ledger", params={"branch": doffice[0]}) if doffice else None
+    check(dx1.status_code == 404 and dx1.json()["title"] == "Item not found"
+          and dx2.status_code == 404 and dx2.json()["title"] == "Branch not found"
+          and (dx3 is None or (dx3.status_code == 404 and dx3.json()["title"] == "Branch not found")),
+          "R5.4: an unknown SKU is a 404, and so is a branch that cannot hold stock — one that does not exist, or the head office")
+
+    # A write reaches both endpoints at once: a damage entry approved at the other branch, then cancelled again.
+    def dsplit():
+        r = [x for x in arif.get(f"{BASE}/stock", params={"size": 200}).json()["data"] if x["id"] == drow["id"]][0]
+        return r["remain"], r["byBranch"].get(dmain, 0), r["byBranch"].get(dside[0], 0)
+
+    def dprobe():
+        cw = arif.get(f"{BASE}/items/{drow['id']}/ledger").json()
+        sb = arif.get(f"{BASE}/items/{drow['id']}/ledger", params={"branch": dside[0]}).json()
+        return {"split": dsplit(), "entries": len(cw["entries"]), "out": cw["totals"]["out"], "closing": cw["closing"],
+                "sideEntries": len(sb["entries"]), "sideClosing": sb["closing"]}
+
+    d0 = dprobe()
+    ddmg = arif.post(f"{BASE}/damage", json={"branchId": dside[0], "date": tdate, "reason": "wastage",
+                                             "note": f"R5.4 derived {TAG}", "lines": [{"itemId": drow["id"], "qty": 3}],
+                                             "process": "Approved"})
+    d1 = dprobe()
+    check(ddmg.status_code == 201 and d1["split"] == (jr2(d0["split"][0] - 3), d0["split"][1], jr2(d0["split"][2] - 3))
+          and d1["entries"] == d0["entries"] + 1 and d1["out"] == jr2(d0["out"] + 3) and d1["closing"] == jr2(d0["closing"] - 3)
+          and d1["sideEntries"] == d0["sideEntries"] + 1 and d1["sideClosing"] == jr2(d0["sideClosing"] - 3),
+          f"R5.4: a damage entry approved at {dside[0]} is in both derived endpoints at once — the SKU's quantity there "
+          f"{d0['split'][2]} → {d1['split'][2]}, a damage row in each ledger, and {d0['closing']} → {d1['closing']} left overall ({ddmg.status_code})")
+    ddc = arif.patch(f"{BASE}/damage/{ddmg.json()['id']}", json={"process": "Cancelled", "reason": f"R5.4 cancelled {TAG}"})
+    check(ddc.status_code == 200 and dprobe() == d0,
+          "R5.4: …and cancelling it takes both back, row for row")
+
+    # The decisive one: change a line in SQL alone, so the in-memory copies are stale, and both endpoints must move.
+    if DB_URL:
+        dtid = psql("select d.id from stock_documents d join stock_document_lines l on l.doc_id = d.id "
+                    f"where d.kind = 'transfer' and d.process = 'Approved' and d.to_branch_id = '{dside[0]}' "
+                    f"and l.item_id = '{drow['id']}' order by d.ord limit 1")
+        dsid = psql("select s.id from sales s join sale_lines l on l.sale_id = s.id where s.process = 'Approved' "
+                    f"and s.deleted_at is null and l.item_id = '{drow['id']}' order by s.ord limit 1")
+        if dtid and dsid:
+            dtq = float(psql(f"select qty from stock_document_lines where doc_id = '{dtid}' and item_id = '{drow['id']}'"))
+            dsq = float(psql(f"select qty from sale_lines where sale_id = '{dsid}' and item_id = '{drow['id']}'"))
+            dsbr = psql(f"select branch_id from sales where id = '{dsid}'")
+            a0 = dprobe()
+            psql(f"update stock_document_lines set qty = {dtq + 7} where doc_id = '{dtid}' and item_id = '{drow['id']}'")
+            a1 = dprobe()
+            psql(f"update stock_document_lines set qty = {dtq} where doc_id = '{dtid}' and item_id = '{drow['id']}'")
+            check(a1["split"] == (a0["split"][0], jr2(a0["split"][1] - 7), jr2(a0["split"][2] + 7))
+                  and a1["sideClosing"] == jr2(a0["sideClosing"] + 7) and a1["closing"] == a0["closing"]
+                  and a1["entries"] == a0["entries"],
+                  f"R5.4: a transfer line changed in SQL alone — the in-memory copies left stale — moves the branch split "
+                  f"({a0['split'][2]} → {a1['split'][2]} at {dside[0]}) and that branch's ledger at once, and the "
+                  f"company-wide ledger not at all, because a transfer nets out")
+            psql(f"update sale_lines set qty = {dsq + 5} where sale_id = '{dsid}' and item_id = '{drow['id']}'")
+            a2 = dprobe()
+            psql(f"update sale_lines set qty = {dsq} where sale_id = '{dsid}' and item_id = '{drow['id']}'")
+            a3 = dprobe()
+            dexpect = a0["split"] if dsbr == dmain else (jr2(a0["split"][0]), jr2(a0["split"][1] + 5), jr2(a0["split"][2] - 5))
+            check(a2["entries"] == a0["entries"] and a2["out"] == jr2(a0["out"] + 5) and a2["closing"] == jr2(a0["closing"] - 5)
+                  and a2["split"] == dexpect and a3 == a0,
+                  f"R5.4: an invoice line changed the same way moves the ledger — out {a0['out']} → {a2['out']}, closing "
+                  f"{a0['closing']} → {a2['closing']}, the same entry with it — {'and not the branch split, because the invoice is at the factory' if dsbr == dmain else 'and the branch split with it'}, and putting both back restores every number")
+        else:
+            skipped("the SQL-only mutation probe (no transfer or invoice line for that SKU)")
 
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
@@ -1835,6 +2059,7 @@ def run():
 
         goncn = arif.post(f"{BASE}/credit-notes", json={**cn_body, "note": f"R5.3 deleted {TAG}"}).json()
         arif.delete(f"{BASE}/credit-notes/{goncn['id']}")
+        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         ncounts, nbefore, nsplit, nboots = note_counts(), note_registers(), sold_held(), stock_boots()
         psql(PRE_R53_NOTES)
         psql("delete from note_lines")
@@ -1855,7 +2080,7 @@ def run():
               "a note deleted before the upgrade stays deleted — the mock kept no row for it either")
         after = arif.post(f"{BASE}/credit-notes", json=cn_body).json()
         check(int(after["id"][2:]) > int(goncn["id"][2:]) and after["no"] != goncn["no"],
-              f"…but its id and its number stay retired ({goncn['no']} → {after['no']})")
+              f"…but its id and its number stay retired ({goncn['id']} {goncn['no']} → {after['id']} {after['no']})")
         check(sold_held() == nsplit, "…and the stock derived from them is unchanged — the branch split survived the round trip")
         nboots_after, nnow = stock_boots(), note_counts()
         restart()
@@ -1881,6 +2106,7 @@ def run():
 
         goneo = arif.post(f"{BASE}/opening-stock", json={**os_body, "note": f"R5.4 deleted {TAG}"}).json()
         arif.delete(f"{BASE}/opening-stock/{goneo['id']}")
+        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         def opening_boots():
             """How many boots adopted the opening entries — one `R5.4 upgrade:` line each."""
             if not API_LOG or not os.path.exists(API_LOG):
@@ -1905,7 +2131,7 @@ def run():
               "an entry deleted before the upgrade stays deleted — the mock kept no row for it either")
         aftero = arif.post(f"{BASE}/opening-stock", json=os_body).json()
         check(int(aftero["id"][2:]) > int(goneo["id"][2:]) and aftero["no"] != goneo["no"],
-              f"…but its id and its number stay retired ({goneo['no']} → {aftero['no']})")
+              f"…but its id and its number stay retired ({goneo['id']} {goneo['no']} → {aftero['id']} {aftero['no']})")
         check(held() == osplit, "…and the stock derived from them is unchanged")
         oboots_after, onow = opening_boots(), opening_counts()
         restart()
@@ -1933,7 +2159,8 @@ def run():
                     "lots": arif.get(f"{BASE}/production/lots", params={"all": 1}).json(),
                     "workOrders": arif.get(f"{BASE}/production/work-orders", params={"size": 50}).json(),
                     "subcon": arif.get(f"{BASE}/production/subcontract", params={"from": "2025-01-01", "to": tdate}).json(),
-                    "stock": arif.get(f"{BASE}/stock", params={"size": 200}).json()}
+                    "stock": arif.get(f"{BASE}/stock", params={"size": 200}).json(),
+                    "ledger": arif.get(f"{BASE}/items/{bgid}/ledger").json()}
 
         def batch_boots():
             """How many boots adopted the R5.4 collections — one `R5.4 upgrade:` line each."""
@@ -1944,6 +2171,7 @@ def run():
 
         goneb = arif.post(f"{BASE}/production/batches", json={**batch_body, "remark": f"R5.4 deleted {TAG}"}).json()
         arif.delete(f"{BASE}/production/batches/{goneb['id']}")
+        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         bcounts, bbefore, bsplit, bboots = batch_counts(), batch_registers(), bfg_stock(bgid, binp), batch_boots()
         psql(PRE_R54_BATCHES)
         psql("delete from batch_consumption")
@@ -1959,13 +2187,13 @@ def run():
         check(psql("select count(*) from compat_state where data->'db' ? 'batches'") == "0",
               "…and rewrote the snapshot without them")
         check(batch_registers() == bbefore,
-              "…and serves the same five registers, row for row — the lots, the work orders' progress, the "
-              "subcontracting register and the derived stock with them")
+              "…and serves the same six registers, row for row — the lots, the work orders' progress, the "
+              "subcontracting register, the derived stock and one SKU's ledger with them")
         check(psql(f"select count(*) from batches where id = '{goneb['id']}'") == "0",
               "a batch deleted before the upgrade stays deleted — the mock kept no row for it either")
         afterb = arif.post(f"{BASE}/production/batches", json=batch_body).json()
         check(int(afterb["id"][2:]) > int(goneb["id"][2:]) and afterb["no"] != goneb["no"],
-              f"…but its id and its number stay retired ({goneb['no']} → {afterb['no']})")
+              f"…but its id and its number stay retired ({goneb['id']} {goneb['no']} → {afterb['id']} {afterb['no']})")
         arif.delete(f"{BASE}/production/batches/{afterb['id']}")
         check(bfg_stock(bgid, binp) == bsplit, "…and the stock derived from them is unchanged")
         bboots_after, bnow = batch_boots(), batch_counts()

@@ -18,8 +18,8 @@
  *   - the item counter an approval moves (`sold` for a credit note, `purchased` for a debit note) is written with
  *     the note, in the same transaction;
  *   - every write goes through the state guard, and the in-memory copies stay in step: a document's `creditable` /
- *     `returnable`, a customer's credit, the VAT returns and the branch stock still read *every* document, and the
- *     families without tables yet (production, opening entries) are compat state until R5.4.
+ *     `returnable`, a customer's credit and the VAT returns still read *every* document (the branch split and an
+ *     item's ledger read the rows themselves since R5.4 — see derived.ts).
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, sql, type SQL } from "drizzle-orm"
@@ -129,9 +129,9 @@ export const noteLineValues = (n: Note) => {
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * The notes are rows now, but the in-memory copies stay: what is still returnable on an invoice, a customer's
- * credit, the VAT returns and the branch stock derive from all of them, together with the documents that are still
- * compat state. A compat handler that writes through the mock's array — a restored backup, the demo runtime — is
+ * The notes are rows now, but the in-memory copies stay: what is still returnable on an invoice, a customer's credit
+ * and the VAT returns derive from all of them, together with the documents that are still compat state — while the
+ * branch split and an item's ledger read the rows themselves (derived.ts, R5.4). A compat handler that writes through the mock's array — a restored backup, the demo runtime — is
  * written back here. See common/writeback.ts.
  */
 const creditWb = new WriteBack<CreditNote>("creditNotes", () => mirror.creditNotes(), (n) => n.id)

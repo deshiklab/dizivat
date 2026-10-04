@@ -4,9 +4,9 @@
  * are the goods, its consumption the inputs the BOM says they take, and approving one moves both — the inputs leave
  * the store (`items.prod_issue`), the goods received come into the factory (`items.prod_receive`).
  *
- * These were the last collection the derived stock read from memory: `stockByBranch()` and an item's ledger walk the
+ * These were the last collection the derived stock read from memory: `branchSplit()` and an item's ledger walk the
  * sales, the purchases, the transfers, the damage entries, both note families, the opening entries and the batches,
- * and every one of those is a table now.
+ * and every one of those is a table now — so both endpoints are served from the rows (see derived.ts).
  *
  * As with every family before it, the rules are the mock's own (src/app/api/v1/_r3.ts and _docs.ts, reused through
  * the compat bundle): what a body may contain, how the BOM prices a line and what it consumes, the batch's number,
@@ -23,9 +23,10 @@
  *     what stops a later batch taking the same id;
  *   - the counters an approval moves (`items.prodIssue`, `items.prodReceive`) are written with the batch, in the
  *     same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step: the branch stock, the ledger,
- *     the finished-goods lots, the work orders' progress and the VAT returns still read *every* document, and the
- *     families without tables (BOMs, work orders, the production configuration) are compat state.
+ *   - every write goes through the state guard, and the in-memory copies stay in step: the finished-goods lots, the
+ *     work orders' progress and the VAT returns still read *every* document, and the families without tables (BOMs,
+ *     work orders, the production configuration) are compat state — while the branch split and an item's ledger read
+ *     the rows themselves (derived.ts).
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
@@ -129,9 +130,9 @@ export const consumptionValues = (b: Batch) => b.consumption.map((c, i) => ({
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * The batches are rows now, but the in-memory copies stay: the branch stock, an item's ledger, the finished-goods
- * lots, the work orders' progress and the VAT returns derive from all of them, together with the documents that are
- * still compat state. A compat handler that writes through the mock's array — a restored backup, the demo runtime —
+ * The batches are rows now, but the in-memory copies stay: the finished-goods lots, the work orders' progress and
+ * the VAT returns derive from all of them, together with the documents that are still compat state — while the branch
+ * split and an item's ledger read the rows themselves (derived.ts, R5.4). A compat handler that writes through the mock's array — a restored backup, the demo runtime —
  * is written back here. See common/writeback.ts.
  */
 const batchWb = new WriteBack<Batch>("batches", () => mirror.batches(), (b) => b.id)

@@ -1,8 +1,8 @@
 /**
  * R5.4 — opening stock entries on their own table: the quantities the SKUs were brought forward with at go-live,
  * their purchase value and the input-tax class that value belongs to (Mushak 6.1). They are the first of the two
- * collections the derived stock still read from memory (the other is the production batches), so once they are rows
- * the branch split and an item's ledger can be computed from the database instead of walked in memory.
+ * collections the derived stock read from memory (the other was the production batches), so once both are rows the
+ * branch split and an item's ledger are computed from the database instead of walked in memory (see derived.ts).
  *
  * As with every family before it, the rules are the mock's own (src/app/api/v1/_r2.ts, reused through the compat
  * bundle): what a body may contain, how the quantity is rounded to the unit's own decimals, the entry's number, the
@@ -17,10 +17,10 @@
  *     for good — but its id counter had moved on and its number lives on in the audit trail, so the stamped row is
  *     what stops a later entry taking the same id;
  *   - the counter an approval moves (`items.opening`) is written with the entry, in the same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step: the branch stock, the ledger
- *     and the VAT returns still read *every* document. The other collection they read from memory, the production
- *     batches, has a table of its own now too (see batches.ts), so both derived endpoints can be served from the
- *     database.
+ *   - every write goes through the state guard, and the in-memory copies stay in step: the VAT returns and the
+ *     Mushak books still read *every* document. The other collection the derived stock read from memory, the
+ *     production batches, has a table of its own now too (see batches.ts), so both derived endpoints are served from
+ *     the database (see derived.ts).
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, isNull, sql, type SQL } from "drizzle-orm"
@@ -84,8 +84,9 @@ export const openingValues = (o: OpeningEntry) => {
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * The entries are rows now, but the in-memory copies stay: the branch stock, an item's ledger and the VAT returns
- * derive from all of them, together with the documents that are still compat state. A compat handler that writes
+ * The entries are rows now, but the in-memory copies stay: the VAT returns and the Mushak books derive from all of
+ * them, together with the documents that are still compat state — while the branch split and an item's ledger read
+ * the rows themselves (derived.ts, R5.4). A compat handler that writes
  * through the mock's array — a restored backup, the demo runtime — is written back here. See common/writeback.ts.
  */
 const openingWb = new WriteBack<OpeningEntry>("opening_entries", () => mirror.openings(), (o) => o.id)
