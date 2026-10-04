@@ -24,6 +24,9 @@ export const NATIVE = [
   "purchases", "purchases/[id]", "purchases/[id]/restore", "purchases/[id]/returnable", "purchases/bulk",
   "credit-notes", "credit-notes/[id]", "debit-notes", "debit-notes/[id]",
   "opening-stock", "opening-stock/[id]",
+  // R5.4: production batches live in `batches` (their finished goods in `batch_lines`, the inputs they consume in
+  // `batch_consumption`); the BOMs, the work orders and the production configuration they are built from stay here
+  "production/batches", "production/batches/[id]", "production/batches/[id]/receive",
 ]
 
 const found = []

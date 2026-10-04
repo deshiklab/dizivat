@@ -18,8 +18,9 @@
  *     what stops a later entry taking the same id;
  *   - the counter an approval moves (`items.opening`) is written with the entry, in the same transaction;
  *   - every write goes through the state guard, and the in-memory copies stay in step: the branch stock, the ledger
- *     and the VAT returns still read *every* document, and the production batches are compat state until they have
- *     a table too.
+ *     and the VAT returns still read *every* document. The other collection they read from memory, the production
+ *     batches, has a table of its own now too (see batches.ts), so both derived endpoints can be served from the
+ *     database.
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, isNull, sql, type SQL } from "drizzle-orm"

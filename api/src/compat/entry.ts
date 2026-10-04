@@ -41,7 +41,7 @@ export {
   purchaseCategoryRule, purchaseCsvColumns, purchaseCsvRows, purchaseFacetLabels, purchaseIdentity, parsePurchase,
   purchaseSpec, realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows,
   saleFacetLabels, saleIdentity, saleSpec, saleStockRule, stampDocHistory, noteDiff, noteDraftRule, stampNoteHistory,
-  stampOpeningHistory,
+  stampOpeningHistory, stampBatchHistory,
 } from "@/app/api/v1/_docs"
 // R5.3: the credit and debit note rules, shared the same way — what a note body may contain and how a returned line
 // is priced pro rata, the numbers a new note takes, the source document that has to still be approved, the stock a
@@ -64,6 +64,18 @@ export {
   buildOpening, claimOpeningId, openingApproveRule, openingCancelRule, openingCsvColumns, openingDeleteRule,
   openingDiff, openingDraftRule, openingFacetLabels, openingIdentity, openingItemFilter, openingSpec, postOpening,
 } from "@/app/api/v1/_r2"
+// R5.4: the production batch rules, shared the same way — what a batch body may contain and how the active BOM
+// prices its lines and consumes its inputs, the number a new batch takes, the input stock an approval needs and a
+// cancellation gives back, the contractor's receipt that completes a Mushak 6.4 challan, and the register's spec,
+// work-order filter and CSV columns. The batches themselves live in `batches` (their lines in `batch_lines`, their
+// consumption in `batch_consumption`); the BOMs, the work orders and the production configuration they are built
+// from are compat state, and the branch stock and an item's ledger still derive from every document.
+export {
+  applyBatchReceive, batchApproveRule, batchCancelRule, batchCsvColumns, batchCsvRows, batchDeleteRule, batchDiff,
+  batchDraftRule, batchIdentity, batchReceiveChanges, batchReceiveStateRule, batchSpec, batchStockRule,
+  batchWorkOrderFilter, buildBatch, buildBatchReceive, claimBatchId, postBatchIssue, postBatchReceive,
+  type BatchFields, type BatchReceiveFields,
+} from "@/app/api/v1/_r3"
 export { creditable, parseSale } from "@/app/api/v1/_r3"
 
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,

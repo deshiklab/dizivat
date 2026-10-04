@@ -21,6 +21,7 @@ import { deltaEmpty } from "../common/writeback"
 import { applyItemDelta, applyMasterDelta, commitItemDelta, commitMasterDelta, itemDelta, masterDelta } from "./items"
 import { applyPartyDelta, commitPartyDelta, partyDelta } from "./parties"
 import { applyNoteDelta, commitNoteDelta, noteDelta } from "./notes"
+import { applyBatchDelta, batchDelta, commitBatchDelta } from "./batches"
 import { applyOpeningDelta, commitOpeningDelta, openingDelta } from "./openings"
 import { applyPurchaseDelta, commitPurchaseDelta, purchaseDelta } from "./purchases"
 import { applySaleDelta, commitSaleDelta, saleDelta } from "./sales"
@@ -32,10 +33,11 @@ interface Route { pattern: RegExp; names: string[]; statics: number; mod: Record
 const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade", "content-length", "expect", "te", "trailer", "proxy-connection"])
 
 /** The JSONB document saved for the unported modules (units, parties, items, master items, the stock documents,
- *  the sales invoices, the purchases, both note families and the opening stock entries have their own tables). */
+ *  the sales invoices, the purchases, both note families, the opening stock entries and the production batches have
+ *  their own tables). */
 export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes, openings, ...rest } = G.__dzDb!
+  const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes, openings, batches, ...rest } = G.__dzDb!
   // R5.2/R5.3: a deleted party, sale or purchase is a `deleted_at` row, so the undo buffer keeps the rest only
   const kept = rest as { trash?: TrashEntry[] }
   kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale"
@@ -120,10 +122,10 @@ export class CompatService {
     const json = compatSnapshot()
     const hash = createHash("sha1").update(json).digest("hex")
     const parts = partyDelta(), its = itemDelta(), masters = masterDelta(), stock = stockDelta(), sold = saleDelta()
-    const bought = purchaseDelta(), noted = noteDelta(), opened = openingDelta()
+    const bought = purchaseDelta(), noted = noteDelta(), opened = openingDelta(), made = batchDelta()
     if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
       && deltaEmpty(stock) && deltaEmpty(sold) && deltaEmpty(bought)
-      && deltaEmpty(noted.credit) && deltaEmpty(noted.debit) && deltaEmpty(opened)) return
+      && deltaEmpty(noted.credit) && deltaEmpty(noted.debit) && deltaEmpty(opened) && deltaEmpty(made)) return
     await db.transaction(async (tx) => {
       await lockState(tx) // cross-process: never overwrite a newer instance's re-seed with this process's state
       await this.audit.forwardPending(tx)
@@ -135,6 +137,7 @@ export class CompatService {
       await applyPurchaseDelta(tx, bought)
       await applyNoteDelta(tx, noted)
       await applyOpeningDelta(tx, opened)
+      await applyBatchDelta(tx, made)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
           .onConflictDoUpdate({ target: compatState.key, set: { data: JSON.parse(json) as unknown, updatedAt: new Date() } })
@@ -143,6 +146,7 @@ export class CompatService {
     // committed: what memory holds now is the new baseline (a rolled-back transaction retries the same delta)
     commitPartyDelta(parts); commitItemDelta(its); commitMasterDelta(masters); commitStockDelta(stock)
     commitSaleDelta(sold); commitPurchaseDelta(bought); commitNoteDelta(noted); commitOpeningDelta(opened)
+    commitBatchDelta(made)
     lastSaved = hash
   }
 }

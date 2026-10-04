@@ -675,11 +675,20 @@ export function workOrderDocRoutes() {
 
 /* ── Production batches (in-house, contractual / Mushak 6.4, opening) ─────── */
 
-function buildBatch(body: unknown, self?: Batch) {
+/** What `buildBatch` returns: every field of the batch but the identity and the lifecycle the caller adds. */
+export type BatchFields = Omit<Batch, "id" | "no" | "process" | "createdAt" | "history">
+
+/**
+ * Validates a batch body and prices it (R5.4: as data, so the API's native batch module answers with the same 422
+ * body): the finished goods of every line at the active BOM's unit cost — an opening batch may state its own — and
+ * the inputs that BOM consumes for the issued quantity, or, when the production configuration asks for the actual
+ * consumption, the quantities the body lists.
+ */
+export function buildBatch(body: unknown, self?: Batch): RuleProblem | { process: "Created" | "Approved"; fields: BatchFields } {
   const parsed = batchInput.safeParse(body)
-  if (!parsed.success) return { error: zodProblem(parsed.error) }
-  const d = parsed.data
-  if (self && self.mode !== d.mode) return { error: problem(409, "The batch type cannot change — create a new batch.") }
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  const d: z.output<typeof batchInput> = parsed.data
+  if (self && self.mode !== d.mode) return { status: 409, title: "The batch type cannot change — create a new batch." }
   const cfg = db.productionConfig
   const errors: Record<string, string[]> = {}
   let vendor: Party | undefined
@@ -724,7 +733,7 @@ function buildBatch(body: unknown, self?: Batch) {
     })
     consumption = mergeConsumption(consumption)
   }
-  if (has(errors)) return { error: invalid(errors) }
+  if (has(errors)) return invalidRule(errors)
   const receiving = lines.some((l) => l.receiveQty > 0)
   const main = mainBranchId()
   return {
@@ -738,22 +747,49 @@ function buildBatch(body: unknown, self?: Batch) {
       totalIssue: round2(lines.reduce((a, l) => a + l.issueQty, 0)), totalReceive: round2(lines.reduce((a, l) => a + l.receiveQty, 0)), totalDamage: round2(lines.reduce((a, l) => a + l.damageQty, 0)),
       materialValue: round2(consumption.reduce((a, c) => a + c.value, 0)), value: round2(lines.reduce((a, l) => a + l.value, 0)),
       branchId: main, branchName: branchName(main),
-    } satisfies Partial<Batch>,
+    } satisfies BatchFields as BatchFields,
   }
 }
 
-function postBatchIssue(b: Batch, sign: 1 | -1) {
+/** The inputs a batch consumes leave the store (`items.prodIssue`); a cancellation puts them back. */
+export function postBatchIssue(b: Batch, sign: 1 | -1) {
   for (const c of b.consumption) { const it = db.items.find((i) => i.id === c.itemId); if (it) it.prodIssue = round2(it.prodIssue + sign * c.qty) }
 }
-function postBatchReceive(b: Batch, sign: 1 | -1) {
+/** The finished goods a batch receives come into the factory (`items.prodReceive`); a cancellation takes them out. */
+export function postBatchReceive(b: Batch, sign: 1 | -1) {
   for (const l of b.lines) { const it = db.items.find((i) => i.id === l.itemId); if (it && l.receiveQty) it.prodReceive = round2(it.prodReceive + sign * l.receiveQty) }
 }
-/** Inputs must be on hand at the factory; referenced work orders must still be approved. */
-function approveBatch(b: Batch, by: string, status: 409 | 422 = 409) {
+
+/**
+ * The inputs must be on hand at the factory before a batch is stored as approved — checked while a create or an
+ * edit is still being validated, so it answers 422 with no field errors, exactly as the mock answered.
+ */
+export function batchStockRule(b: Batch): RuleProblem | undefined {
   const short = stockShortfall(b.consumption, b.branchId)
-  if (short) return problem(status, `Insufficient input stock — ${short.detail}`, Object.fromEntries(Object.keys(short.errors).map((k) => [k.replace(/^lines/, "consumption"), short.errors[k]])))
+  return short ? { status: 422, title: `Insufficient input stock — ${short.detail}` } : undefined
+}
+
+/**
+ * Approving: a draft, its inputs on hand — this time naming the consumption lines that are short — and every work
+ * order a line draws on still approved.
+ */
+export function batchApproveRule(b: Batch): RuleProblem | undefined {
+  if (b.process !== "Created") return { status: 409, title: `Cannot approve — ${b.no} is ${b.process}.` }
+  const short = stockShortfall(b.consumption, b.branchId)
+  if (short) {
+    return {
+      status: 409, title: `Insufficient input stock — ${short.detail}`,
+      errors: Object.fromEntries(Object.keys(short.errors).map((k) => [k.replace(/^lines/, "consumption"), short.errors[k]])),
+    }
+  }
   const closed = b.lines.filter((l) => l.workOrderId && db.workOrders.find((w) => w.id === l.workOrderId)?.process !== "Approved")
-  if (closed.length) return problem(status, `Work order ${closed[0].workOrderNo} is no longer approved.`)
+  if (closed.length) return { status: 409, title: `Work order ${closed[0].workOrderNo} is no longer approved.` }
+  return undefined
+}
+
+function approveBatch(b: Batch, by: string) {
+  const rule = batchApproveRule(b)
+  if (rule) return ruleResponse(rule)
   b.process = "Approved"
   postBatchIssue(b, 1)
   postBatchReceive(b, 1)
@@ -761,25 +797,133 @@ function approveBatch(b: Batch, by: string, status: 409 | 422 = 409) {
   return null
 }
 
-const batchSpec: QuerySpec<Batch> = {
+/** Only a draft may be edited — checked before the body is parsed, exactly as the mock checked it. */
+export function batchDraftRule(b: Batch): RuleProblem | undefined {
+  return b.process !== "Created" ? { status: 409, title: `Only drafts can be edited — ${b.no} is ${b.process}.` } : undefined
+}
+
+/** Only a draft may be deleted; an approved one is cancelled instead. */
+export function batchDeleteRule(b: Batch): RuleProblem | undefined {
+  return b.process !== "Created" ? { status: 409, title: `Only drafts can be deleted — cancel ${b.no} instead.` } : undefined
+}
+
+/**
+ * Cancelling: never twice, a mandatory reason — and an approved batch's finished goods must still be on hand at the
+ * factory and no sales invoice may draw on its lots, because cancelling takes the goods back out (and its inputs go
+ * back to the store).
+ */
+export function batchCancelRule(b: Batch, reason: string): RuleProblem | { reason: string } {
+  if (b.process === "Cancelled") return { status: 409, title: `${b.no} is already cancelled.` }
+  const parsed = cancelInput.safeParse({ reason })
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  if (b.process === "Approved") {
+    const received = b.lines.filter((l) => l.receiveQty > 0).map((l) => ({ itemId: l.itemId, qty: l.receiveQty }))
+    const short = stockShortfall(received, b.branchId)
+    if (short) return { status: 409, title: `Finished goods from this batch have already been sold or moved — ${short.detail}` }
+    const sold = lots().filter((x) => x.batchId === b.id && x.sold > 0)
+    if (sold.length) return { status: 409, title: `Sales invoices draw on this batch (${sold.map((x) => `${x.sold} sold`).join(", ")}) — cancel them first.` }
+  }
+  return { reason: parsed.data.reason }
+}
+
+/**
+ * A new batch's identity: the next id in the `pb` series (the counter lives in the state, because a deleted batch
+ * leaves no row behind) and the next PB-MMYY#### — which the audit trail takes part in, so a deleted draft's number
+ * is not reused. Claimed separately, so a create refused after this point consumes nothing.
+ */
+export function batchIdentity(issueDate: string) {
+  return { id: `pb${db.seq.batch + 1}`, no: nextNo("PB", "batch", db.batches, issueDate) }
+}
+export const claimBatchId = () => { db.seq.batch += 1 }
+
+/** What an edit of a batch records in the audit trail. */
+export const BATCH_DIFF_FIELDS = ["issueDate", "receiveDate", "vendorName", "remark", "totalIssue", "totalReceive", "totalDamage"]
+
+export function batchDiff(a: Batch, b: Batch) {
+  const out = diff(a, b, BATCH_DIFF_FIELDS)
+  const sig = (x: Batch) => x.lines.map((l) => `${l.name} ${l.issueQty}/${l.receiveQty}/${l.damageQty}`).join("; ")
+  if (sig(a) !== sig(b)) out.push({ field: "lines", from: sig(a), to: sig(b) })
+  return out
+}
+
+export const batchSpec: QuerySpec<Batch> = {
   search: (b) => `${b.no} ${b.vendorName ?? ""} ${b.remark ?? ""} ${b.lines.map((l) => `${l.name} ${l.workOrderNo ?? ""}`).join(" ")}`,
   dateField: "issueDate",
   facets: { process: (b) => b.process, mode: (b) => b.mode, receipt: (b) => (b.mode === "contractual" && b.process === "Approved" && !b.receivedAt ? "awaiting" : "done") },
   totals: ["totalIssue", "totalReceive", "totalDamage", "materialValue", "value"],
 }
 
+/** The register's `?workOrder=` filter: one work order's batches, taken out of the params before the query runs. */
+export const batchWorkOrderFilter = (params: URLSearchParams, src: Batch[]) => {
+  const wo = params.get("workOrder")
+  params.delete("workOrder")
+  return wo ? src.filter((b) => b.lines.some((l) => l.workOrderId === wo)) : src
+}
+
+export const batchCsvColumns: { key: string; label: string }[] = [
+  { key: "issueDate", label: "Issue Date" }, { key: "no", label: "Batch" }, { key: "mode", label: "Mode" }, { key: "vendorName", label: "Contractor" }, { key: "workOrderNo", label: "Work Order" },
+  { key: "name", label: "Item" }, { key: "uom", label: "UoM" }, { key: "issueQty", label: "Issue Qty" }, { key: "receiveQty", label: "Receive Qty" }, { key: "damageQty", label: "Damage Qty" },
+  { key: "unitCost", label: "Unit Cost" }, { key: "value", label: "Value" }, { key: "receiveDate", label: "Receive Date" }, { key: "process", label: "Process" },
+]
+
+/** One CSV row per batch line, carrying the header's own columns. */
+export const batchCsvRows = (list: Batch[]) =>
+  list.flatMap((b) => b.lines.map((l) => ({ ...l, no: b.no, mode: b.mode, issueDate: b.issueDate, receiveDate: b.receiveDate, vendorName: b.vendorName, process: b.process })))
+
+/** What a contractual receipt sets: the date, each line's returned and damaged quantity, and the new totals. */
+export type BatchReceiveFields = {
+  receiveDate: string
+  lines: { receiveQty: number; damageQty: number; value: number }[]
+  totalReceive: number; totalDamage: number; value: number
+}
+
+/** A receipt needs a contractual batch (Mushak 6.4) that is approved and has not been received yet. */
+export function batchReceiveStateRule(b: Batch): RuleProblem | undefined {
+  if (b.mode !== "contractual") return { status: 409, title: `${b.no} is not a contractual batch.` }
+  if (b.process !== "Approved") return { status: 409, title: `Approve ${b.no} before receiving goods.` }
+  if (b.receivedAt) return { status: 409, title: `${b.no} has already been received.` }
+  return undefined
+}
+
+/** Validates a receipt body against the batch's own lines: one entry per line, none before the issue date, none over the issued quantity. */
+export function buildBatchReceive(b: Batch, body: unknown): RuleProblem | BatchReceiveFields {
+  const parsed = batchReceiveInput.safeParse(body)
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  const d = parsed.data
+  if (d.lines.length !== b.lines.length) return invalidRule({ lines: ["lineCount"] })
+  const errors: Record<string, string[]> = {}
+  if (d.receiveDate < b.issueDate) errors.receiveDate = ["beforeIssue"]
+  d.lines.forEach((l, i) => { if (l.receiveQty + l.damageQty > b.lines[i].issueQty + 1e-9) errors[`lines.${i}.receiveQty`] = ["exceedsIssue"] })
+  if (has(errors)) return invalidRule(errors)
+  const lines = b.lines.map((l, i) => ({ receiveQty: d.lines[i].receiveQty, damageQty: d.lines[i].damageQty, value: round2(d.lines[i].receiveQty * l.unitCost) }))
+  return {
+    receiveDate: d.receiveDate, lines,
+    totalReceive: round2(lines.reduce((a, l) => a + l.receiveQty, 0)),
+    totalDamage: round2(lines.reduce((a, l) => a + l.damageQty, 0)),
+    value: round2(lines.reduce((a, l) => a + l.value, 0)),
+  }
+}
+
+/** Writes a receipt onto the batch — the caller stamps the trail and moves `items.prodReceive`. */
+export function applyBatchReceive(b: Batch, r: BatchReceiveFields) {
+  b.lines.forEach((l, i) => { l.receiveQty = r.lines[i].receiveQty; l.damageQty = r.lines[i].damageQty; l.value = r.lines[i].value })
+  b.totalReceive = r.totalReceive
+  b.totalDamage = r.totalDamage
+  b.value = r.value
+  b.receiveDate = r.receiveDate
+}
+
+/** The audit change a receipt records. */
+export const batchReceiveChanges = (r: BatchReceiveFields): AuditChange[] =>
+  [{ field: "totalReceive", from: "0", to: String(r.totalReceive) }]
+
 export function batchListRoutes() {
   const GET = withAuth(null, async (req) => {
     const sp = new URL(req.url).searchParams
     if (!sp.get("sort")) sp.set("sort", "createdAt.desc")
-    const wo = sp.get("workOrder"); sp.delete("workOrder")
-    const r = runQuery(wo ? db.batches.filter((b) => b.lines.some((l) => l.workOrderId === wo)) : db.batches, sp, batchSpec)
+    const r = runQuery(batchWorkOrderFilter(sp, db.batches), sp, batchSpec)
     if (sp.get("format") === "csv") {
-      return csvResponse(toCSV(r.all.flatMap((b) => b.lines.map((l) => ({ ...l, no: b.no, mode: b.mode, issueDate: b.issueDate, receiveDate: b.receiveDate, vendorName: b.vendorName, process: b.process }))), [
-        { key: "issueDate", label: "Issue Date" }, { key: "no", label: "Batch" }, { key: "mode", label: "Mode" }, { key: "vendorName", label: "Contractor" }, { key: "workOrderNo", label: "Work Order" },
-        { key: "name", label: "Item" }, { key: "uom", label: "UoM" }, { key: "issueQty", label: "Issue Qty" }, { key: "receiveQty", label: "Receive Qty" }, { key: "damageQty", label: "Damage Qty" },
-        { key: "unitCost", label: "Unit Cost" }, { key: "value", label: "Value" }, { key: "receiveDate", label: "Receive Date" }, { key: "process", label: "Process" },
-      ]), `production-batches-${new Date().toISOString().slice(0, 10)}.csv`)
+      return csvResponse(toCSV(batchCsvRows(r.all), batchCsvColumns), `production-batches-${new Date().toISOString().slice(0, 10)}.csv`)
     }
     await delay()
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -788,11 +932,11 @@ export function batchListRoutes() {
   })
   const POST = withAuth("doc.create", async (req, _ctx, user) => {
     const r = buildBatch(await req.json().catch(() => ({})))
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
-    const b: Batch = { ...r.fields!, id: `pb${db.seq.batch + 1}`, no: nextNo("PB", "batch", db.batches, r.fields!.issueDate), process: "Created", issueTime: new Date().toTimeString().slice(0, 5), createdAt: new Date().toISOString(), history: [] }
-    if (r.process === "Approved") { const short = stockShortfall(b.consumption, b.branchId); if (short) return problem(422, `Insufficient input stock — ${short.detail}`) }
-    db.seq.batch += 1
+    const b: Batch = { ...r.fields, ...batchIdentity(r.fields.issueDate), process: "Created", issueTime: new Date().toTimeString().slice(0, 5), createdAt: new Date().toISOString(), history: [] }
+    if (r.process === "Approved") { const short = batchStockRule(b); if (short) return ruleResponse(short) }
+    claimBatchId()
     addHistory("batch", b, user.name, "created")
     if (r.process === "Approved") approveBatch(b, user.name)
     db.batches.push(b)
@@ -813,20 +957,16 @@ export function batchDocRoutes() {
     const { id } = await params
     const b = find(id)
     if (!b) return problem(404, "Production batch not found")
-    if (b.process !== "Created") return problem(409, `Only drafts can be edited — ${b.no} is ${b.process}.`)
+    const draft = batchDraftRule(b); if (draft) return ruleResponse(draft)
     const r = buildBatch(await req.json().catch(() => ({})), b)
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") {
       const no = deny(user, "doc.approve"); if (no) return no
-      const short = stockShortfall(r.fields!.consumption, r.fields!.branchId)
-      if (short) return problem(422, `Insufficient input stock — ${short.detail}`)
+      const short = batchStockRule({ ...b, ...r.fields }); if (short) return ruleResponse(short)
     }
     const before = structuredClone(b)
     Object.assign(b, r.fields)
-    const changes = diff(before, b, ["issueDate", "receiveDate", "vendorName", "remark", "totalIssue", "totalReceive", "totalDamage"])
-    const sig = (x: Batch) => x.lines.map((l) => `${l.name} ${l.issueQty}/${l.receiveQty}/${l.damageQty}`).join("; ")
-    if (sig(before) !== sig(b)) changes.push({ field: "lines", from: sig(before), to: sig(b) })
-    addHistory("batch", b, user.name, "edited", undefined, changes)
+    addHistory("batch", b, user.name, "edited", undefined, batchDiff(before, b))
     if (r.process === "Approved") approveBatch(b, user.name)
     return json(b)
   })
@@ -837,26 +977,19 @@ export function batchDocRoutes() {
     const body = (await req.json().catch(() => ({}))) as { process?: string; reason?: string }
     if (body.process === "Approved") {
       const no = deny(user, "doc.approve"); if (no) return no
-      if (b.process !== "Created") return problem(409, `Cannot approve — ${b.no} is ${b.process}.`)
       return approveBatch(b, user.name) ?? json(b)
     }
     if (body.process === "Cancelled") {
       const no = deny(user, "doc.cancel"); if (no) return no
-      if (b.process === "Cancelled") return problem(409, `${b.no} is already cancelled.`)
-      const r = cancelInput.safeParse({ reason: body.reason ?? "" })
-      if (!r.success) return zodProblem(r.error)
+      const r = batchCancelRule(b, body.reason ?? "")
+      if ("status" in r) return ruleResponse(r)
       if (b.process === "Approved") {
-        const received = b.lines.filter((l) => l.receiveQty > 0).map((l) => ({ itemId: l.itemId, qty: l.receiveQty }))
-        const short = stockShortfall(received, b.branchId)
-        if (short) return problem(409, `Finished goods from this batch have already been sold or moved — ${short.detail}`)
-        const sold = lots().filter((x) => x.batchId === b.id && x.sold > 0)
-        if (sold.length) return problem(409, `Sales invoices draw on this batch (${sold.map((x) => `${x.sold} sold`).join(", ")}) — cancel them first.`)
         postBatchReceive(b, -1)
         postBatchIssue(b, -1) // inputs go back to the store
       }
       b.process = "Cancelled"
-      b.cancelReason = r.data.reason
-      addHistory("batch", b, user.name, "cancelled", r.data.reason)
+      b.cancelReason = r.reason
+      addHistory("batch", b, user.name, "cancelled", r.reason)
       return json(b)
     }
     return problem(400, "process must be Approved or Cancelled")
@@ -865,7 +998,7 @@ export function batchDocRoutes() {
     const { id } = await params
     const i = db.batches.findIndex((x) => x.id === id)
     if (i < 0) return problem(404, "Production batch not found")
-    if (db.batches[i].process !== "Created") return problem(409, `Only drafts can be deleted — cancel ${db.batches[i].no} instead.`)
+    const gone = batchDeleteRule(db.batches[i]); if (gone) return ruleResponse(gone)
     const [b] = db.batches.splice(i, 1)
     addHistory("batch", b, user.name, "deleted")
     return json({ ok: true })
@@ -878,25 +1011,13 @@ export const batchReceiveRoute = withAuth<Ctx>("doc.edit", async (req, { params 
   const { id } = await params
   const b = db.batches.find((x) => x.id === id || x.no === id)
   if (!b) return problem(404, "Production batch not found")
-  if (b.mode !== "contractual") return problem(409, `${b.no} is not a contractual batch.`)
-  if (b.process !== "Approved") return problem(409, `Approve ${b.no} before receiving goods.`)
-  if (b.receivedAt) return problem(409, `${b.no} has already been received.`)
-  const parsed = batchReceiveInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  if (d.lines.length !== b.lines.length) return invalid({ lines: ["lineCount"] })
-  const errors: Record<string, string[]> = {}
-  if (d.receiveDate < b.issueDate) errors.receiveDate = ["beforeIssue"]
-  d.lines.forEach((l, i) => { if (l.receiveQty + l.damageQty > b.lines[i].issueQty + 1e-9) errors[`lines.${i}.receiveQty`] = ["exceedsIssue"] })
-  if (has(errors)) return invalid(errors)
-  b.lines.forEach((l, i) => { l.receiveQty = d.lines[i].receiveQty; l.damageQty = d.lines[i].damageQty; l.value = round2(l.receiveQty * l.unitCost) })
-  b.totalReceive = round2(b.lines.reduce((a, l) => a + l.receiveQty, 0))
-  b.totalDamage = round2(b.lines.reduce((a, l) => a + l.damageQty, 0))
-  b.value = round2(b.lines.reduce((a, l) => a + l.value, 0))
-  b.receiveDate = d.receiveDate
+  const state = batchReceiveStateRule(b); if (state) return ruleResponse(state)
+  const r = buildBatchReceive(b, await req.json().catch(() => ({})))
+  if ("status" in r) return ruleResponse(r)
+  applyBatchReceive(b, r)
   b.receivedAt = new Date().toISOString()
   postBatchReceive(b, 1)
-  addHistory("batch", b, user.name, "edited", "Finished goods received from the contractor", [{ field: "totalReceive", from: "0", to: String(b.totalReceive) }])
+  addHistory("batch", b, user.name, "edited", "Finished goods received from the contractor", batchReceiveChanges(r))
   return json(b)
 })
 

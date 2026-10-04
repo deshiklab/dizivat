@@ -5,6 +5,7 @@ import { ACCESS_LOGGER, AuthGuard, SessionService } from "./common/auth"
 import { db } from "./db/client"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
+import { BatchesController, BatchesService } from "./modules/batches"
 import { CompatController, CompatService } from "./modules/compat"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
 import { CustomersController, PartiesService, VendorsController } from "./modules/parties"
@@ -25,6 +26,7 @@ const NATIVE_CONTROLLERS = [
   CreditNotesController,
   DebitNotesController,
   OpeningsController,
+  BatchesController,
   SalesController,
 ]
 
@@ -32,11 +34,11 @@ const NATIVE_CONTROLLERS = [
 @Module({
   providers: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
-    PurchasesService, NotesService, OpeningsService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    PurchasesService, NotesService, OpeningsService, BatchesService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
-    PurchasesService, NotesService, OpeningsService, CompatService, BackupsService,
+    PurchasesService, NotesService, OpeningsService, BatchesService, CompatService, BackupsService,
   ],
 })
 class CoreModule {}

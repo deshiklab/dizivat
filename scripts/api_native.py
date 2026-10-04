@@ -210,6 +210,37 @@ PRE_R54_OPENINGS = f"""update compat_state set data = jsonb_set(data, '{{db}}', 
   'openings', {OPENING_AGG}
 )) where key = 'main'"""
 
+# ── R5.4 upgrade drill: the production batches ───────────────────────────────────────────────────────────────
+# A database written before the batches had tables holds them inside compat_state, each with the finished goods it
+# produced and the inputs it consumed. These statements rebuild that shape from the live tables, so the first boot
+# on this code has to adopt it. Nothing here ships either: it is the inverse of the production half of
+# `adoptCompatRows()` in api/src/boot.ts, for the test only.
+BATCH_LINES_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'sku', l.sku, 'uom', l.uom, 'workOrderId', l.work_order_id,
+      'workOrderNo', l.work_order_no, 'issueQty', l.issue_qty, 'receiveQty', l.receive_qty,
+      'damageQty', l.damage_qty, 'bomId', l.bom_id, 'bomVersion', l.bom_version, 'unitCost', l.unit_cost,
+      'value', l.value)""") + """ order by l.ord), '[]'::jsonb) from batch_lines l where l.batch_id = b.id)""")
+BATCH_USE_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', c.item_id, 'name', c.name, 'sku', c.sku, 'uom', c.uom, 'qty', c.qty, 'price', c.price,
+      'value', c.value)""") + """ order by c.ord), '[]'::jsonb) from batch_consumption c where c.batch_id = b.id)""")
+BATCH_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', b.id, 'no', b.no, 'mode', b.mode, 'issueDate', b.issue_date, 'receiveDate', b.receive_date,
+    'vendorId', b.vendor_id, 'vendorName', b.vendor_name, 'vendorBin', b.vendor_bin,
+    'vendorAddress', b.vendor_address, 'address', b.address, 'jobProcess', b.job_process, 'remark', b.remark,
+    'issuedBy', b.issued_by, 'designation', b.designation, 'issueTime', b.issue_time,
+    'lines', """ + BATCH_LINES_DOC + """, 'consumption', """ + BATCH_USE_DOC + """,
+    'totalIssue', b.total_issue, 'totalReceive', b.total_receive, 'totalDamage', b.total_damage,
+    'materialValue', b.material_value, 'value', b.value, 'process', b.process,
+    'receivedAt', """ + _ISO.format("b.received_at") + """, 'branchId', b.branch_id, 'branchName', b.branch_name,
+    'createdAt', """ + _ISO.format("b.created_at") + """, 'updatedAt', """ + _ISO.format("b.updated_at") + """,
+    'cancelReason', b.cancel_reason, 'history', b.history)""") + ")")
+BATCH_AGG = (f"(select coalesce(jsonb_agg({BATCH_DOC} order by b.ord), '[]'::jsonb) "
+             f"from batches b where b.deleted_at is null)")
+# the batches back inside the snapshot (a deleted draft has no place there: the mock removed it for good)
+PRE_R54_BATCHES = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'batches', {BATCH_AGG}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -1164,6 +1195,225 @@ def run():
                                capture_output=True, text=True)
         check(dupno.returncode != 0, "R5.4: the database refuses a duplicate entry number (unique index), not just the API")
 
+    # ── R5.4: the production batches ──────────────────────────────────────────────────────────────────────────
+    # The last collection the derived stock read from memory: a batch's lines are the finished goods, its consumption
+    # the inputs the active BOM says they take, and approving one moves both counters (`items.prod_issue` and
+    # `items.prod_receive`) in the same transaction as the row. The work orders, the BOMs and the production
+    # configuration it is built from are still compat state, so they have to see a natively written batch at once.
+    print("R5.4: production batches are rows, and the stock they consume and receive follows")
+
+    def bfg_stock(*ids):
+        rows = {x["id"]: x for x in arif.get(f"{BASE}/stock", params={"size": 200}).json()["data"]}
+        return tuple(rows[i]["remain"] for i in ids)
+
+    bom_page = arif.get(f"{BASE}/production/boms", params={"size": 100}).json()
+    bom_rows = bom_page["data"] if isinstance(bom_page, dict) else bom_page
+    bgid = sorted({b["itemId"] for b in bom_rows if b["process"] == "Approved"})[0]
+    vendor_page = arif.get(f"{BASE}/vendors", params={"size": 100}).json()
+    bvid = [v for v in (vendor_page["data"] if isinstance(vendor_page, dict) else vendor_page) if v.get("mode") == "Local"][0]["id"]
+    batch_body = {"mode": "inHouse", "issueDate": tdate, "receiveDate": tdate, "remark": f"R5.4 batch {TAG}",
+                  "issuedBy": "Arif Hossain", "designation": "Shift-In-Charge",
+                  "lines": [{"itemId": bgid, "issueQty": 10, "receiveQty": 10, "damageQty": 0}], "process": "Created"}
+    bsplit0 = bfg_stock(bgid)
+    b1 = arif.post(f"{BASE}/production/batches", json=batch_body)
+    b1id, b1no = b1.json().get("id"), b1.json().get("no")
+    bline = b1.json()["lines"][0]
+    buses = {c["itemId"]: c["qty"] for c in b1.json().get("consumption", [])}
+    binp = sorted(buses)[0]
+    check(b1.status_code == 201 and b1.json()["process"] == "Created" and str(b1no).startswith("PB-")
+          and bline["unitCost"] > 0 and b1.json()["value"] == round(bline["unitCost"] * 10, 2)
+          and b1.json()["materialValue"] == round(sum(c["value"] for c in b1.json()["consumption"]), 2)
+          and [h["action"] for h in b1.json()["history"]] == ["created"],
+          f"native (R5.4): a batch is created and numbered, its line priced by the active BOM ({b1.status_code} {b1no})")
+    check(len(buses) >= 1 and bfg_stock(bgid) == bsplit0,
+          f"R5.4: the BOM's inputs are on the batch ({len(buses)} consumed), and a draft moves no stock")
+    if DB_URL:
+        check(psql(f"select count(*) from batches where id = '{b1id}' and process = 'Created' and mode = 'inHouse'") == "1"
+              and psql(f"select count(*) from batch_lines where batch_id = '{b1id}'") == "1"
+              and psql(f"select count(*) from batch_consumption where batch_id = '{b1id}'") == str(len(buses)),
+              "R5.4: the draft is a row in batches, with its finished goods and the inputs it consumes")
+    biss0 = float(psql(f"select prod_issue from items where id = '{binp}'")) if DB_URL else None
+    brec0 = float(psql(f"select prod_receive from items where id = '{bgid}'")) if DB_URL else None
+    bsplit_in = bfg_stock(binp)
+    b1a = arif.patch(f"{BASE}/production/batches/{b1id}", json={"process": "Approved"})
+    check(b1a.status_code == 200 and b1a.json()["process"] == "Approved"
+          and bfg_stock(bgid, binp) == (round(bsplit0[0] + 10, 2), round(bsplit_in[0] - buses[binp], 2)),
+          f"R5.4: approving receives the goods and consumes the inputs — the derived stock follows ({b1a.status_code})")
+    bledger = arif.get(f"{BASE}/items/{bgid}/ledger").json()
+    uledger = arif.get(f"{BASE}/items/{binp}/ledger").json()
+    check(any(e.get("ref") == b1no and e.get("type") == "prodReceive" and e.get("in") == 10 for e in bledger["entries"])
+          and any(e.get("ref") == b1no and e.get("type") == "prodIssue" for e in uledger["entries"]),
+          "R5.4: …and both ledgers quote the batch — a receipt of the goods, an issue of the inputs")
+    blots = [l for l in arif.get(f"{BASE}/production/lots", params={"item": bgid, "all": 1}).json() if l["batchNo"] == b1no]
+    check(len(blots) == 1 and blots[0]["received"] == 10 and blots[0]["available"] == 10,
+          "R5.4: …and the goods it received are a lot a sales invoice can draw on")
+    if DB_URL:
+        check(psql(f"select prod_issue = {round(biss0 + buses[binp], 2)} from items where id = '{binp}'") == "t"
+              and psql(f"select prod_receive = {round(brec0 + 10, 2)} from items where id = '{bgid}'") == "t",
+              "R5.4: …and the counters it moved are written with it (items.prod_issue / prod_receive)")
+        check(psql(f"select jsonb_array_length(history) from batches where id = '{b1id}'") == "2",
+              "R5.4: the batch's own history travels with the row")
+    breg = arif.get(f"{BASE}/production/batches", params={"size": 200}).json()
+    check(breg["total"] >= 9 and breg["facets"]["mode"]["inHouse"] >= 1 and breg["totals"]["totalReceive"] >= 10
+          and any(b["id"] == b1id for b in breg["data"]),
+          f"R5.4: the register lists the batches with their facets and totals ({breg['total']})")
+    if DB_URL:
+        check(breg["total"] == int(psql("select count(*) from batches where deleted_at is null")),
+              "R5.4: …and its total is the live rows of the table")
+    bcsv = arif.get(f"{BASE}/production/batches", params={"format": "csv"})
+    check(bcsv.status_code == 200 and bcsv.headers.get("content-type", "").startswith("text/csv")
+          and "Issue Qty" in bcsv.text and b1no in bcsv.text,
+          "R5.4: the CSV export writes one row per batch line")
+    bwo_page = arif.get(f"{BASE}/production/work-orders", params={"size": 50}).json()
+    bwo_rows = bwo_page["data"] if isinstance(bwo_page, dict) else bwo_page
+    bwo = [w for w in bwo_rows if w["process"] == "Approved" and any(l.get("remaining", l["qty"]) >= 100 for l in w["lines"])][0]
+    bwid = bwo["id"]
+    bwoitem = [l["itemId"] for l in bwo["lines"] if l.get("remaining", l["qty"]) >= 100][0]
+    bwoq = [l.get("remaining", l["qty"]) for l in bwo["lines"] if l["itemId"] == bwoitem][0]
+    over = arif.post(f"{BASE}/production/batches", json={**batch_body, "lines": [
+        {"itemId": bwoitem, "workOrderId": bwid, "issueQty": bwoq + 1, "receiveQty": 0}]})
+    check(over.status_code == 422 and over.json()["errors"].get("lines.0.issueQty") == ["exceedsWorkOrder"],
+          "R5.4: a batch cannot issue more than its work order has left (422, from the mock's own rule)")
+    b2 = arif.post(f"{BASE}/production/batches", json={**batch_body, "lines": [
+        {"itemId": bwoitem, "workOrderId": bwid, "issueQty": 100, "receiveQty": 100}]})
+    check(b2.status_code == 201 and b2.json()["lines"][0].get("workOrderNo") == bwo["no"],
+          f"R5.4: a batch on a work order carries its number ({b2.status_code})")
+    b2a = arif.patch(f"{BASE}/production/batches/{b2.json()['id']}", json={"process": "Approved"})
+    wonow = arif.get(f"{BASE}/production/work-orders/{bwid}").json()
+    wline = [l for l in wonow["lines"] if l["itemId"] == bwoitem][0]
+    check(b2a.status_code == 200 and wline["issued"] == 100 and wline["received"] == 100
+          and wline["remaining"] == bwoq - 100 and wonow["status"] in ("partial", "completed"),
+          f"R5.4: …and the work order's progress, which compat derives from the batches in memory, follows ({wonow['status']})")
+    check(arif.patch(f"{BASE}/production/batches/{b2.json()['id']}",
+                     json={"process": "Cancelled", "reason": f"R5.4 cancelled {TAG}"}).status_code == 200
+          and [l for l in arif.get(f"{BASE}/production/work-orders/{bwid}").json()["lines"]
+               if l["itemId"] == bwoitem][0]["issued"] == 0,
+          "R5.4: cancelling gives the quantity back to the work order")
+    b1c = arif.patch(f"{BASE}/production/batches/{b1id}", json={"process": "Cancelled", "reason": f"R5.4 cancelled {TAG}"})
+    check(b1c.status_code == 200 and b1c.json()["process"] == "Cancelled"
+          and bfg_stock(bgid, binp) == (round(bsplit0[0], 2), round(bsplit_in[0], 2)),
+          "R5.4: cancelling puts the goods and the inputs back where they came from")
+    if DB_URL:
+        check(psql(f"select count(*) from batches where id = '{b1id}' and process = 'Cancelled'"
+                   f" and cancel_reason is not null") == "1"
+              and psql(f"select prod_issue = {round(biss0, 2)} from items where id = '{binp}'") == "t"
+              and psql(f"select prod_receive = {round(brec0, 2)} from items where id = '{bgid}'") == "t",
+              "R5.4: …and the cancellation and both counters are stored on the rows")
+    check(arif.patch(f"{BASE}/production/batches/{b1id}", json={"process": "Cancelled", "reason": "again"}).status_code == 409,
+          "R5.4: a batch that is already cancelled refuses a second cancellation (409)")
+    check(arif.patch(f"{BASE}/production/batches/{b1id}", json={"process": "Approved"}).status_code == 409
+          and arif.put(f"{BASE}/production/batches/{b1id}", json=batch_body).status_code == 409
+          and arif.delete(f"{BASE}/production/batches/{b1id}").status_code == 409,
+          "R5.4: …and a cancelled batch cannot be approved, edited or deleted (409)")
+    # editing a draft replaces its lines; deleting one stamps the row, so its id and number stay retired
+    b3 = arif.post(f"{BASE}/production/batches", json=batch_body).json()
+    b3e = arif.put(f"{BASE}/production/batches/{b3['id']}", json={**batch_body, "remark": f"R5.4 edited {TAG}",
+                                                                  "lines": [{"itemId": bgid, "issueQty": 4, "receiveQty": 3, "damageQty": 1}]})
+    check(b3e.status_code == 200 and b3e.json()["totalIssue"] == 4 and b3e.json()["totalReceive"] == 3
+          and b3e.json()["totalDamage"] == 1 and b3e.json()["remark"] == f"R5.4 edited {TAG}"
+          and [h["action"] for h in b3e.json()["history"]][-1] == "edited",
+          f"R5.4: editing a draft replaces its lines and its totals ({b3e.status_code})")
+    if DB_URL:
+        check(psql("select total_issue::text || '/' || total_receive::text || '/' || total_damage::text from batches"
+                   f" where id = '{b3['id']}'") == "4.000/3.000/1.000"
+              and psql(f"select receive_qty::text || '/' || damage_qty::text from batch_lines"
+                       f" where batch_id = '{b3['id']}' and ord = 1") == "3.000/1.000",
+              "R5.4: …on the row and on the line the edit replaced")
+    check(arif.put(f"{BASE}/production/batches/{b3['id']}", json={**batch_body, "mode": "opening"}).status_code == 409,
+          "R5.4: the batch type cannot change — a new batch instead (409)")
+    b3d = arif.delete(f"{BASE}/production/batches/{b3['id']}")
+    check(b3d.status_code == 200 and b3d.json().get("ok") is True
+          and arif.get(f"{BASE}/production/batches/{b3['id']}").status_code == 404,
+          "R5.4: a draft batch is deleted and leaves the register")
+    if DB_URL:
+        check(psql(f"select count(*) from batches where id = '{b3['id']}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from batch_lines where batch_id = '{b3['id']}'") == "1",
+              "R5.4: …as a stamped row that keeps its lines, so its id stays retired")
+    b4 = arif.post(f"{BASE}/production/batches", json=batch_body).json()
+    check(b4["no"] != b3["no"] and int(b4["id"][2:]) > int(b3["id"][2:]),
+          f"R5.4: the next batch takes a new number and a new id ({b3['no']} → {b4['no']})")
+    arif.delete(f"{BASE}/production/batches/{b4['id']}")
+    bad_item = arif.post(f"{BASE}/production/batches", json={**batch_body, "lines": [{"itemId": "nosuchitem", "issueQty": 1}]})
+    bad_qty = arif.post(f"{BASE}/production/batches", json={**batch_body, "lines": [{"itemId": bgid, "issueQty": 1, "receiveQty": 5}]})
+    bad_vendor = arif.post(f"{BASE}/production/batches", json={**batch_body, "mode": "contractual", "vendorId": "nosuchvendor"})
+    check(bad_item.status_code == 422 and bad_item.json()["errors"].get("lines.0.itemId") == ["unknown"]
+          and bad_qty.status_code == 422 and bad_qty.json()["errors"].get("lines.0.receiveQty") == ["exceedsIssue"]
+          and bad_vendor.status_code == 422 and bad_vendor.json()["errors"].get("vendorId") == ["unknown"],
+          "R5.4: an unknown SKU, more received than issued and an unknown contractor are 422s, from the mock's own rules")
+    # a contractual batch is a Mushak 6.4 challan: the inputs go out, the goods come back on a receipt of their own
+    challan_body = {"mode": "contractual", "issueDate": tdate, "vendorId": bvid, "jobProcess": "washing",
+                    "issuedBy": "Arif Hossain", "designation": "Shift-In-Charge",
+                    "lines": [{"itemId": bgid, "issueQty": 5}], "process": "Created"}
+    b5 = arif.post(f"{BASE}/production/batches", json=challan_body)
+    b5id, b5no = b5.json().get("id"), b5.json().get("no")
+    check(b5.status_code == 201 and b5.json()["mode"] == "contractual" and b5.json()["vendorName"]
+          and b5.json()["jobProcess"] == "washing" and b5.json()["address"]
+          and b5.json()["lines"][0]["receiveQty"] == 0 and b5.json()["totalReceive"] == 0,
+          f"native (R5.4): a contractual batch sends the inputs out and receives nothing yet ({b5.status_code} {b5no})")
+    check(arif.patch(f"{BASE}/production/batches/{b5id}", json={"process": "Approved"}).status_code == 200,
+          "R5.4: approving the challan sends the inputs to the contractor")
+    awaiting = arif.get(f"{BASE}/production/batches", params={"receipt": "awaiting", "size": 50}).json()
+    check(any(b["id"] == b5id for b in awaiting["data"]),
+          "R5.4: …and the register's receipt facet shows it awaiting the goods")
+    check(arif.post(f"{BASE}/production/batches/{b5id}/receive",
+                    json={"receiveDate": tdate, "lines": [{"receiveQty": 1}, {"receiveQty": 1}]}).status_code == 422,
+          "R5.4: a receipt needs one line per batch line (422 lineCount)")
+    brec1 = float(psql(f"select prod_receive from items where id = '{bgid}'")) if DB_URL else None
+    b5r = arif.post(f"{BASE}/production/batches/{b5id}/receive",
+                    json={"receiveDate": tdate, "lines": [{"receiveQty": 4, "damageQty": 1}]})
+    check(b5r.status_code == 200 and b5r.json()["totalReceive"] == 4 and b5r.json()["totalDamage"] == 1
+          and b5r.json()["receiveDate"] == tdate and b5r.json()["receivedAt"]
+          and b5r.json()["value"] == round(b5r.json()["lines"][0]["unitCost"] * 4, 2)
+          and [h.get("note") for h in b5r.json()["history"]][-1] == "Finished goods received from the contractor",
+          f"R5.4: the contractor's goods come back on the batch, which completes the challan ({b5r.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from batches where id = '{b5id}' and received_at is not null"
+                   f" and total_receive = 4 and total_damage = 1") == "1"
+              and psql(f"select receive_qty::text || '/' || damage_qty::text from batch_lines"
+                       f" where batch_id = '{b5id}' and ord = 1") == "4.000/1.000"
+              and psql(f"select prod_receive = {round(brec1 + 4, 2)} from items where id = '{bgid}'") == "t",
+              "R5.4: …onto the row, its line and the counter the receipt moves")
+    bsub = arif.get(f"{BASE}/production/subcontract", params={"from": "2026-01-01", "to": tdate})
+    check(bsub.status_code == 200 and any(r.get("no") == b5no for r in bsub.json().get("rows", [])),
+          "R5.4: …and the subcontracting register, which reads the batches in memory, still lists the challan")
+    check(arif.post(f"{BASE}/production/batches/{b5id}/receive",
+                    json={"receiveDate": tdate, "lines": [{"receiveQty": 1}]}).status_code == 409
+          and arif.post(f"{BASE}/production/batches/{b1id}/receive",
+                        json={"receiveDate": tdate, "lines": [{"receiveQty": 1}]}).status_code == 409,
+          "R5.4: a batch is received once, and only a contractual one (409)")
+    check(arif.patch(f"{BASE}/production/batches/{b5id}",
+                     json={"process": "Cancelled", "reason": f"R5.4 cancelled {TAG}"}).status_code == 200,
+          "R5.4: cancelling a received challan takes the goods and the inputs back")
+    # an opening batch is work in progress brought forward: no BOM, no consumption, its own unit cost
+    opening_batch = {"mode": "opening", "issueDate": "2025-07-01", "receiveDate": "2025-07-01",
+                     "issuedBy": "Arif Hossain", "designation": "Shift-In-Charge",
+                     "lines": [{"itemId": bgid, "issueQty": 6, "receiveQty": 6, "unitCost": 120}], "process": "Approved"}
+    b6 = arif.post(f"{BASE}/production/batches", json=opening_batch)
+    check(b6.status_code == 201 and b6.json()["process"] == "Approved" and b6.json()["consumption"] == []
+          and b6.json()["materialValue"] == 0 and b6.json()["lines"][0]["unitCost"] == 120
+          and b6.json()["value"] == 720 and [h["action"] for h in b6.json()["history"]] == ["created", "approved"],
+          f"native (R5.4): an opening batch is created and approved in one step, at its own unit cost ({b6.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from batches where id = '{b6.json()['id']}' and mode = 'opening'"
+                   f" and process = 'Approved' and job_process is null") == "1"
+              and psql(f"select count(*) from batch_consumption where batch_id = '{b6.json()['id']}'") == "0",
+              "R5.4: …as a row of its own, with no consumed inputs")
+    arif.patch(f"{BASE}/production/batches/{b6.json()['id']}", json={"process": "Cancelled", "reason": f"R5.4 cancelled {TAG}"})
+    if DB_URL:
+        check(psql("select count(*) from compat_state where data->'db' ? 'batches'") == "0",
+              "R5.4: the snapshot carries no batches collection at all")
+        check(int(psql("select count(*) from batches")) >= 8 and int(psql("select count(*) from batch_lines")) >= 10
+              and int(psql("select count(*) from batch_consumption")) >= 30
+              and int(psql("select count(*) from batches where mode = 'contractual' and vendor_id is not null")) >= 2,
+              "R5.4: the demo batches were seeded into their tables, the contractors and their consumption with them")
+        dupno = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                "insert into batches (id, no, mode, issue_date, issued_by, designation, total_issue, "
+                                "total_receive, total_damage, material_value, value, process, branch_id, branch_name, "
+                                "created_at) select 'dupb" + TAG + "', no, mode, issue_date, issued_by, designation, 0, "
+                                "0, 0, 0, 0, process, branch_id, branch_name, now() from batches limit 1"],
+                               capture_output=True, text=True)
+        check(dupno.returncode != 0, "R5.4: the database refuses a duplicate batch number (unique index), not just the API")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -1665,6 +1915,68 @@ def run():
         wo = arif.post(f"{BASE}/opening-stock", json=os_body)
         check(wo.status_code == 201 and psql(f"select count(*) from opening_entries where id = '{wo.json().get('id')}'") == "1",
               f"and writes land in the table on the upgraded database ({wo.status_code})")
+        # … and the production batches, which the same release moved out: a database written before them holds them
+        # inside compat_state, each with the finished goods it produced and the inputs it consumed. A draft deleted
+        # before the upgrade has no place there — the mock removed it for good — so what has to survive the round
+        # trip is the id counter, not the row.
+        print("\nR5.4: upgrading a pre-R5.4 database moves the production batches into their tables")
+        def batch_counts():
+            return (psql("select count(*) from batches where deleted_at is null"),
+                    psql("select count(*) from batch_lines l join batches b on b.id = l.batch_id"
+                         " where b.deleted_at is null"),
+                    psql("select count(*) from batch_consumption c join batches b on b.id = c.batch_id"
+                         " where b.deleted_at is null"),
+                    psql("select count(*) from batches where mode = 'contractual' and received_at is not null"))
+
+        def batch_registers():
+            return {"batches": arif.get(f"{BASE}/production/batches", params={"size": 200}).json(),
+                    "lots": arif.get(f"{BASE}/production/lots", params={"all": 1}).json(),
+                    "workOrders": arif.get(f"{BASE}/production/work-orders", params={"size": 50}).json(),
+                    "subcon": arif.get(f"{BASE}/production/subcontract", params={"from": "2025-01-01", "to": tdate}).json(),
+                    "stock": arif.get(f"{BASE}/stock", params={"size": 200}).json()}
+
+        def batch_boots():
+            """How many boots adopted the R5.4 collections — one `R5.4 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return fh.read().count("R5.4 upgrade:")
+
+        goneb = arif.post(f"{BASE}/production/batches", json={**batch_body, "remark": f"R5.4 deleted {TAG}"}).json()
+        arif.delete(f"{BASE}/production/batches/{goneb['id']}")
+        bcounts, bbefore, bsplit, bboots = batch_counts(), batch_registers(), bfg_stock(bgid, binp), batch_boots()
+        psql(PRE_R54_BATCHES)
+        psql("delete from batch_consumption")
+        psql("delete from batch_lines")
+        psql("delete from batches")
+        check(batch_counts() == ("0", "0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'batches'") == "1",
+              f"the database is back in the pre-R5.4 shape ({bcounts[0]} batches, {bcounts[1]} lines, "
+              f"{bcounts[2]} consumed inputs, {bcounts[3]} receipts inside the snapshot)")
+        restart()
+        check(batch_counts() == bcounts,
+              f"the first boot moved every batch into the tables ({bcounts[0]} batches, {bcounts[1]} lines)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'batches'") == "0",
+              "…and rewrote the snapshot without them")
+        check(batch_registers() == bbefore,
+              "…and serves the same five registers, row for row — the lots, the work orders' progress, the "
+              "subcontracting register and the derived stock with them")
+        check(psql(f"select count(*) from batches where id = '{goneb['id']}'") == "0",
+              "a batch deleted before the upgrade stays deleted — the mock kept no row for it either")
+        afterb = arif.post(f"{BASE}/production/batches", json=batch_body).json()
+        check(int(afterb["id"][2:]) > int(goneb["id"][2:]) and afterb["no"] != goneb["no"],
+              f"…but its id and its number stay retired ({goneb['no']} → {afterb['no']})")
+        arif.delete(f"{BASE}/production/batches/{afterb['id']}")
+        check(bfg_stock(bgid, binp) == bsplit, "…and the stock derived from them is unchanged")
+        bboots_after, bnow = batch_boots(), batch_counts()
+        restart()
+        check(batch_counts() == bnow and (bboots is None or bboots_after == bboots + 1)
+              and (bboots is None or batch_boots() == bboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        wb = arif.post(f"{BASE}/production/batches", json=batch_body)
+        check(wb.status_code == 201 and psql(f"select count(*) from batches where id = '{wb.json().get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({wb.status_code})")
+        arif.delete(f"{BASE}/production/batches/{wb.json()['id']}")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

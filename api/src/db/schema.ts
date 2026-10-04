@@ -811,7 +811,129 @@ export const openingEntries = pgTable("opening_entries", {
 ])
 
 /**
- * Modules not yet migrated (purchases, production, accounting, VAT returns…) keep their exact
+ * R5.4 — a production batch (PB-MMYY####): finished goods put into production. `mode` says how — in-house at the
+ * factory, contractual (the inputs go to a contract manufacturer under a Mushak 6.4 challan and the goods come back
+ * later) or opening (work in progress brought forward at go-live). A batch's lines are the finished goods, its
+ * consumption the inputs the BOM says they take, and approving one moves both: the inputs leave the store
+ * (`items.prod_issue`), the goods received come into the factory (`items.prod_receive`). These were the last
+ * collection the derived stock read from memory, so with these rows the branch split and an item's ledger come out
+ * of the database.
+ */
+export const batches = pgTable("batches", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** PB-MMYY#### — unique, and never reused: the audit trail keeps a deleted draft's number */
+  no: text("no").notNull(),
+  mode: text("mode", { enum: ["inHouse", "contractual", "opening"] }).notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  /** when the finished goods came (or are expected) back */
+  receiveDate: date("receive_date", { mode: "string" }),
+  /** contractual: the contractor the inputs are sent to */
+  vendorId: text("vendor_id"),
+  vendorName: text("vendor_name"),
+  vendorBin: text("vendor_bin"),
+  vendorAddress: text("vendor_address"),
+  /** contractual: where the inputs are delivered */
+  address: text("address"),
+  /** R6.2 (RMG): contractual — what the contractor does (full manufacture, or one process) */
+  jobProcess: text("job_process", { enum: ["manufacture", "printing", "embroidery", "washing", "dyeing", "lamination", "other"] }),
+  remark: text("remark"),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  issueTime: text("issue_time"),
+  totalIssue: numeric("total_issue", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  totalReceive: numeric("total_receive", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  totalDamage: numeric("total_damage", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** what the consumed inputs are worth, and what the finished goods received are worth */
+  materialValue: numeric("material_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** contractual: when the goods actually came back (completes the Mushak 6.4 challan) */
+  receivedAt: ts("received_at"),
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the batch's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later batch taking the same id. There is no undo for a batch.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("batches_no_key").on(t.no),
+  index("batches_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("batches_issue_date_idx").on(t.issueDate),
+  index("batches_mode_idx").on(t.mode),
+  /** the subcontracting register: what is still at a contractor, and for how long */
+  index("batches_vendor_idx").on(t.vendorId),
+  index("batches_branch_idx").on(t.branchId),
+  check("batches_mode_check", sql`${t.mode} in ('inHouse','contractual','opening')`),
+  check("batches_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  // the contractor, the job it does and the receipt all belong to a contractual batch only
+  check("batches_vendor_check", sql`${t.vendorId} is null or ${t.mode} = 'contractual'`),
+  check("batches_received_check", sql`${t.receivedAt} is null or ${t.mode} = 'contractual'`),
+  check("batches_job_process_check", sql`${t.jobProcess} is null or (${t.mode} = 'contractual' and ${t.jobProcess} in ('manufacture','printing','embroidery','washing','dyeing','lamination','other'))`),
+])
+
+/**
+ * The finished goods of a batch: what was put into production, what came back, what was rejected — each line at the
+ * unit cost of the BOM version it was produced under (an opening batch may state its own), and on the work order it
+ * draws the quantity from, if any.
+ */
+export const batchLines = pgTable("batch_lines", {
+  batchId: text("batch_id").notNull(),
+  /** position on the batch */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  workOrderId: text("work_order_id"),
+  workOrderNo: text("work_order_no"),
+  issueQty: numeric("issue_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  receiveQty: numeric("receive_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  damageQty: numeric("damage_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  bomId: text("bom_id"),
+  bomVersion: integer("bom_version"),
+  unitCost: numeric("unit_cost", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.batchId, t.ord] }),
+  /** the finished-goods lots: what a sales invoice may draw on */
+  index("batch_lines_item_idx").on(t.itemId),
+  index("batch_lines_work_order_idx").on(t.workOrderId),
+  // a line can never receive or reject more than it was issued
+  check("batch_lines_qty_check", sql`${t.receiveQty} + ${t.damageQty} <= ${t.issueQty}`),
+])
+
+/**
+ * The inputs a batch consumes: what the BOM says the issued quantity takes (merged per input), or, when the
+ * production configuration asks for the actual consumption, the quantities the batch states. Approving takes them
+ * out of the store; cancelling puts them back.
+ */
+export const batchConsumption = pgTable("batch_consumption", {
+  batchId: text("batch_id").notNull(),
+  /** position in the consumption list */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.batchId, t.ord] }),
+  /** the inputs' ledger rows and the branch stock */
+  index("batch_consumption_item_idx").on(t.itemId),
+])
+
+/**
+ * Modules not yet migrated (production's BOMs and work orders, accounting, VAT returns…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */
 export const compatState = pgTable("compat_state", {

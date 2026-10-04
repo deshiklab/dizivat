@@ -388,6 +388,48 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
   - **Next in R5.4:** the production batches — the last collection the derivation reads — and then the branch split
     and the ledger themselves, served from the database.
 
+- **R5.4 — Backend: the production batches, and with them every document the derived stock reads (branch
+  `r5-nestjs`):** the batches leave the compat layer for `batches` + `batch_lines` + `batch_consumption` — the last
+  collection `stockByBranch()` and an item's ledger walked in memory, so from here every family they add up is in the
+  database. See [docs/BACKEND.md › R5.4](docs/BACKEND.md#r54--production-batches-on-their-own-tables).
+  - **A batch is three tables:** the row (mode, dates, totals, process, branch, own history), one row per finished
+    good (issued / received / rejected quantity, the BOM version and its unit cost, the work order it draws on) and
+    one per consumed input — so what a factory produced, rejected and consumed is a `SUM`, not a walk. A check
+    constraint keeps received + rejected within issued on every line.
+  - **The Mushak 6.4 challan is columns too:** a contractual batch names its contractor (as printed), where the inputs
+    are delivered, what job the contractor performs (R6.2) and when the goods came back — which is what the
+    subcontracting register reads, still through the in-memory copy the module keeps in step.
+  - **The same discipline as the opening entries:** the number (`PB-MMYY####`) is unique in the database and comes from
+    the live batches *and* the audit trail; a deleted draft is stamped rather than dropped, its lines and consumption
+    with it, because batches have no undo but the mock's id counter had moved on; the id is claimed inside the locked
+    transaction; and an approval writes both counters it moves — `items.prod_issue` for the inputs and
+    `items.prod_receive` for the goods — in the same transaction, taking them back on a cancellation that first checks
+    the goods are still on hand and no invoice draws on the batch's lots.
+  - **The rules are the mock's own:** `buildBatch` (an active finished good with an approved BOM, an opening batch at
+    its own unit cost, the BOM's consumption or the actual one the configuration asks for, a work order that is
+    approved and still has the quantity left), the identity, the approve / stock / cancel / draft / delete rules, the
+    receipt rules, the register's spec, its `?workOrder=` filter and its CSV columns, all through the compat bundle.
+    Both sides were held against the same contract suite: 676 checks natively, 676 again with the mock handlers serving
+    them — which also proved the write-back, since a compat-created batch reached the three tables, its approval moved
+    `items.prod_issue` 33,294 → 33,296.04 and `items.prod_receive` 65,061 → 65,071 in the rows, a compat receipt set
+    `received_at` and moved the counter again, and a compat delete stamped the row.
+  - **Tests:** `api_native.py` 386 checks (+49: a draft is a row with its finished goods and the inputs its BOM consumes
+    and moves no stock, approving receives the goods and consumes the inputs with both ledgers quoting the batch and
+    the goods becoming a lot, the register's facets, totals and CSV, a batch that issues more than its work order has
+    left is a 422 and the work order's progress follows an approval and a cancellation, cancelling puts the goods and
+    the inputs back, a cancelled batch is neither cancelled twice nor approved, edited or deleted, editing a draft
+    replaces its lines on the row, the batch type cannot change, deleting stamps the row so the next batch takes a new
+    id and number, a contractual challan sends the inputs out, shows in the `receipt` facet and the subcontracting
+    register, and comes back on a receipt of its own — once per challan — an opening batch is created and approved in
+    one step with no consumption, the snapshot carries no batches collection, the demo batches were seeded with their
+    contractors and consumption, the database refuses a duplicate batch number — and the **R5.4 upgrade drill**: the
+    database is rewritten into its pre-R5.4 shape, the API restarted, and the same batches and the same five registers
+    row for row (the batches, the lots, the work orders' progress, the subcontracting register and the derived stock)
+    are required back, with a batch deleted before the upgrade staying deleted while its id and number stay retired).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.4:** serve the two derived endpoints — `stock` and `items/{id}/ledger` — from the tables, then the
+    rest of production (BOMs and 4.3 versions, work orders, the production configuration).
+
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
 All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). ESLint stops components from importing the mock directly. On this branch the same `/api/v1` contract is also served by the **NestJS + PostgreSQL** API in `api/`: build and run with `API_UPSTREAM=http://127.0.0.1:4000` and no component changes are needed (see *Backend (R5)* below).

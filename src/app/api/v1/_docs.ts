@@ -3,7 +3,7 @@ import { diff } from "@/lib/mock/audit"
 import { buildPurchaseFields, unknownBranch, unknownItems, unknownServices } from "@/lib/mock/build"
 import { delay } from "@/lib/mock/query"
 import { cancelInput, importInput, purchaseInput, realisationInput } from "@/lib/schemas"
-import type { CreditNote, DebitNote, ExportInfo, HistoryEntry, Line, OpeningEntry, Party, Purchase, Realisation, Sale } from "@/lib/types"
+import type { Batch, CreditNote, DebitNote, ExportInfo, HistoryEntry, Line, OpeningEntry, Party, Purchase, Realisation, Sale } from "@/lib/types"
 import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
 import { lotShortfall, parseSale } from "./_r3"
 import { lockedConflictProblem, lockedFieldRule, settlementsOf } from "./_r4"
@@ -323,6 +323,9 @@ export function stampTrail(doc: { history?: HistoryEntry[]; updatedAt?: string }
 export const stampNoteHistory = stampTrail
 /** The same, for an opening stock entry — its own trail, its own audit event, recorded by whoever writes it. */
 export const stampOpeningHistory = (doc: OpeningEntry, by: string, action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) =>
+  stampTrail(doc, by, action, note, at)
+/** The same, for a production batch — its own trail, its own audit event, recorded by whoever writes it. */
+export const stampBatchHistory = (doc: Batch, by: string, action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) =>
   stampTrail(doc, by, action, note, at)
 
 export function docRoutes(k: Kind) {
