@@ -933,7 +933,136 @@ export const batchConsumption = pgTable("batch_consumption", {
 ])
 
 /**
- * Modules not yet migrated (production's BOMs and work orders, accounting, VAT returns…) keep their exact
+ * The production configuration (R5.5): one row — the procedure a production batch follows (straight into stock, or
+ * against a work order) and the consumption it records (what the declaration says the goods take, or what the batch
+ * states). `buildBatch` reads both, so this settings screen decides how every later batch is priced.
+ */
+export const productionConfig = pgTable("production_config", {
+  id: integer("id").primaryKey().default(1),
+  procedure: text("procedure", { enum: ["directStock", "workOrder"] }).notNull(),
+  consumption: text("consumption", { enum: ["standard", "actual"] }).notNull(),
+  updatedAt: ts("updated_at"),
+  updatedBy: text("updated_by"),
+}, (t) => [
+  check("production_config_single_row", sql`${t.id} = 1`),
+  check("production_config_procedure_check", sql`${t.procedure} in ('directStock','workOrder')`),
+  check("production_config_consumption_check", sql`${t.consumption} in ('standard','actual')`),
+])
+
+/**
+ * A price declaration / bill of materials (Mushak 4.3, R5.5): the input–output coefficients of ONE unit of a
+ * finished good, the cost heads that turn them into the declared price, and the version of the item it is filed
+ * under. What a production batch consumes and what a receipt is valued at both come from the version in force, so
+ * the row is what makes those sums answerable in SQL:
+ *   - the inputs are rows of `bom_inputs` and the cost heads rows of `bom_costs`, in the order they are printed;
+ *   - approving a version supersedes the one in force (`superseded_at`), and only a draft may be approved, edited,
+ *     cancelled or deleted;
+ *   - a deleted draft leaves the register but keeps its row with `deleted_at`: the mock removed it from its array
+ *     for good, and its version may then be filed again — but its id counter had moved on, so the stamped row is
+ *     what stops a later declaration taking the same id;
+ *   - the number carries the version (`BOM-{sku}-v{n}`), so it is unique among the live declarations only.
+ */
+export const boms = pgTable("boms", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** BOM-{sku}-v{n} */
+  no: text("no").notNull(),
+  /** the finished good it declares */
+  itemId: text("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  version: integer("version").notNull(),
+  /** date the declaration is submitted to / accepted by the VAT office */
+  licenseDate: date("license_date", { mode: "string" }),
+  /** date the coefficients take effect */
+  effectiveDate: date("effective_date", { mode: "string" }).notNull(),
+  /** why this version replaced the previous one (version 2 and up) */
+  amendmentReason: text("amendment_reason"),
+  note: text("note"),
+  /** what the inputs are worth, what the wastage is worth, and what the cost heads add */
+  materialValue: numeric("material_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  wastageValue: numeric("wastage_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  valueAdded: numeric("value_added", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** declared price per unit = material value + value added (profit included) */
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** what a production receipt is valued at: the price less the profit head */
+  unitCost: numeric("unit_cost", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** set when a later version of the item was approved */
+  supersededAt: ts("superseded_at"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the declaration's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  /** two live declarations cannot share a number; a deleted draft's version may be filed again */
+  uniqueIndex("boms_live_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  index("boms_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the version in force for an item on a date */
+  index("boms_item_idx").on(t.itemId),
+  index("boms_effective_date_idx").on(t.effectiveDate),
+  check("boms_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  // only a version that was approved can be superseded by a later one
+  check("boms_superseded_check", sql`${t.supersededAt} is null or ${t.process} = 'Approved'`),
+  check("boms_version_check", sql`${t.version} > 0`),
+])
+
+/**
+ * The inputs a declaration prices: per ONE unit of the finished good, the net quantity, the wastage it allows and
+ * what the gross quantity costs. Together they are the Mushak 4.3 material value.
+ */
+export const bomInputs = pgTable("bom_inputs", {
+  bomId: text("bom_id").notNull(),
+  /** position in the input list */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  /** net quantity per unit of output */
+  qty: numeric("qty", { precision: 18, scale: 4, mode: "number" }).notNull(),
+  wastagePct: numeric("wastage_pct", { precision: 8, scale: 6, mode: "number" }).notNull(),
+  /** qty × wastage% */
+  wastageQty: numeric("wastage_qty", { precision: 18, scale: 4, mode: "number" }).notNull(),
+  /** qty + wastage */
+  grossQty: numeric("gross_qty", { precision: 18, scale: 4, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** grossQty × price */
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** wastageQty × price */
+  wastageValue: numeric("wastage_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.bomId, t.ord] }),
+  /** what a batch consumes, and the inputs' ledger rows */
+  index("bom_inputs_item_idx").on(t.itemId),
+  // an input appears once per declaration, and the wastage it allows is the 0–50% the form accepts
+  uniqueIndex("bom_inputs_item_key").on(t.bomId, t.itemId),
+  check("bom_inputs_wastage_check", sql`${t.wastagePct} >= 0 and ${t.wastagePct} <= 50`),
+])
+
+/** The cost heads that turn the material value into the declared price: labour, power, … and the profit. */
+export const bomCosts = pgTable("bom_costs", {
+  bomId: text("bom_id").notNull(),
+  /** position in the cost list */
+  ord: integer("ord").notNull(),
+  head: text("head", { enum: ["labour", "power", "overhead", "packing", "admin", "finance", "profit", "other"] }).notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.bomId, t.ord] }),
+  /** a head appears at most once per declaration, and only the heads the form offers */
+  uniqueIndex("bom_costs_head_key").on(t.bomId, t.head),
+  check("bom_costs_head_check", sql`${t.head} in ('labour','power','overhead','packing','admin','finance','profit','other')`),
+  // a zero head is dropped before the declaration is priced, so it is never stored
+  check("bom_costs_amount_check", sql`${t.amount} > 0`),
+])
+
+/**
+ * Modules not yet migrated (production's work orders, accounting, VAT returns…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */
 export const compatState = pgTable("compat_state", {

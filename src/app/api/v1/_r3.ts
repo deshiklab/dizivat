@@ -5,10 +5,10 @@ import { buildSaleFields, unknownBranch, unknownItems, unknownSaleServices } fro
 import { consumptionFor, mergeConsumption } from "@/lib/mock/seed-r3"
 import { csvResponse, delay, runQuery, toCSV, type QuerySpec } from "@/lib/mock/query"
 import { batchInput, batchReceiveInput, bomInput, cancelInput, creditNoteInput, productionConfigInput, saleInput, workOrderInput } from "@/lib/schemas"
-import type { AuditChange, Batch, BatchLine, Bom, BomRow, BomStatus, Consumption, CreditLine, CreditNote, HistoryEntry, Lot, Party, Sale, WorkOrder } from "@/lib/types"
+import type { AuditChange, Batch, BatchLine, Bom, BomRow, BomStatus, Consumption, CreditLine, CreditNote, HistoryEntry, Item, Lot, Party, ProductionConfig, Sale, WorkOrder } from "@/lib/types"
 import { calcBom, calcCreditLine, round2, round4 } from "@/lib/vat"
 import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, zodProblem, type RuleProblem } from "./_lib"
-import { noteDiff, noteDraftRule } from "./_docs"
+import { noteDiff, noteDraftRule, stampBomHistory } from "./_docs"
 import { lockedConflictProblem, lockedFieldRule } from "./_r4"
 
 type Ctx = { params: Promise<{ id: string }> }
@@ -364,24 +364,44 @@ export const creditableRoute = withAuth<Ctx>(null, async (req, { params }) => {
 
 /* ── BOM / price declaration (Mushak 4.3) ──────────────────────────────── */
 
+/** What a declaration is built from: the SKUs it declares and prices, and the versions already filed for the item. */
+export interface BomSource { items: Item[]; boms: Bom[] }
+/** What `buildBom` returns: every field of the declaration but the identity and the lifecycle the caller adds. */
+export type BomFields = Omit<Bom, "id" | "process" | "createdAt" | "history">
+
 export const bomStatus = (b: Bom): BomStatus => (b.process === "Cancelled" ? "cancelled" : b.process === "Created" ? "draft" : b.supersededAt ? "superseded" : "active")
-const bomRow = (b: Bom): BomRow => ({ ...b, status: bomStatus(b), salePrice: db.items.find((i) => i.id === b.itemId)?.salePrice ?? 0 })
+
+/** A declaration as the register prints it: its lifecycle status and the item's current sale price. */
+export const bomRow = (b: Bom, items: Item[] = db.items): BomRow =>
+  ({ ...b, status: bomStatus(b), salePrice: items.find((i) => i.id === b.itemId)?.salePrice ?? 0 })
+
 /** The declaration in force for an item on a date: highest approved version effective on or before it. */
-export function activeBom(itemId: string, date: string) {
-  return db.boms.filter((b) => b.itemId === itemId && b.process === "Approved" && b.effectiveDate <= date).sort((a, b) => b.version - a.version)[0]
+export function activeBom(itemId: string, date: string, src: Bom[] = db.boms): Bom | undefined {
+  return src.filter((b) => b.itemId === itemId && b.process === "Approved" && b.effectiveDate <= date).sort((a, b) => b.version - a.version)[0]
 }
 
-function buildBom(body: unknown, self?: Bom) {
+/** Every version of a declaration's item, newest first — what the declaration page lists beside it. */
+export const bomVersions = (b: Bom, src: BomSource = db): BomRow[] =>
+  src.boms.filter((x) => x.itemId === b.itemId).sort((x, y) => y.version - x.version).map((x) => bomRow(x, src.items))
+
+/**
+ * Validates a declaration body and prices it (R5.5: as data, so the API's native module answers with the same 422
+ * body): an active finished good, inputs that are active, not finished goods and not repeated, cost heads not
+ * repeated, and — from version 2 on — an amendment reason and an effective date after the version it replaces.
+ * `calcBom` prices it: the material and the wastage of every input, the value added, the declared price and the
+ * unit cost a production receipt is valued at.
+ */
+export function buildBom(body: unknown, self?: Bom, src: BomSource = db): RuleProblem | { process: "Created" | "Approved"; fields: BomFields } {
   const parsed = bomInput.safeParse(body)
-  if (!parsed.success) return { error: zodProblem(parsed.error) }
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
   const d = parsed.data
-  const fg = db.items.find((i) => i.id === d.itemId && i.active && i.group === "Finished Goods")
-  if (!fg) return { error: invalid({ itemId: ["unknown"] }) }
-  if (self && self.itemId !== fg.id) return { error: problem(409, "A declaration cannot move to another item — create a new one.") }
+  const fg = src.items.find((i) => i.id === d.itemId && i.active && i.group === "Finished Goods")
+  if (!fg) return invalidRule({ itemId: ["unknown"] })
+  if (self && self.itemId !== fg.id) return { status: 409, title: "A declaration cannot move to another item — create a new one." }
   const errors: Record<string, string[]> = {}
   const seen = new Set<string>()
   const inputs = d.inputs.map((x, i) => {
-    const it = db.items.find((y) => y.id === x.itemId && y.active && y.group !== "Finished Goods")
+    const it = src.items.find((y) => y.id === x.itemId && y.active && y.group !== "Finished Goods")
     if (!it) errors[`inputs.${i}.itemId`] = ["unknown"]
     else if (seen.has(it.id)) errors[`inputs.${i}.itemId`] = ["duplicate"]
     else seen.add(it.id)
@@ -389,16 +409,16 @@ function buildBom(body: unknown, self?: Bom) {
   })
   const heads = new Set<string>()
   d.costs.forEach((c, i) => { if (heads.has(c.head)) errors[`costs.${i}.head`] = ["duplicate"]; heads.add(c.head) })
-  const versions = db.boms.filter((b) => b.itemId === fg.id && b.id !== self?.id)
+  const versions = src.boms.filter((b) => b.itemId === fg.id && b.id !== self?.id)
   const version = self?.version ?? versions.reduce((m, b) => Math.max(m, b.version), 0) + 1
   const prev = versions.filter((b) => b.process === "Approved").sort((a, b) => b.version - a.version)[0]
   if (version > 1 && d.amendmentReason.length < 10) errors.amendmentReason = ["amendmentReason"]
   if (prev && d.effectiveDate <= prev.effectiveDate) errors.effectiveDate = ["afterPrevious"]
   if (d.licenseDate && !/^\d{4}-\d{2}-\d{2}$/.test(d.licenseDate)) errors.licenseDate = ["required"]
-  if (has(errors)) return { error: invalid(errors) }
+  if (has(errors)) return invalidRule(errors)
   const costs = d.costs.filter((c) => c.amount > 0)
   const c = calcBom(inputs, costs)
-  if (c.price <= 0) return { error: invalid({ costs: ["pricePositive"] }) }
+  if (c.price <= 0) return invalidRule({ costs: ["pricePositive"] })
   return {
     process: d.process,
     fields: {
@@ -406,49 +426,103 @@ function buildBom(body: unknown, self?: Bom) {
       effectiveDate: d.effectiveDate, licenseDate: d.licenseDate || undefined, amendmentReason: d.amendmentReason || undefined, note: d.note || undefined,
       inputs: inputs.map((x, i) => ({ itemId: x.it!.id, name: x.it!.name, sku: x.it!.sku, uom: x.it!.unit, qty: round4(x.qty), wastagePct: x.wastagePct, price: x.price, ...c.lines[i] })),
       costs, materialValue: c.materialValue, wastageValue: c.wastageValue, valueAdded: c.valueAdded, price: c.price, unitCost: c.unitCost,
-    } satisfies Partial<Bom>,
+    } satisfies BomFields,
   }
 }
-/** Approving a version supersedes the one in force (history keeps both). */
-function approveBom(b: Bom, by: string) {
-  const at = new Date().toISOString()
-  for (const o of db.boms) if (o.itemId === b.itemId && o.id !== b.id && o.process === "Approved" && !o.supersededAt) o.supersededAt = at
+
+/**
+ * Approving a version supersedes the one in force (history keeps both). Returns the declarations it superseded, so
+ * whoever stores them writes those rows too.
+ */
+export function approveBom(b: Bom, by: string, src: Bom[] = db.boms, at: string = new Date().toISOString()): Bom[] {
+  const superseded = src.filter((o) => o.itemId === b.itemId && o.id !== b.id && o.process === "Approved" && !o.supersededAt)
+  for (const o of superseded) o.supersededAt = at
   b.process = "Approved"
-  addHistory("bom", b, by, "approved")
+  stampBomHistory(b, by, "approved", undefined, at)
+  return superseded
 }
 
-const bomSpec: QuerySpec<BomRow> = {
+/** An item keeps one draft declaration at a time — the second one has to be an amendment of the first. */
+export const bomDraftTakenRule = (itemId: string, src: Bom[] = db.boms): RuleProblem | undefined =>
+  src.some((b) => b.itemId === itemId && b.process === "Created")
+    ? { status: 409, title: "This item already has a draft declaration — edit or delete it first." } : undefined
+
+/** Only a draft may be edited — checked before the body is parsed, exactly as the mock checked it. */
+export const bomDraftRule = (b: Bom): RuleProblem | undefined =>
+  b.process !== "Created" ? { status: 409, title: `Only drafts can be edited — ${b.no} is ${b.process}. Amend it to create a new version.` } : undefined
+
+/** Only a draft may be approved; a superseded or cancelled one is amended into a new version instead. */
+export const bomApproveRule = (b: Bom): RuleProblem | undefined =>
+  b.process !== "Created" ? { status: 409, title: `Cannot approve — ${b.no} is ${b.process}.` } : undefined
+
+/** Cancelling a draft: the reason is mandatory (the same `cancelInput` a cancelled batch answers with). */
+export function bomCancelRule(b: Bom, reason: string): RuleProblem | { reason: string } {
+  if (b.process !== "Created") return { status: 409, title: `Only draft declarations can be cancelled — amend ${b.no} instead.` }
+  const parsed = cancelInput.safeParse({ reason })
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  return { reason: parsed.data.reason }
+}
+
+/** Only a draft may be deleted — a filed declaration stays on record, superseded or cancelled. */
+export const bomDeleteRule = (b: Bom): RuleProblem | undefined =>
+  b.process !== "Created" ? { status: 409, title: `Only drafts can be deleted — ${b.no} is ${b.process}.` } : undefined
+
+/**
+ * A new declaration's id: the next in the `bom` series, claimed separately so a create refused after this point
+ * consumes nothing. (Its number is the `BOM-{sku}-v{n}` the rules worked out from the item's other versions.)
+ */
+export function bomIdentity() { return { id: `bom${db.seq.bom + 1}` } }
+export const claimBomId = () => { db.seq.bom += 1 }
+
+/** What an edit of a declaration records in the audit trail. */
+export const BOM_DIFF_FIELDS = ["effectiveDate", "licenseDate", "amendmentReason", "materialValue", "valueAdded", "price"]
+
+export function bomDiff(a: Bom, b: Bom) {
+  const out = diff(a, b, BOM_DIFF_FIELDS)
+  const sig = (x: Bom) => x.inputs.map((i) => `${i.name} ${i.qty} +${i.wastagePct}%`).join("; ")
+  if (sig(a) !== sig(b)) out.push({ field: "inputs", from: sig(a), to: sig(b) })
+  return out
+}
+
+export const bomSpec: QuerySpec<BomRow> = {
   search: (b) => `${b.no} ${b.itemName} ${b.sku} ${b.hsCode} ${b.inputs.map((i) => i.name).join(" ")}`,
   dateField: "effectiveDate",
   facets: { status: (b) => b.status, item: (b) => b.itemId },
   totals: [],
 }
 
+/** The register's CSV: the price declarations, one row each. */
+export const bomCsvColumns = [
+  { key: "no", label: "Declaration" }, { key: "itemName", label: "Item" }, { key: "uom", label: "UoM" }, { key: "version", label: "Version" },
+  { key: "licenseDate", label: "Submitted" }, { key: "effectiveDate", label: "Effective" }, { key: "materialValue", label: "Material Value" }, { key: "wastageValue", label: "Wastage Value" },
+  { key: "valueAdded", label: "Value Added" }, { key: "price", label: "Declared Price" }, { key: "unitCost", label: "Unit Cost" }, { key: "status", label: "Status" },
+]
+export const bomCsvName = (date = new Date().toISOString().slice(0, 10)) => `price-declarations-${date}.csv`
+
+/** The register's facet labels: the finished goods a declaration may be filed for. */
+export const bomFacetLabels = (items: Item[] = db.items) =>
+  ({ item: Object.fromEntries(items.filter((i) => i.group === "Finished Goods").map((i) => [i.id, i.name])) })
+
 export function bomListRoutes() {
   const GET = withAuth(null, async (req) => {
     const sp = new URL(req.url).searchParams
     if (!sp.get("sort")) sp.set("sort", "sku.asc")
-    const r = runQuery(db.boms.map(bomRow), sp, bomSpec)
-    if (sp.get("format") === "csv") {
-      return csvResponse(toCSV(r.all, [
-        { key: "no", label: "Declaration" }, { key: "itemName", label: "Item" }, { key: "uom", label: "UoM" }, { key: "version", label: "Version" },
-        { key: "licenseDate", label: "Submitted" }, { key: "effectiveDate", label: "Effective" }, { key: "materialValue", label: "Material Value" }, { key: "wastageValue", label: "Wastage Value" },
-        { key: "valueAdded", label: "Value Added" }, { key: "price", label: "Declared Price" }, { key: "unitCost", label: "Unit Cost" }, { key: "status", label: "Status" },
-      ]), `price-declarations-${new Date().toISOString().slice(0, 10)}.csv`)
-    }
+    const r = runQuery(db.boms.map((b) => bomRow(b)), sp, bomSpec)
+    if (sp.get("format") === "csv") return csvResponse(toCSV(r.all, bomCsvColumns), bomCsvName())
     await delay()
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { all, ...page } = r
-    return json({ ...page, facetLabels: { item: Object.fromEntries(db.items.filter((i) => i.group === "Finished Goods").map((i) => [i.id, i.name])) } })
+    return json({ ...page, facetLabels: bomFacetLabels() })
   })
   const POST = withAuth("master.edit", async (req, _ctx, user) => {
     const body = await req.json().catch(() => ({}))
     const r = buildBom(body)
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
-    if (db.boms.some((b) => b.itemId === r.fields!.itemId && b.process === "Created")) return problem(409, "This item already has a draft declaration — edit or delete it first.")
-    const b: Bom = { ...r.fields!, id: `bom${db.seq.bom + 1}`, process: "Created", createdAt: new Date().toISOString(), history: [] }
-    db.seq.bom += 1
+    const taken = bomDraftTakenRule(r.fields!.itemId)
+    if (taken) return ruleResponse(taken)
+    const b: Bom = { ...r.fields!, id: bomIdentity().id, process: "Created", createdAt: new Date().toISOString(), history: [] }
+    claimBomId()
     addHistory("bom", b, user.name, "created")
     if (r.process === "Approved") approveBom(b, user.name)
     db.boms.push(b)
@@ -464,21 +538,20 @@ export function bomDocRoutes() {
     await delay(100)
     const b = find(id)
     if (!b) return problem(404, "Price declaration not found")
-    return json({ ...bomRow(b), versions: db.boms.filter((x) => x.itemId === b.itemId).sort((x, y) => y.version - x.version).map(bomRow) })
+    return json({ ...bomRow(b), versions: bomVersions(b) })
   })
   const PUT = withAuth<Ctx>("master.edit", async (req, { params }, user) => {
     const { id } = await params
     const b = find(id)
     if (!b) return problem(404, "Price declaration not found")
-    if (b.process !== "Created") return problem(409, `Only drafts can be edited — ${b.no} is ${b.process}. Amend it to create a new version.`)
+    const draft = bomDraftRule(b)
+    if (draft) return ruleResponse(draft)
     const r = buildBom(await req.json().catch(() => ({})), b)
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
     const before = structuredClone(b)
     Object.assign(b, r.fields)
-    const changes = diff(before, b, ["effectiveDate", "licenseDate", "amendmentReason", "materialValue", "valueAdded", "price"])
-    const sig = (x: Bom) => x.inputs.map((i) => `${i.name} ${i.qty} +${i.wastagePct}%`).join("; ")
-    if (sig(before) !== sig(b)) changes.push({ field: "inputs", from: sig(before), to: sig(b) })
+    const changes = bomDiff(before, b)
     addHistory("bom", b, user.name, "edited", undefined, changes)
     if (r.process === "Approved") approveBom(b, user.name)
     return json(bomRow(b))
@@ -490,18 +563,18 @@ export function bomDocRoutes() {
     const body = (await req.json().catch(() => ({}))) as { process?: string; reason?: string }
     if (body.process === "Approved") {
       const no = deny(user, "doc.approve"); if (no) return no
-      if (b.process !== "Created") return problem(409, `Cannot approve — ${b.no} is ${b.process}.`)
+      const rule = bomApproveRule(b)
+      if (rule) return ruleResponse(rule)
       approveBom(b, user.name)
       return json(bomRow(b))
     }
     if (body.process === "Cancelled") {
       const no = deny(user, "doc.cancel"); if (no) return no
-      if (b.process !== "Created") return problem(409, `Only draft declarations can be cancelled — amend ${b.no} instead.`)
-      const r = cancelInput.safeParse({ reason: body.reason ?? "" })
-      if (!r.success) return zodProblem(r.error)
+      const r = bomCancelRule(b, body.reason ?? "")
+      if ("status" in r) return ruleResponse(r)
       b.process = "Cancelled"
-      b.cancelReason = r.data.reason
-      addHistory("bom", b, user.name, "cancelled", r.data.reason)
+      b.cancelReason = r.reason
+      addHistory("bom", b, user.name, "cancelled", r.reason)
       return json(bomRow(b))
     }
     return problem(400, "process must be Approved or Cancelled")
@@ -510,7 +583,8 @@ export function bomDocRoutes() {
     const { id } = await params
     const i = db.boms.findIndex((x) => x.id === id)
     if (i < 0) return problem(404, "Price declaration not found")
-    if (db.boms[i].process !== "Created") return problem(409, `Only drafts can be deleted — ${db.boms[i].no} is ${db.boms[i].process}.`)
+    const rule = bomDeleteRule(db.boms[i])
+    if (rule) return ruleResponse(rule)
     const [b] = db.boms.splice(i, 1)
     addHistory("bom", b, user.name, "deleted")
     return json({ ok: true })
@@ -1023,16 +1097,29 @@ export const batchReceiveRoute = withAuth<Ctx>("doc.edit", async (req, { params 
 
 /* ── Config + lots ─────────────────────────────────────────────────────── */
 
+/**
+ * The production configuration as data (R5.5: so the API's native module answers a bad body with the same 422):
+ * the procedure a batch follows and the consumption it records.
+ */
+export function buildConfig(body: unknown): RuleProblem | { fields: ProductionConfig } {
+  const parsed = productionConfigInput.safeParse(body)
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  return { fields: parsed.data }
+}
+
+/** What an update of the configuration records in the audit trail. */
+export const CONFIG_DIFF_FIELDS = ["procedure", "consumption"]
+export const configDiff = (before: ProductionConfig, after: ProductionConfig) => diff(before, after, CONFIG_DIFF_FIELDS)
+
 export const configRoutes = {
   GET: withAuth(null, async () => json(db.productionConfig)),
   PUT: withAuth("settings.manage", async (req, _ctx, user) => {
-    const parsed = productionConfigInput.safeParse(await req.json().catch(() => ({})))
-    if (!parsed.success) return zodProblem(parsed.error)
+    const r = buildConfig(await req.json().catch(() => ({})))
+    if ("status" in r) return ruleResponse(r)
     const before = db.productionConfig
     const at = new Date().toISOString()
-    db.productionConfig = { ...parsed.data, updatedAt: at, updatedBy: user.name }
-    const changes = diff(before, db.productionConfig, ["procedure", "consumption"])
-    recordAudit({ at, actor: user.name, entity: "productionConfig", ref: "Production configuration", action: "updated", changes })
+    db.productionConfig = { ...r.fields, updatedAt: at, updatedBy: user.name }
+    recordAudit({ at, actor: user.name, entity: "productionConfig", ref: "Production configuration", action: "updated", changes: configDiff(before, db.productionConfig) })
     return json(db.productionConfig)
   }),
 }
