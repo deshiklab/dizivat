@@ -6,7 +6,8 @@
  *
  * These were the last collection the derived stock read from memory: `branchSplit()` and an item's ledger walk the
  * sales, the purchases, the transfers, the damage entries, both note families, the opening entries and the batches,
- * and every one of those is a table now — so both endpoints are served from the rows (see derived.ts).
+ * and every one of those is a table now — so both endpoints are served from the rows (see derived.ts). Since R5.5 a
+ * batch also writes the progress of the work orders it draws on (see workorders.ts).
  *
  * As with every family before it, the rules are the mock's own (src/app/api/v1/_r3.ts and _docs.ts, reused through
  * the compat bundle): what a body may contain, how the BOM prices a line and what it consumes, the batch's number,
@@ -23,18 +24,18 @@
  *     what stops a later batch taking the same id;
  *   - the counters an approval moves (`items.prodIssue`, `items.prodReceive`) are written with the batch, in the
  *     same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step: the finished-goods lots, the
- *     work orders' progress and the VAT returns still read *every* document, and the work orders are still compat
- *     state — while the branch split and an item's ledger read the rows themselves (derived.ts), and since R5.5 so do
- *     the price declarations a batch is priced from and the configuration that says how it is produced
- *     (production.ts), which this module reads through the mirror they write.
+ *   - every write goes through the state guard, and the in-memory copies stay in step: the finished-goods lots and
+ *     the VAT returns still read *every* document — while the branch split and an item's ledger read the rows
+ *     themselves (derived.ts), and since R5.5 so do the price declarations a batch is priced from, the
+ *     configuration that says how it is produced (production.ts) and the work orders it draws on (workorders.ts),
+ *     whose progress this module recomputes in the same transaction as the batch that moved it.
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
 import type { Request, Response } from "express"
 import { can, ROLE_PERMS, type Permission, type User } from "@/lib/auth/roles"
 import { runQuery, toCSV } from "@/lib/mock/query"
-import type { Batch, BatchLine, Consumption, Item } from "@/lib/types"
+import type { Batch, BatchLine, Consumption, Item, WorkOrder } from "@/lib/types"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, uniqueViolation } from "../common/http"
 import { lockState } from "../common/state-guard"
@@ -44,6 +45,7 @@ import { batchConsumption, batchLines, batches, items } from "../db/schema"
 import { compat, mirror } from "../state"
 import { AuditService } from "./audit"
 import { markItems, revertItemCounters } from "./items"
+import { markWorkOrders, refreshWorkOrderRows } from "./workorders"
 
 type BatchDb = typeof batches.$inferSelect
 type LineDb = typeof batchLines.$inferSelect
@@ -240,6 +242,7 @@ export class BatchesService {
   async create(issueDate: string, make: (ident: BatchIdentity) => Batch): Promise<Batch> {
     let made: Batch | undefined
     let counters: Item[] = []
+    let moved: WorkOrder[] = []
     try {
       const saved = await db.transaction(async (tx) => {
         await lockState(tx)
@@ -249,11 +252,14 @@ export class BatchesService {
         counters = captureCounters(made)
         const [row] = await tx.insert(batches).values(batchValues(made)).returning()
         await writeCounters(tx, counters)
-        return replaceChildren(tx, made, row)
+        const out = await replaceChildren(tx, made, row)
+        moved = await refreshWorkOrderRows(tx) // a work order's progress follows the batches that draw on it
+        return out
       })
       mirror.putBatch(saved)
       markBatches([saved])
       markItems(counters)
+      if (moved.length) markWorkOrders(moved)
       return saved
     } catch (e) {
       if (made) { mirror.removeBatch(made.id); forgetBatch(made.id) }
@@ -265,17 +271,21 @@ export class BatchesService {
   /** Replaces a batch and its children, and writes the counters in the same transaction. */
   async update(b: Batch): Promise<Batch> {
     const counters = captureCounters(b)
+    let moved: WorkOrder[] = []
     try {
       const saved = await db.transaction(async (tx) => {
         await lockState(tx)
         const [row] = await tx.update(batches).set(batchValues(b)).where(eq(batches.id, b.id)).returning()
         if (!row) throw new Problem(404, `${LABEL} not found`)
         await writeCounters(tx, counters)
-        return replaceChildren(tx, b, row)
+        const out = await replaceChildren(tx, b, row)
+        moved = await refreshWorkOrderRows(tx) // an approval, a cancellation or a receipt moves the progress
+        return out
       })
       mirror.putBatch(saved)
       markBatches([saved])
       markItems(counters)
+      if (moved.length) markWorkOrders(moved)
       return saved
     } catch (e) {
       await revertItemCounters(counters.map((it) => it.id))

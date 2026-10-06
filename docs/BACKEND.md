@@ -42,8 +42,9 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | The derived stock (R5.4) | `stock`, `items/{id}/ledger` | **native** — no tables of their own: both add up the ten movement families' rows with the mock's own derivation (`src/app/api/v1/_derived.ts`) |
 | Price declarations (R5.5) | `production/boms`, `production/boms/{id}` | **native** — `boms` + `bom_inputs` + `bom_costs` (Mushak 4.3: the version in force is what a production batch is priced from) |
 | The production configuration (R5.5) | `production/config` | **native** — `production_config` (one row: the procedure a batch follows and the consumption it records) |
+| Work orders (R5.5) | `production/work-orders`, `production/work-orders/{id}` | **native** — `work_orders` + `work_order_lines` (the progress the approved batches have made is columns of the lines) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: the rest of production (the work orders, the lots and subcontracting registers), accounting, VAT returns, notifications, dashboard, search… | 59 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: the rest of production (the lots and subcontracting registers), accounting, VAT returns, notifications, dashboard, search… | 57 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -447,9 +448,52 @@ registers that read them.
   pre-R5.5 backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI. A declaration
   deleted before the upgrade left no row to adopt — the mock removed it for good — so what survives the round trip is
   the id counter, not the row, and its version is free again exactly as it was.
-- **59 compat route modules are left, 57 native.** What is left of production is the work orders and the two
-  registers derived from the batches and the sales — the finished-goods lots and the subcontracting register — which
-  is the next slice's.
+- **59 compat route modules were left, 57 native.** What was left of production is the work orders (below) and the
+  two registers derived from the batches and the sales — the finished-goods lots and the subcontracting register.
+
+## R5.5 — the work orders on their own tables
+
+`api/src/modules/workorders.ts` serves `production/work-orders` and `production/work-orders/{id}` from
+**`work_orders`** and **`work_order_lines`**: what the floor has to produce, and what the batches that draw on it
+have made of it. A work order's progress is the one thing in this schema nobody types — `refreshWorkOrder` (the
+mock's own rule) computes what was put into production, what came back, what was rejected and what is still owed
+from the *approved* batches' lines, and the status follows (`open`, `partial`, `completed`). So the rows are kept
+honest at both ends: a batch write recomputes them **inside its own transaction** (`refreshWorkOrderRows`, which the
+batches module and the compat write-back both call), and every answer recomputes them again from the approved
+batches' rows before it is sent, exactly as the mock's register does. The contract is unchanged and the rules are the
+mock's own (`src/app/api/v1/_r3.ts` and `_docs.ts`, re-exported by `api/src/compat/entry.ts`): `buildWorkOrder`
+(every line an active finished good with a declaration in force on the issue date, no line twice, a due date that is
+not before the issue date), `woIdentity` (the next PW-MMYY####, which the audit trail takes part in), the draft /
+approve / cancel / delete rules, the batches that block a cancellation and a deletion, `woDiff`, the register's spec,
+its `?item=` filter and its CSV columns cannot drift. Both sides were held against the same contract suite again —
+676 checks with the two routes served natively, 676 with the mock handlers serving them — and all 61 captured
+answers were identical: every filter, facet, sort, date range, both CSV exports, every work order with the batches
+beside it, the 404s, and the batch, lot, subcontracting and declaration registers that read them.
+
+- **A work order is two tables:** the row (the number, the requisition, the two dates, the process, the derived
+  status, who issued it, its own history) and one row per finished good in `work_order_lines` — the quantity ordered
+  and the four progress quantities — so what the floor still owes is a `SUM` over the lines, and `api_native.py`
+  checks every line against the approved batches' own rows in SQL.
+- **The progress follows the batches, in the same transaction.** Creating, editing, approving, cancelling or
+  receiving a batch recomputes the work orders it draws on before the transaction commits, and so does the
+  write-back when a compat handler wrote a batch through the mock's array. A draft batch counts for nothing; a
+  cancelled one gives the progress back.
+- **The number is unique and never reused** (the audit trail takes part in it), and a deleted draft keeps its row
+  with `deleted_at`, so a later work order takes neither its id nor its number.
+- **Its page lists the batches that draw on it** — the seven fields the mock's own `woBatchRow` picks, queried
+  straight from `batch_lines` and `batches`, in the order the batches were created.
+- **The in-memory copies stay**, because a batch's `buildBatch` reads the quantity a work order has left
+  (`woOpenQty`) and the VAT returns and the registers that are still compat read the same objects. Every native
+  write goes through to the mirror, and the refresh writes it too, so a batch created through this API is refused
+  the moment it would issue more than the work order has left.
+- **Upgrade:** the first boot on a database written before this slice moves the work orders out of `compat_state`
+  into the two tables, recomputes their progress from the batches it adopted with them, and rewrites the snapshot
+  without them; restoring a pre-R5.5 backup into a fresh database adopts them the same way, and `api_native.py`
+  drills it in CI. A work order deleted before the upgrade left no row to adopt, so what survives the round trip is
+  the id counter and the number in the audit trail.
+- **57 compat route modules are left, 59 native.** What is left of production is the two registers derived from the
+  batches and the sales — the finished-goods lots (`production/lots`) and the subcontracting register
+  (`production/subcontract`) — which is the next slice's.
 
 ## Tables
 
@@ -484,7 +528,9 @@ registers that read them.
 | `bom_inputs` | **R5.5:** a declaration's inputs — item, net quantity, wastage percent, the wastage and gross quantity (`numeric(18,4)`, the coefficients are rounded to four decimals), the price and the two values; one row per input (unique per declaration and item); primary key (declaration, position) |
 | `bom_costs` | **R5.5:** a declaration's cost heads — labour, power, overhead, packing, admin, finance, profit, other — and what each adds; a head appears at most once and only with an amount (a zero head is dropped before pricing); primary key (declaration, position) |
 | `production_config` (single row) | **R5.5:** how the factory produces — `procedure` (directStock / workOrder) and `consumption` (standard / actual), with who changed it last; `buildBatch` reads both |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations or production configuration since R5.5) |
+| `work_orders` | **R5.5:** production work orders (PW number unique) — the requisition, the issue and due dates, the process, the `status` the approved batches give it, who issued it, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired |
+| `work_order_lines` | **R5.5:** the finished goods a work order asks for — the quantity ordered and the progress the approved batches have made (issued, received, rejected, still owed), with checks that keep the two lifecycle columns and the quantities in agreement; primary key (work order, position) |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -527,7 +573,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 470 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 514 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -678,6 +724,32 @@ register) are required back, with a declaration deleted before the upgrade stayi
 again and its id stays retired, a batch still priced from the adopted declaration, a second boot adopting nothing
 again, and writes landing in the tables.
 
+And since the second R5.5 slice it checks the work orders the same way. The register answers a page of work orders
+newest first with the status the batches give each one, facets that count the same rows, `?status=`, `?process=`,
+`?q=` (which finds one by its number, its requisition, its remark or the goods it asks for), `?sort=`,
+`?from=`/`?to=` on the issue date, paging and a CSV with one row per line the floor owes; one work order comes with
+the batches that draw on it beside it, and is found by its number as well as its id. **Every line in the database is
+checked against the approved batches' own rows in SQL** — what was issued, received and rejected is their sum, and
+what is still owed is the quantity ordered less what went into production — and a quantity ordered changed in SQL
+alone, with the in-memory copies left stale on purpose, moves the answer and what is owed with it. Creating and
+approving a work order in one step leaves nothing issued, a draft challan that draws on it moves no progress, an
+approval moves what was issued and the status to `partial` on the row and in the register at once, the contractor's
+receipt moves what came back and what was rejected, a batch cannot issue more than the work order has left, and
+cancelling the batch takes the whole progress back. A work order a live batch draws on cannot be cancelled (the 409
+names the batch) and an approved one is neither approved again, nor edited, nor deleted; with the batches gone it
+cancels with its reason on the row, and a cancelled one is not cancelled twice. An unknown SKU, one with no
+declaration in force on the issue date, the same SKU twice, a due date before the issue date and no lines at all are
+422s from the mock's own rules; a viewer may read the register but not add to it. Deleting a draft stamps the row and
+keeps its lines, matches the id only, and the next work order takes a new id *and* a new number — the deleted draft's
+stays retired through the audit trail — which the database enforces too. Plus the snapshot carrying no work orders,
+the demo work orders seeded into their tables with their progress already computed from the demo batches. And it
+**drills the same upgrade**: the live database is rewritten back into its pre-R5.5 shape (the work orders with their
+lines inside `compat_state`, the two tables empty), the API restarts, and the same work orders, the same progress and
+the same seven registers row for row (the work orders, one with its batches, the CSV, the batches, the lots, the
+subcontracting register and the declarations) are required back, with a work order deleted before the upgrade staying
+deleted while its id and number stay retired, a batch still creatable, a second boot adopting nothing again, and
+writes landing in the tables.
+
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
 1. Starts a PostgreSQL 16 service, runs the full suite plus `api_native.py`, and checks that the migrations and the compat table are current.
@@ -754,7 +826,7 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | R5.2 | **done** — customers and vendors (`parties`), items and master items (`items`, `master_items`). The stock ledger and branches' stock are *derived* from documents (there is no stored movement table), so they become relational with the documents in R5.3 |
 | R5.3 | **done** — transfers and damage (`stock_documents` + `stock_document_lines`), sales (6.3, `sales` + `sale_lines` + `sale_realisations`), purchases incl. imports and services (`purchases` + `purchase_lines`), credit and debit notes (6.7/6.8, `notes` + `note_lines`) |
 | R5.4 | **done** — the derived stock: the opening entries (`opening_entries`) and the production batches (6.4, `batches` + `batch_lines` + `batch_consumption`) are rows, and since every family the branch split and an item's ledger add up is relational now, `stock` and `items/{id}/ledger` are served from those rows by the mock's own derivation. Next: the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting registers |
-| R5.5 | the rest of production — **in progress**: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`) and the production configuration (`production_config`) are rows. Next: the work orders (`work_orders` + `work_order_lines`), then the two registers derived from the batches and the sales — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) |
+| R5.5 | the rest of production — **in progress**: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`), the production configuration (`production_config`) and the work orders (`work_orders` + `work_order_lines`, whose progress the approved batches' rows are summed into) are rows. Next: the two registers derived from the batches and the sales — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) |
 | R5.6 | accounting (accounts, receipts/payments, allocations), VAT: 9.1 returns, period lock, treasury/TR-6, VDS/6.6, adjustments — then `compat_state` and the lock are removed and the API can scale out |
 
 Money columns will be `numeric(18,2)` (as `parties.credit_limit`, the `items` prices and `tariff_lines` already are),

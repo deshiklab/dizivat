@@ -41,7 +41,7 @@ export {
   purchaseCategoryRule, purchaseCsvColumns, purchaseCsvRows, purchaseFacetLabels, purchaseIdentity, parsePurchase,
   purchaseSpec, realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows,
   saleFacetLabels, saleIdentity, saleSpec, saleStockRule, stampDocHistory, noteDiff, noteDraftRule, stampNoteHistory,
-  stampOpeningHistory, stampBatchHistory, stampBomHistory,
+  stampOpeningHistory, stampBatchHistory, stampBomHistory, stampWorkOrderHistory,
 } from "@/app/api/v1/_docs"
 // R5.3: the credit and debit note rules, shared the same way — what a note body may contain and how a returned line
 // is priced pro rata, the numbers a new note takes, the source document that has to still be approved, the stock a
@@ -69,8 +69,8 @@ export {
 // cancellation gives back, the contractor's receipt that completes a Mushak 6.4 challan, and the register's spec,
 // work-order filter and CSV columns. The batches themselves live in `batches` (their lines in `batch_lines`, their
 // consumption in `batch_consumption`); the price declarations and the production configuration they are built from
-// have tables of their own since R5.5 (see below) and the work orders are compat state; the branch stock and an
-// item's ledger are served from the rows (see `_derived` below).
+// have tables of their own since R5.5 (see below), and so do the work orders; the branch stock and an item's ledger
+// are served from the rows (see `_derived` below).
 export {
   applyBatchReceive, batchApproveRule, batchCancelRule, batchCsvColumns, batchCsvRows, batchDeleteRule, batchDiff,
   batchDraftRule, batchIdentity, batchReceiveChanges, batchReceiveStateRule, batchSpec, batchStockRule,
@@ -89,6 +89,17 @@ export {
   bomDraftRule, bomDraftTakenRule, bomFacetLabels, bomIdentity, bomRow, bomSpec, bomStatus, bomVersions, buildBom,
   buildConfig, claimBomId, configDiff, CONFIG_DIFF_FIELDS, BOM_DIFF_FIELDS,
   type BomFields, type BomSource,
+} from "@/app/api/v1/_r3"
+// R5.5: the work-order rules, shared the same way — what a body may contain (every line an active finished good with
+// a declaration in force on the issue date), the number a new work order takes (which the audit trail takes part in),
+// the progress the approved batches have made on it, the batches that block a cancellation or a deletion, the diff an
+// edit records, and the register's spec, its `?item=` filter and its CSV columns. The work orders live in
+// `work_orders` and their goods in `work_order_lines`; a batch reads the quantity one has left through the mirror.
+export {
+  approvedBatchLines, buildWorkOrder, claimWorkOrderId, refreshWorkOrder, woApproveRule, woBatchRow, woBatchRows,
+  woBatches, woCancelRule, woCsvColumns, woCsvName, woCsvRows, woDeleteRule, woDiff, woDraftRule, woIdentity,
+  woItemFilter, woSpec, WORK_ORDER_DIFF_FIELDS,
+  type ProgressLine, type WorkOrderBatch, type WorkOrderFields,
 } from "@/app/api/v1/_r3"
 // R5.4: the derived stock itself — the branch split (`/stock`) and one item's ledger (`/items/{id}/ledger`). Both add
 // up every movement document, and every family has a table now, so the native module reads them back from the tables

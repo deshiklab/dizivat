@@ -508,9 +508,42 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     configuration and the same seven registers row for row are required back, with a declaration deleted before the
     upgrade staying deleted while its version is free again and its id stays retired).
     Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.5:** the work orders, then the two registers derived from the batches and the sales — the
-    finished-goods lots and the subcontracting register — then accounting and the VAT returns (R5.6), which is what
-    removes `compat_state`.
+  - **Next in R5.5:** the work orders (below), then the two registers derived from the batches and the sales — the
+    finished-goods lots and the subcontracting register.
+
+- **R5.5 — Backend: the production work orders (branch `r5-nestjs`):** `production/work-orders` and
+  `production/work-orders/{id}` leave the compat layer and move into **`work_orders`** + **`work_order_lines`** —
+  **57 route modules left, 59 native**. A work order is what the floor has to produce, and the progress it shows is
+  the one thing nobody types: it is what the *approved* batches that draw on it have issued, received and rejected.
+  See [docs/BACKEND.md › R5.5](docs/BACKEND.md#r55--the-work-orders-on-their-own-tables).
+  - **The progress follows the batches, in the same transaction:** creating, editing, approving, cancelling or
+    receiving a batch recomputes the work orders it draws on before the transaction commits (`refreshWorkOrderRows`,
+    which the compat write-back calls too), and every answer recomputes it again from the approved batches' rows —
+    exactly as the mock's register does. So what the floor still owes is a `SUM` over `work_order_lines`, and the
+    rules are still the mock's own (`buildWorkOrder`, `woIdentity`, the four lifecycle rules, the batches that block
+    a cancellation or a deletion, `woDiff`, the register's spec, its `?item=` filter and its CSV columns), now taking
+    the data they read.
+  - **Its number is unique and never reused** (the audit trail takes part in it) and a deleted draft keeps its row
+    with `deleted_at`, so a later work order takes neither its id nor its number. Its page lists the batches that
+    draw on it, queried straight from `batch_lines` and `batches`.
+  - **Proved both ways, byte for byte:** 676 contract checks with the two routes served natively, 676 again with the
+    mock handlers serving them, and **61 captured answers compared across the two configurations** — every filter,
+    facet, sort and date range, both CSV exports, every work order with the batches beside it, the 404s, and the
+    batch, lot, subcontracting and declaration registers that read them — with **0 differences**.
+  - **Tests:** `api_native.py` 514 checks (+44: the register with its facets, filters, sorts, ranges and one CSV row
+    per line owed; **every line in the database checked against the approved batches' own rows in SQL** — issued,
+    received and rejected are their sum, and what is owed is the quantity ordered less what went into production;
+    **a quantity ordered changed in SQL alone moves the answer and what is owed with it**; a work order created and
+    approved in one step, a draft challan that moves no progress, an approval that moves it on the row and in the
+    register at once, a contractor's receipt, a batch that cannot issue more than the work order has left, and a
+    cancellation that takes the whole progress back; the 409s that guard a cancellation, an edit and a deletion, the
+    five 422s from the mock's own rules, a viewer refused a write; deleting a draft stamping the row and retiring its
+    id *and* its number, which the database enforces too — and the **R5.5 upgrade drill**: the database is rewritten
+    into its pre-R5.5 shape, the API restarted, and the same work orders, the same progress and the same seven
+    registers row for row are required back, with a second boot adopting nothing again).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.5:** the two registers derived from the batches and the sales — the finished-goods lots and the
+    subcontracting register — then accounting and the VAT returns (R5.6), which is what removes `compat_state`.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

@@ -620,12 +620,13 @@ export function refreshWorkOrder(w: WorkOrder, lines: ProgressLine[] = approvedB
 export const woBatches = (w: WorkOrder, src: Batch[] = db.batches): Batch[] =>
   src.filter((b) => b.lines.some((l) => l.workOrderId === w.id))
 
-/** The batches beside a work order on its own page. */
-export const woBatchRows = (w: WorkOrder, src: Batch[] = db.batches) =>
-  woBatches(w, src).map((b) => ({
-    id: b.id, no: b.no, mode: b.mode, issueDate: b.issueDate, process: b.process,
-    totalIssue: b.totalIssue, totalReceive: b.totalReceive,
-  }))
+/** What a work order's page lists of each batch that draws on it — and all the two rules below look at. */
+export type WorkOrderBatch = Pick<Batch, "id" | "no" | "mode" | "issueDate" | "process" | "totalIssue" | "totalReceive">
+export const woBatchRow = (b: WorkOrderBatch): WorkOrderBatch => ({
+  id: b.id, no: b.no, mode: b.mode, issueDate: b.issueDate, process: b.process,
+  totalIssue: b.totalIssue, totalReceive: b.totalReceive,
+})
+export const woBatchRows = (w: WorkOrder, src: Batch[] = db.batches): WorkOrderBatch[] => woBatches(w, src).map(woBatchRow)
 
 /** Quantity of an item still to put into production on a work order (approved AND draft batches count). */
 function woOpenQty(w: WorkOrder, itemId: string, excludeBatchId?: string) {
@@ -679,9 +680,9 @@ export const woApproveRule = (w: WorkOrder): RuleProblem | undefined =>
  * Cancelling: never twice, no batch may still draw on it — a draft batch counts, because it is going to — and the
  * reason is mandatory (the same `cancelInput` a cancelled batch answers with).
  */
-export function woCancelRule(w: WorkOrder, reason: string, src: Batch[] = db.batches): RuleProblem | { reason: string } {
+export function woCancelRule(w: WorkOrder, reason: string, drawing: WorkOrderBatch[] = woBatchRows(w)): RuleProblem | { reason: string } {
   if (w.process === "Cancelled") return { status: 409, title: `${w.no} is already cancelled.` }
-  const live = woBatches(w, src).filter((b) => b.process !== "Cancelled")
+  const live = drawing.filter((b) => b.process !== "Cancelled")
   if (live.length) return { status: 409, title: `${w.no} has production batches (${live.map((b) => b.no).join(", ")}) — cancel them first.` }
   const parsed = cancelInput.safeParse({ reason })
   if (!parsed.success) return invalidRule(zodErrors(parsed.error))
@@ -689,9 +690,9 @@ export function woCancelRule(w: WorkOrder, reason: string, src: Batch[] = db.bat
 }
 
 /** Only a draft may be deleted, and no batch may quote it — not even a cancelled one, which keeps the reference. */
-export function woDeleteRule(w: WorkOrder, src: Batch[] = db.batches): RuleProblem | undefined {
+export function woDeleteRule(w: WorkOrder, drawing: WorkOrderBatch[] = woBatchRows(w)): RuleProblem | undefined {
   if (w.process !== "Created") return { status: 409, title: `Only drafts can be deleted — cancel ${w.no} instead.` }
-  if (woBatches(w, src).length) return { status: 409, title: `${w.no} is referenced by production batches.` }
+  if (drawing.length) return { status: 409, title: `${w.no} is referenced by production batches.` }
   return undefined
 }
 

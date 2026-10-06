@@ -25,8 +25,11 @@ export const NATIVE = [
   "credit-notes", "credit-notes/[id]", "debit-notes", "debit-notes/[id]",
   "opening-stock", "opening-stock/[id]",
   // R5.4: production batches live in `batches` (their finished goods in `batch_lines`, the inputs they consume in
-  // `batch_consumption`); the work orders they may draw on stay here
+  // `batch_consumption`)
   "production/batches", "production/batches/[id]", "production/batches/[id]/receive",
+  // R5.5: the work orders live in `work_orders`, their goods in `work_order_lines`, and the progress the approved
+  // batches have made on them is columns of those rows
+  "production/work-orders", "production/work-orders/[id]",
   // R5.5: the price declarations (Mushak 4.3) live in `boms` — their inputs in `bom_inputs`, their cost heads in
   // `bom_costs` — and the configuration that decides how a batch is produced is the one row of `production_config`
   "production/boms", "production/boms/[id]", "production/config",

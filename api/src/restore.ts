@@ -95,7 +95,7 @@ async function freePort(): Promise<number> {
   })
 }
 
-async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
+async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
   const port = await freePort()
   const child: ChildProcess = spawn(process.execPath, [join(__dirname, "main.js")], {
     env: { ...process.env, DATABASE_URL: target, API_PORT: String(port), API_HOST: "127.0.0.1", BACKUPS: "off", DEMO_RESEED: "off", SESSION_SECRET: randomBytes(24).toString("hex") },
@@ -120,13 +120,13 @@ async function bootCheck(target: string, admin: { username: string; password: st
     if (!login.ok) return { ok: false, detail: `sign-in as ${admin.username} failed: HTTP ${login.status}` }
     const cookie = (login.headers.getSetCookie?.() ?? [login.headers.get("set-cookie") ?? ""]).map((c) => c.split(";")[0]).join("; ")
     for (const [path, want] of [["sales", docs.sales], ["purchases", docs.purchases], ["production/batches", docs.batches],
-        ["production/boms", docs.boms]] as const) {
+        ["production/boms", docs.boms], ["production/work-orders", docs.workOrders]] as const) {
       const r = await fetch(`${base}/${path}?category=all&pageSize=1`, { headers: { cookie } })
       if (!r.ok) return { ok: false, detail: `GET /${path} failed: HTTP ${r.status}` }
       const page = (await r.json()) as { total?: number }
       if (page.total !== want) return { ok: false, detail: `GET /${path} total ${page.total} ≠ ${want} ${path} in the backup` }
     }
-    log(`  signed in as ${admin.username}; /sales lists all ${docs.sales} invoices, /purchases all ${docs.purchases}, /production/batches all ${docs.batches}, /production/boms all ${docs.boms} declarations`)
+    log(`  signed in as ${admin.username}; /sales lists all ${docs.sales} invoices, /purchases all ${docs.purchases}, /production/batches all ${docs.batches}, /production/boms all ${docs.boms} declarations, /production/work-orders all ${docs.workOrders}`)
     return { ok: true, detail: "health, sign-in and documents ok" }
   } finally {
     child.kill("SIGTERM")
@@ -234,7 +234,7 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
     const admin = a.adminPassword ? (a.adminUser ? users.find((u) => u.username === a.adminUser) : users.find((u) => u.role === "admin" && u.active)) : undefined
     // the documents the restored instance must list: their own tables since R5.3 (a stamped draft is not listed),
     // the snapshot's arrays in a backup taken before that — the production batches the same way since R5.4 and the
-    // price declarations since R5.5
+    // price declarations and the work orders since R5.5
     const snapshotDb = (payload.tables.compat_state?.[0] as { data?: { db?: Record<string, unknown[]> } } | undefined)?.data?.db
     const live = (table: string, collection: string) => {
       const rows = payload.tables[table] as { deleted_at?: string | null }[] | undefined
@@ -243,7 +243,7 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
     const r = await bootCheck(a.target, admin && a.adminPassword ? { username: admin.username, password: a.adminPassword } : null,
       {
         sales: live("sales", "sales"), purchases: live("purchases", "purchases"), batches: live("batches", "batches"),
-        boms: live("boms", "boms"),
+        boms: live("boms", "boms"), workOrders: live("work_orders", "workOrders"),
       }, log)
     boot = r.ok ? "ok" : "failed"
     if (!r.ok) mismatches.push(`boot: ${r.detail}`)

@@ -8,7 +8,7 @@
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
-import type { AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
+import type { AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind, Unit, WorkOrder } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
 /** The undo buffer: deleted documents (compat state), deleted parties (R5.2) and deleted sales and purchases
@@ -27,7 +27,7 @@ interface Globals {
     units: Unit[]; customers: Party[]; vendors: Party[]; items: Item[]; masterItems: MasterItem[]
     transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; purchases: Purchase[]
     creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
-    boms: Bom[]; productionConfig: ProductionConfig
+    boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
     trash: TrashEntry[]
   }
   __dzUsers?: UserStore
@@ -58,7 +58,7 @@ export function restoreGlobals(s: {
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
   creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
-  boms: Bom[]; productionConfig: ProductionConfig
+  boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
   events: AuditEvent[]
 }) {
   // documents only: an older snapshot's deleted parties, sales and purchases are rebuilt from their `deleted_at` rows
@@ -68,7 +68,7 @@ export function restoreGlobals(s: {
     ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, items: s.items, masterItems: s.masterItems,
     transfers: s.transfers, damages: s.damages, sales: s.sales, purchases: s.purchases,
     creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings, batches: s.batches,
-    boms: s.boms, productionConfig: s.productionConfig,
+    boms: s.boms, productionConfig: s.productionConfig, workOrders: s.workOrders,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
@@ -252,6 +252,22 @@ export const mirror = {
   },
   removeBom(id: string) {
     const list = mirror.boms()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.5: the work orders — a batch draws the quantity it issues from one, and its progress follows the batches */
+  workOrders: (): WorkOrder[] => G.__dzDb!.workOrders,
+  putWorkOrders(list: WorkOrder[]) { const a = mirror.workOrders(); a.splice(0, a.length, ...list) },
+  findWorkOrder: (idOrNo: string) => mirror.workOrders().find((w) => w.id === idOrNo || w.no === idOrNo),
+  putWorkOrder(w: WorkOrder) {
+    const list = mirror.workOrders()
+    const cur = list.find((x) => x.id === w.id)
+    if (cur) replaceObject(cur, w)
+    else list.push(w)
+    return cur ?? w
+  },
+  removeWorkOrder(id: string) {
+    const list = mirror.workOrders()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },

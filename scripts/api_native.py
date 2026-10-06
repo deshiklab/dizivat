@@ -275,6 +275,28 @@ PRE_R55_BOMS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (dat
   'boms', {BOM_AGG}, 'productionConfig', {CONFIG_DOC}
 )) where key = 'main'"""
 
+# ── R5.5 upgrade drill: the work orders ──────────────────────────────────────────────────────────────────────
+# A database written before the work orders had tables holds them inside compat_state, each with the goods it asks
+# for and the progress the batches had made. These statements rebuild that shape from the live tables, so the first
+# boot on this code has to adopt it. Nothing here ships either: it is the inverse of the work-order half of
+# `adoptCompatRows()` in api/src/boot.ts, for the test only.
+WORK_ORDER_LINES_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'sku', l.sku, 'uom', l.uom, 'qty', l.qty, 'issued', l.issued,
+      'received', l.received, 'damaged', l.damaged, 'remaining', l.remaining)""") + """ order by l.ord), '[]'::jsonb)
+     from work_order_lines l where l.work_order_id = w.id)""")
+WORK_ORDER_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', w.id, 'no', w.no, 'requisitionNo', w.requisition_no, 'issueDate', w.issue_date, 'dueDate', w.due_date,
+    'remark', w.remark, 'lines', """ + WORK_ORDER_LINES_DOC + """, 'process', w.process, 'status', w.status,
+    'issuedBy', w.issued_by, 'createdAt', """ + _ISO.format("w.created_at") + """, 'updatedAt', """
+                                          + _ISO.format("w.updated_at") + """, 'cancelReason', w.cancel_reason,
+    'history', w.history)""") + ")")
+WORK_ORDER_AGG = (f"(select coalesce(jsonb_agg({WORK_ORDER_DOC} order by w.ord), '[]'::jsonb) "
+                  f"from work_orders w where w.deleted_at is null)")
+# the work orders back inside the snapshot (a deleted draft has no place there: the mock removed it for good)
+PRE_R55_WORK_ORDERS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'workOrders', {WORK_ORDER_AGG}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -1976,6 +1998,238 @@ def run():
           "R5.5: …and setting it back lets a batch be created without a work order again")
     arif.delete(f"{BASE}/production/batches/{pdFree.json()['id']}")
 
+    # ── R5.5: the work orders ────────────────────────────────────────────────────────────────────────────────
+    # A work order is what the floor has to produce, and the progress it shows is never entered: it is what the
+    # approved batches that draw on it have issued, received and rejected. So the rows are kept honest at both ends —
+    # a batch write recomputes them in its own transaction, and every answer recomputes them again from the approved
+    # batches' rows — and what the floor still owes is a SUM over `work_order_lines`.
+    print("R5.5: the work orders are rows, and their progress follows the batches")
+
+    wkPage = arif.get(f"{BASE}/production/work-orders", params={"size": 50}).json()
+    wkRows = wkPage["data"]
+    check(wkPage["total"] == len(wkRows) >= 5 and wkPage["totals"] == {}
+          and set(wkPage["facets"]) == {"process", "status"}
+          and [w["createdAt"] for w in wkRows] == sorted((w["createdAt"] for w in wkRows), reverse=True),
+          f"native (R5.5): GET /production/work-orders answers the page with its facets, newest first "
+          f"({wkPage['total']} work orders)")
+    check(all(w["status"] in ("draft", "open", "partial", "completed", "cancelled") for w in wkRows)
+          and all((w["process"] == "Created") == (w["status"] == "draft") for w in wkRows)
+          and all((w["process"] == "Cancelled") == (w["status"] == "cancelled") for w in wkRows)
+          and sum(wkPage["facets"]["status"].values()) == wkPage["total"]
+          and wkPage["facets"]["status"].get("completed", 0) >= 1,
+          f"R5.5: every work order carries the status the batches give it ({json.dumps(wkPage['facets']['status'])})")
+    if DB_URL:
+        check(psql("select count(*) from work_orders where deleted_at is null") == str(wkPage["total"])
+              and psql("select count(*) from work_order_lines") == str(sum(len(w["lines"]) for w in wkRows)),
+              "R5.5: …and its total is the live rows of the table, each with the goods it asks for beside it")
+        check(psql("""select count(*) from work_order_lines l join work_orders w on w.id = l.work_order_id
+              where w.deleted_at is null and (coalesce(l.issued, 0), l.received, l.damaged) <> (
+                (select coalesce(sum(bl.issue_qty), 0) from batch_lines bl join batches b on b.id = bl.batch_id
+                  where bl.work_order_id = l.work_order_id and bl.item_id = l.item_id
+                    and b.process = 'Approved' and b.deleted_at is null),
+                (select coalesce(sum(bl.receive_qty), 0) from batch_lines bl join batches b on b.id = bl.batch_id
+                  where bl.work_order_id = l.work_order_id and bl.item_id = l.item_id
+                    and b.process = 'Approved' and b.deleted_at is null),
+                (select coalesce(sum(bl.damage_qty), 0) from batch_lines bl join batches b on b.id = bl.batch_id
+                  where bl.work_order_id = l.work_order_id and bl.item_id = l.item_id
+                    and b.process = 'Approved' and b.deleted_at is null))""") == "0",
+              "R5.5: every line's progress on its row is the sum of the approved batches that draw on it")
+        check(psql("""select count(*) from work_order_lines l join work_orders w on w.id = l.work_order_id
+              where w.deleted_at is null and l.remaining <> greatest(0, round(l.qty - coalesce(l.issued, 0), 2))""") == "0",
+              "R5.5: …and what is still owed is the quantity ordered less what went into production")
+        # the progress itself is recomputed from the batches on every answer, so what a SQL-only change has to move
+        # is the quantity ordered — and what is still owed follows it
+        wkProbe = wkRows[0]["id"]
+        wkQty0 = float(psql(f"select qty from work_order_lines where work_order_id = '{wkProbe}' and ord = 1"))
+        psql(f"update work_order_lines set qty = {jr2(wkQty0 + 25)} where work_order_id = '{wkProbe}' and ord = 1")
+        wkMoved = arif.get(f"{BASE}/production/work-orders/{wkProbe}").json()
+        wkListed = [w for w in arif.get(f"{BASE}/production/work-orders", params={"size": 50}).json()["data"]
+                    if w["id"] == wkProbe][0]
+        check(wkMoved["lines"][0]["qty"] == jr2(wkQty0 + 25)
+              and wkMoved["lines"][0]["remaining"] == jr2(max(0, wkQty0 + 25 - wkMoved["lines"][0]["issued"]))
+              and wkListed["lines"][0]["qty"] == jr2(wkQty0 + 25),
+              f"R5.5: a quantity ordered changed in SQL alone moves the answer at once, and what is still owed "
+              f"follows it ({wkQty0} → {wkMoved['lines'][0]['qty']}, remaining {wkMoved['lines'][0]['remaining']})")
+        psql(f"update work_order_lines set qty = {wkQty0} where work_order_id = '{wkProbe}' and ord = 1")
+        wkBack = arif.get(f"{BASE}/production/work-orders/{wkProbe}").json()
+        check(wkBack["lines"][0]["qty"] == wkQty0, "R5.5: …and putting the row back restores the answer exactly")
+
+    wkCsv = arif.get(f"{BASE}/production/work-orders", params={"format": "csv"})
+    wkLines = sum(len(w["lines"]) for w in wkRows)
+    check(wkCsv.status_code == 200 and wkCsv.headers.get("content-type", "").startswith("text/csv")
+          and "work-orders-" in wkCsv.headers.get("content-disposition", "")
+          and wkCsv.text.splitlines()[0].lstrip("\ufeff")
+          == "Issue Date,Work Order,Requisition No,Due,Item,UoM,Ordered,Issued,Received,Damaged,Remaining,Status"
+          and len([l for l in wkCsv.text.splitlines()[1:] if l]) == wkLines,
+          f"R5.5: the CSV export writes one row per line the floor owes ({wkLines} of them)")
+    wkItem = wkRows[0]["lines"][0]["itemId"]
+    check(arif.get(f"{BASE}/production/work-orders", params={"item": wkItem, "size": 50}).json()["total"]
+          == sum(1 for w in wkRows if any(l["itemId"] == wkItem for l in w["lines"]))
+          and "item" not in arif.get(f"{BASE}/production/work-orders", params={"item": wkItem, "size": 50}).json()["facets"],
+          f"R5.5: ?item= keeps the work orders that ask for one SKU, and is taken out before the query runs")
+    check(arif.get(f"{BASE}/production/work-orders", params={"status": "draft", "size": 50}).json()["total"]
+          == wkPage["facets"]["status"].get("draft", 0)
+          and arif.get(f"{BASE}/production/work-orders", params={"q": wkRows[0]["no"], "size": 50}).json()["total"] >= 1
+          and [w["issueDate"] for w in arif.get(f"{BASE}/production/work-orders",
+                                                params={"sort": "issueDate.asc", "size": 50}).json()["data"]]
+          == sorted(w["issueDate"] for w in wkRows),
+          "R5.5: ?status=, ?q= and ?sort= narrow and order the register as the mock's spec says")
+
+    wkDrawn = [w for w in wkRows if w["status"] in ("partial", "completed")][0]
+    wkOne = arif.get(f"{BASE}/production/work-orders/{wkDrawn['id']}").json()
+    wkBatchPage = arif.get(f"{BASE}/production/batches", params={"size": 200}).json()["data"]
+    wkDrawing = [b["id"] for b in wkBatchPage if any(l.get("workOrderId") == wkDrawn["id"] for l in b["lines"])]
+    check(set(wkOne) == set(wkDrawn) | {"batches"} and sorted(b["id"] for b in wkOne["batches"]) == sorted(wkDrawing)
+          and all(set(b) == {"id", "no", "mode", "issueDate", "process", "totalIssue", "totalReceive"}
+                  for b in wkOne["batches"]),
+          f"R5.5: GET /production/work-orders/{{id}} lists the batches that draw on it ({len(wkDrawing)} of them)")
+    check(arif.get(f"{BASE}/production/work-orders/{wkDrawn['no']}").json()["id"] == wkDrawn["id"]
+          and arif.get(f"{BASE}/production/work-orders/nosuchworkorder").status_code == 404
+          and arif.get(f"{BASE}/production/work-orders/nosuchworkorder").json()["title"] == "Work order not found",
+          "R5.5: a work order is found by its number too, and an unknown one is a 404 problem")
+
+    # a work order of its own, approved at once, and a contractual challan that draws on it: the progress has to
+    # follow the batch through every step — a draft counts for nothing, an approval moves what was issued, a receipt
+    # what came back and what was rejected, and a cancellation gives it all back
+    wkFg = pdTwo["itemId"]
+    wkDue = time.strftime("%Y-%m-%d", time.localtime(time.time() + 14 * 86400))
+    wkBody = {"requisitionNo": f"REQ-26-{TAG}", "issueDate": tdate, "dueDate": wkDue,
+              "remark": f"R5.5 work order {TAG}", "lines": [{"itemId": wkFg, "qty": 40}], "process": "Approved"}
+    wkNew = arif.post(f"{BASE}/production/work-orders", json=wkBody)
+    wkn = wkNew.json()
+    wkNewId, wkNewNo = wkn.get("id"), wkn.get("no")
+    check(wkNew.status_code == 201 and str(wkNewId).startswith("wo") and str(wkNewNo).startswith("PW-")
+          and wkn["process"] == "Approved" and wkn["status"] == "open" and wkn["issuedBy"] == "Arif Hossain"
+          and wkn["requisitionNo"] == wkBody["requisitionNo"] and wkn["dueDate"] == wkDue
+          and [h["action"] for h in wkn["history"]] == ["created", "approved"]
+          and wkn["lines"] == [{"itemId": wkFg, "name": wkn["lines"][0]["name"], "sku": wkn["lines"][0]["sku"],
+                                "uom": wkn["lines"][0]["uom"], "qty": 40, "issued": 0, "received": 0,
+                                "damaged": 0, "remaining": 40}],
+          f"native (R5.5): a work order is created and approved in one step, with nothing issued yet ({wkNew.status_code} {wkNewNo})")
+    if DB_URL:
+        check(psql(f"select count(*) from work_orders where id = '{wkNewId}' and no = '{wkNewNo}'"
+                   " and process = 'Approved' and status = 'open' and deleted_at is null") == "1"
+              and psql(f"select count(*) from work_order_lines where work_order_id = '{wkNewId}'"
+                       " and qty = 40 and received = 0 and remaining = 40") == "1",
+              "R5.5: it is a row in work_orders with the goods it asks for beside it")
+    wkAudit = arif.get(f"{BASE}/audit", params={"entity": "workOrder", "entityId": wkNewId, "size": 20}).json()["data"]
+    check([e["action"] for e in wkAudit] == ["approved", "created"] and all(e["ref"] == wkNewNo for e in wkAudit),
+          "R5.5: …and the audit trail records both steps against its number")
+    wkView = session("auditor")  # a viewer reads everything and writes nothing
+    check(wkView.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created"}).status_code == 403
+          and wkView.get(f"{BASE}/production/work-orders").status_code == 200
+          and requests.get(f"{BASE}/production/work-orders").status_code == 401,
+          "R5.5: creating one needs doc.create — a viewer may read the register but not add to it, and reading it "
+          "needs a session")
+    wkOver = arif.post(f"{BASE}/production/batches", json={"mode": "inHouse", "issueDate": tdate, "receiveDate": tdate,
+                       "remark": f"R5.5 over {TAG}", "issuedBy": "Arif Hossain", "designation": "Shift-In-Charge",
+                       "lines": [{"itemId": wkFg, "workOrderId": wkNewId, "issueQty": 41, "receiveQty": 0}],
+                       "process": "Created"})
+    check(wkOver.status_code == 422 and wkOver.json()["errors"].get("lines.0.issueQty") == ["exceedsWorkOrder"],
+          f"R5.5: a batch cannot issue more than the work order has left ({wkOver.status_code}, from the mock's own rule)")
+    wkChallan = {"mode": "contractual", "issueDate": tdate, "vendorId": bvid, "jobProcess": "washing",
+                 "remark": f"R5.5 challan {TAG}", "issuedBy": "Arif Hossain", "designation": "Shift-In-Charge",
+                 "lines": [{"itemId": wkFg, "workOrderId": wkNewId, "issueQty": 12}], "process": "Created"}
+    wkB1 = arif.post(f"{BASE}/production/batches", json=wkChallan)
+    wkB1id = wkB1.json().get("id")
+    check(wkB1.status_code == 201 and (not DB_URL or psql(
+        f"select coalesce(trim_scale(issued), 0) || '/' || trim_scale(remaining) from work_order_lines"
+              f" where work_order_id = '{wkNewId}'") == "0/40"),
+          "R5.5: a draft challan draws on the work order but moves no progress — only approved batches count")
+    check(arif.patch(f"{BASE}/production/batches/{wkB1id}", json={"process": "Approved"}).status_code == 200
+          and arif.get(f"{BASE}/production/work-orders/{wkNewId}").json()["status"] == "partial"
+          and arif.get(f"{BASE}/production/work-orders/{wkNewId}").json()["lines"][0]["issued"] == 12
+          and (not DB_URL or psql(
+              f"select trim_scale(issued) || '/' || trim_scale(remaining) from work_order_lines"
+              f" where work_order_id = '{wkNewId}'") == "12/28"
+              and psql(f"select status from work_orders where id = '{wkNewId}'") == "partial"),
+          "R5.5: approving it moves the work order's progress — on the row and in the register at once")
+    wkRec = arif.post(f"{BASE}/production/batches/{wkB1id}/receive",
+                      json={"receiveDate": tdate, "lines": [{"receiveQty": 11, "damageQty": 1}]})
+    check(wkRec.status_code == 200
+          and arif.get(f"{BASE}/production/work-orders/{wkNewId}").json()["lines"][0]["received"] == 11
+          and (not DB_URL or psql(
+              f"select trim_scale(issued) || '/' || trim_scale(received) || '/' || trim_scale(damaged) || '/'"
+              f" || trim_scale(remaining) from work_order_lines where work_order_id = '{wkNewId}'") == "12/11/1/28"),
+          "R5.5: …and the contractor's receipt moves what came back and what was rejected")
+    wkCancel = arif.patch(f"{BASE}/production/work-orders/{wkNewId}",
+                          json={"process": "Cancelled", "reason": "not needed"})
+    check(wkCancel.status_code == 409 and wkCancel.json()["title"]
+          == f"{wkNewNo} has production batches ({wkB1.json()['no']}) — cancel them first.",
+          "R5.5: a work order a live batch draws on cannot be cancelled — the 409 names the batch")
+    check(arif.patch(f"{BASE}/production/work-orders/{wkNewId}", json={"process": "Approved"}).status_code == 409
+          and arif.put(f"{BASE}/production/work-orders/{wkNewId}", json={}).status_code == 409
+          and arif.delete(f"{BASE}/production/work-orders/{wkNewId}").status_code == 409,
+          "R5.5: an approved work order is neither approved again, nor edited (the 409 comes before the body is "
+          "parsed), nor deleted")
+    check(arif.patch(f"{BASE}/production/batches/{wkB1id}",
+                     json={"process": "Cancelled", "reason": f"R5.5 cancelled {TAG}"}).status_code == 200
+          and (not DB_URL or psql(
+              f"select coalesce(trim_scale(issued), 0) || '/' || trim_scale(received) || '/' || trim_scale(damaged)"
+              f" || '/' || trim_scale(remaining) from work_order_lines where work_order_id = '{wkNewId}'"
+              ) == "0/0/0/40"
+              and psql(f"select status from work_orders where id = '{wkNewId}'") == "open"),
+          "R5.5: cancelling the batch takes the progress back — the work order is open again, on the row")
+    wkCancelled = arif.patch(f"{BASE}/production/work-orders/{wkNewId}",
+                             json={"process": "Cancelled", "reason": f"R5.5 cancelled {TAG}"})
+    check(wkCancelled.status_code == 200 and wkCancelled.json()["status"] == "cancelled"
+          and wkCancelled.json()["cancelReason"] == f"R5.5 cancelled {TAG}"
+          and [h["action"] for h in wkCancelled.json()["history"]] == ["created", "approved", "cancelled"]
+          and (not DB_URL or psql(f"select count(*) from work_orders where id = '{wkNewId}'"
+                                  " and process = 'Cancelled' and cancel_reason is not null") == "1"),
+          "R5.5: …and with the batches gone it cancels, with the reason on the row")
+    check(arif.patch(f"{BASE}/production/work-orders/{wkNewId}",
+                     json={"process": "Cancelled", "reason": f"R5.5 cancelled {TAG}"}).status_code == 409
+          and arif.delete(f"{BASE}/production/work-orders/{wkNewId}").status_code == 409
+          and arif.delete(f"{BASE}/production/work-orders/{wkNewId}").json()["title"]
+          == f"Only drafts can be deleted — cancel {wkNewNo} instead.",
+          "R5.5: a cancelled work order is not cancelled twice, and cannot be deleted")
+
+    wkDraft = arif.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created",
+                                                                "requisitionNo": f"REQ-26-{TAG}c"}).json()
+    check(wkDraft["status"] == "draft" and wkDraft["process"] == "Created",
+          f"R5.5: a draft work order stays a draft ({wkDraft['no']})")
+    wkBad = [("an unknown SKU", {"lines": [{"itemId": "i6", "qty": 10}], "issueDate": tdate, "process": "Created"},
+              {"lines.0.itemId": ["unknown"]}),
+             ("a SKU with no declaration in force on the issue date",
+              {"lines": [{"itemId": wkFg, "qty": 10}], "issueDate": "2025-01-01", "process": "Created"},
+              {"lines.0.itemId": ["noBom"]}),
+             ("the same SKU twice", {"lines": [{"itemId": wkFg, "qty": 10}, {"itemId": wkFg, "qty": 5}],
+                                     "issueDate": tdate, "process": "Created"},
+              {"lines.1.itemId": ["duplicate"]}),
+             ("a due date before the issue date", {"lines": [{"itemId": wkFg, "qty": 10}], "issueDate": tdate,
+                                                   "dueDate": "2026-01-01", "process": "Created"},
+              {"dueDate": ["beforeIssue"]}),
+             ("no lines at all", {"lines": [], "issueDate": tdate, "process": "Created"},
+              {"lines": ["atLeastOneLine"]})]
+    for wkWhy, wkBadBody, wkWant in wkBad:
+        wkR = arif.post(f"{BASE}/production/work-orders", json=wkBadBody)
+        check(wkR.status_code == 422 and wkR.json()["title"] == "Validation failed"
+              and all(wkR.json().get("errors", {}).get(k) == v for k, v in wkWant.items()),
+              f"R5.5: {wkWhy} is refused with the mock's own 422 ({json.dumps(wkR.json().get('errors'))[:80]})")
+    check(arif.delete(f"{BASE}/production/work-orders/{wkDraft['no']}").status_code == 404
+          and arif.delete(f"{BASE}/production/work-orders/{wkDraft['id']}").status_code == 200
+          and arif.get(f"{BASE}/production/work-orders/{wkDraft['id']}").status_code == 404,
+          "R5.5: deleting a draft matches the id only, answers {ok: true}, and takes it out of the register")
+    if DB_URL:
+        check(psql(f"select count(*) from work_orders where id = '{wkDraft['id']}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from work_order_lines where work_order_id = '{wkDraft['id']}'") == "1",
+              "R5.5: …the row is stamped rather than removed, and keeps the lines it asked for")
+    wkAgain = arif.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created",
+                                                                "requisitionNo": f"REQ-26-{TAG}d"}).json()
+    check(int(wkAgain["id"][2:]) > int(wkDraft["id"][2:]) and wkAgain["no"] != wkDraft["no"]
+          and wkAgain["no"].startswith(wkDraft["no"][:7]),
+          f"R5.5: the next work order takes a new id and a new number — the deleted draft's stays retired "
+          f"({wkDraft['id']} {wkDraft['no']} → {wkAgain['id']} {wkAgain['no']})")
+    arif.delete(f"{BASE}/production/work-orders/{wkAgain['id']}")
+    if DB_URL:
+        wkDup = subprocess.run(["psql", DB_URL, "-c",
+                                "insert into work_orders (id, no, issue_date, process, status, issued_by, created_at)"
+                                f" select 'dupw{TAG}', no, issue_date, process, status, issued_by, created_at"
+                                f" from work_orders where id = '{wkDrawn['id']}'"], capture_output=True, text=True)
+        check(wkDup.returncode != 0, "R5.5: the database refuses a duplicate work order number (unique index), "
+                                     "not just the API")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -2620,6 +2874,82 @@ def run():
               and psql("select procedure || '/' || consumption from production_config") == "workOrder/actual",
               f"and writes land in the tables on the upgraded database ({pdUp.status_code})")
         admin.put(f"{BASE}/production/config", json={"procedure": "directStock", "consumption": "standard"})
+        # … and the work orders, which the same release moved out: a database written before them holds them inside
+        # compat_state, each with the goods it asks for and the progress the approved batches had made on it. A draft
+        # deleted before the upgrade has no place there, so what has to survive the round trip is the id counter and
+        # the number in the audit trail, not the row.
+        print("\nR5.5: upgrading a pre-R5.5 database moves the work orders into their tables")
+        def wk_counts():
+            return (psql("select count(*) from work_orders where deleted_at is null"),
+                    psql("select count(*) from work_order_lines l join work_orders w on w.id = l.work_order_id"
+                         " where w.deleted_at is null"),
+                    psql("select count(*) from work_orders where status = 'completed'"),
+                    psql("select coalesce(trim_scale(sum(issued)), 0) || '/' || coalesce(trim_scale(sum(received)), 0)"
+                         " || '/' || coalesce(trim_scale(sum(damaged)), 0) from work_order_lines"))
+
+        def wk_registers():
+            wkDrawnNow = [w for w in arif.get(f"{BASE}/production/work-orders", params={"size": 50}).json()["data"]
+                          if w["status"] in ("partial", "completed")]
+            return {"workOrders": arif.get(f"{BASE}/production/work-orders", params={"size": 50}).json(),
+                    "one": arif.get(f"{BASE}/production/work-orders/{wkDrawnNow[0]['id']}").json(),
+                    "csv": arif.get(f"{BASE}/production/work-orders", params={"format": "csv"}).text,
+                    "batches": arif.get(f"{BASE}/production/batches", params={"size": 200}).json(),
+                    "lots": arif.get(f"{BASE}/production/lots", params={"all": 1}).json(),
+                    "subcon": arif.get(f"{BASE}/production/subcontract", params={"from": "2025-01-01", "to": tdate}).json(),
+                    "boms": arif.get(f"{BASE}/production/boms", params={"size": 100}).json()}
+
+        def wk_boots():
+            """How many boots adopted the work orders — one `R5.5 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return fh.read().count("R5.5 upgrade:")
+
+        wkGone = arif.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created",
+                                                                   "requisitionNo": f"REQ-26-{TAG}e"}).json()
+        arif.delete(f"{BASE}/production/work-orders/{wkGone['id']}")
+        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
+        wkc, wkbefore, wkboots = wk_counts(), wk_registers(), wk_boots()
+        psql(PRE_R55_WORK_ORDERS)
+        psql("delete from work_order_lines")
+        psql("delete from work_orders")
+        check(wk_counts() == ("0", "0", "0", "0/0/0")
+              and psql("select count(*) from compat_state where data->'db' ? 'workOrders'") == "1",
+              f"the database is back in the pre-R5.5 shape ({wkc[0]} work orders and {wkc[1]} lines inside the "
+              f"snapshot, the two tables empty)")
+        restart()
+        check(wk_counts() == wkc,
+              f"the first boot moved every work order into the tables ({wkc[0]} of them, with {wkc[1]} lines and "
+              f"{wkc[3]} issued/received/rejected)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'workOrders'") == "0",
+              "…and rewrote the snapshot without them")
+        check(wk_registers() == wkbefore,
+              "…and serves the same registers, row for row — the work orders, one with its batches, the CSV, and the "
+              "batch, lot, subcontracting and declaration registers that read them")
+        check(psql(f"select count(*) from work_orders where id = '{wkGone['id']}'") == "0",
+              "a work order deleted before the upgrade stays deleted — the mock kept no row for it either")
+        wkAfter = arif.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created",
+                                                                    "requisitionNo": f"REQ-26-{TAG}f"}).json()
+        check(int(wkAfter["id"][2:]) > int(wkGone["id"][2:]) and wkAfter["no"] != wkGone["no"],
+              f"…but its id and its number stay retired ({wkGone['id']} {wkGone['no']} → {wkAfter['id']} "
+              f"{wkAfter['no']})")
+        arif.delete(f"{BASE}/production/work-orders/{wkAfter['id']}")
+        wkBatch = arif.post(f"{BASE}/production/batches", json={**wkChallan, "remark": f"R5.5 drill {TAG}",
+                                                                "lines": [{"itemId": wkFg, "issueQty": 3}]})
+        check(wkBatch.status_code == 201,
+              f"and a batch can still be created on the upgraded database ({wkBatch.status_code})")
+        arif.delete(f"{BASE}/production/batches/{wkBatch.json()['id']}")
+        wkboots_after, wknow = wk_boots(), wk_counts()
+        restart()
+        check(wk_counts() == wknow and (wkboots is None or wkboots_after == wkboots + 1)
+              and (wkboots is None or wk_boots() == wkboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        wkWrite = arif.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created",
+                                                                    "requisitionNo": f"REQ-26-{TAG}g"})
+        check(wkWrite.status_code == 201
+              and psql(f"select count(*) from work_orders where id = '{wkWrite.json().get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({wkWrite.status_code})")
+        arif.delete(f"{BASE}/production/work-orders/{wkWrite.json()['id']}")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 
