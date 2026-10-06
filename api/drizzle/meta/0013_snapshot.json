@@ -1,5 +1,5 @@
 {
-  "id": "19f838de-019f-4ccd-acdc-cfb2e70bea6b",
+  "id": "f71442fd-a804-4cb5-b1fb-7ec4f51aa0e2",
   "prevId": "09217406-b0dc-4f81-92a9-7b5fca9ce1d8",
   "version": "7",
   "dialect": "postgresql",
@@ -1082,7 +1082,7 @@
         },
         "license_date": {
           "name": "license_date",
-          "type": "date",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

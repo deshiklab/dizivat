@@ -24,9 +24,10 @@
  *   - the counters an approval moves (`items.prodIssue`, `items.prodReceive`) are written with the batch, in the
  *     same transaction;
  *   - every write goes through the state guard, and the in-memory copies stay in step: the finished-goods lots, the
- *     work orders' progress and the VAT returns still read *every* document, and the families without tables (BOMs,
- *     work orders, the production configuration) are compat state — while the branch split and an item's ledger read
- *     the rows themselves (derived.ts).
+ *     work orders' progress and the VAT returns still read *every* document, and the work orders are still compat
+ *     state — while the branch split and an item's ledger read the rows themselves (derived.ts), and since R5.5 so do
+ *     the price declarations a batch is priced from and the configuration that says how it is produced
+ *     (production.ts), which this module reads through the mirror they write.
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"

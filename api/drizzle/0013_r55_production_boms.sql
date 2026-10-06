@@ -36,7 +36,7 @@ CREATE TABLE "boms" (
 	"hs_code" text NOT NULL,
 	"uom" text NOT NULL,
 	"version" integer NOT NULL,
-	"license_date" date,
+	"license_date" text,
 	"effective_date" date NOT NULL,
 	"amendment_reason" text,
 	"note" text,

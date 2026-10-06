@@ -241,6 +241,40 @@ PRE_R54_BATCHES = f"""update compat_state set data = jsonb_set(data, '{{db}}', (
   'batches', {BATCH_AGG}
 )) where key = 'main'"""
 
+# ── R5.5 upgrade drill: the price declarations and the production configuration ──────────────────────────────
+# A database written before the declarations had tables holds them inside compat_state — each with its inputs and
+# its cost heads — and the production configuration as one object beside them. These statements rebuild that shape
+# from the live tables, so the first boot on this code has to adopt it. Nothing here ships either: it is the inverse
+# of the production half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+BOM_INPUTS_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', i.item_id, 'name', i.name, 'sku', i.sku, 'uom', i.uom, 'qty', i.qty, 'wastagePct', i.wastage_pct,
+      'wastageQty', i.wastage_qty, 'grossQty', i.gross_qty, 'price', i.price, 'value', i.value,
+      'wastageValue', i.wastage_value)""") + """ order by i.ord), '[]'::jsonb)
+     from bom_inputs i where i.bom_id = b.id)""")
+BOM_COSTS_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'head', c.head, 'amount', c.amount)""") + """ order by c.ord), '[]'::jsonb)
+     from bom_costs c where c.bom_id = b.id)""")
+BOM_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', b.id, 'no', b.no, 'itemId', b.item_id, 'itemName', b.item_name, 'sku', b.sku, 'hsCode', b.hs_code,
+    'uom', b.uom, 'version', b.version, 'licenseDate', b.license_date, 'effectiveDate', b.effective_date,
+    'amendmentReason', b.amendment_reason, 'note', b.note, 'inputs', """ + BOM_INPUTS_DOC + """,
+    'costs', """ + BOM_COSTS_DOC + """, 'materialValue', b.material_value, 'wastageValue', b.wastage_value,
+    'valueAdded', b.value_added, 'price', b.price, 'unitCost', b.unit_cost, 'process', b.process,
+    'supersededAt', """ + _ISO.format("b.superseded_at") + """, 'createdAt', """ + _ISO.format("b.created_at") + """,
+    'updatedAt', """ + _ISO.format("b.updated_at") + """, 'cancelReason', b.cancel_reason,
+    'history', b.history)""") + ")")
+BOM_AGG = (f"(select coalesce(jsonb_agg({BOM_DOC} order by b.ord), '[]'::jsonb) "
+           f"from boms b where b.deleted_at is null)")
+# the configuration: one object, its two settings and whoever changed them last
+CONFIG_DOC = ("(select " + _NO_NULLS.format("""jsonb_build_object('procedure', procedure, 'consumption', consumption,
+    'updatedAt', """ + _ISO.format("updated_at") + """, 'updatedBy', updated_by)""")
+              + " from production_config where id = 1)")
+# the declarations and the configuration back inside the snapshot (a deleted draft has no place there: the mock
+# removed it for good, so only the id counter the snapshot keeps retires its id)
+PRE_R55_BOMS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'boms', {BOM_AGG}, 'productionConfig', {CONFIG_DOC}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -1638,6 +1672,310 @@ def run():
         else:
             skipped("the SQL-only mutation probe (no transfer or invoice line for that SKU)")
 
+    # ── R5.5: the price declarations and the production configuration ────────────────────────────────────────
+    # A declaration is the Mushak 4.3 coefficient of ONE unit of a finished good: its inputs and the wastage each
+    # allows are rows of `bom_inputs`, its cost heads rows of `bom_costs`, and the version in force for an item on a
+    # date is what a production batch prices its lines and consumes its inputs from. The configuration is the one row
+    # that says whether a batch follows a work order and whether it records the standard or the actual consumption.
+    # Three proofs follow: the rows hold what the register prints (and a row changed in SQL alone moves the answer at
+    # once), a declaration filed here is what the next batch is priced from — the batch rules read it through the
+    # mirror this module writes through — and a version filed after a deleted draft takes the same number but a new
+    # id, which is why the number's unique index covers the live rows only.
+    print("R5.5: the price declarations and the production configuration are rows")
+
+    pdPage = arif.get(f"{BASE}/production/boms", params={"size": 100}).json()
+    pdRows = pdPage["data"]
+    check(pdPage["total"] == len(pdRows) >= 8 and pdPage["totals"] == {}
+          and set(pdPage["facets"]) == {"status", "item"} and set(pdPage["facetLabels"]) == {"item"}
+          and len(pdPage["facetLabels"]["item"]) >= 6,
+          f"native (R5.5): GET /production/boms answers the page with its facets and the finished goods' names "
+          f"({pdPage['total']} declarations)")
+    check([r["sku"] for r in pdRows] == sorted(r["sku"] for r in pdRows)
+          and all(r["status"] in ("active", "draft", "superseded", "cancelled") and "salePrice" in r for r in pdRows),
+          "R5.5: the register is sorted by SKU by default, and every row carries its status and the item's sale price")
+    check(sum(pdPage["facets"]["status"].values()) == pdPage["total"]
+          and sum(pdPage["facets"]["item"].values()) == pdPage["total"]
+          and pdPage["facets"]["status"].get("active", 0) >= 6,
+          f"R5.5: the facets count the same rows twice over ({json.dumps(pdPage['facets']['status'])})")
+    if DB_URL:
+        check(psql("select count(*) from boms where deleted_at is null") == str(pdPage["total"])
+              and psql("select count(*) from bom_inputs") == str(sum(len(r["inputs"]) for r in pdRows))
+              and psql("select count(*) from bom_costs") == str(sum(len(r["costs"]) for r in pdRows)),
+              "R5.5: …and its total is the live rows of the table, with the inputs and the cost heads as child rows")
+        check(psql("""select count(*) from boms b where
+              b.material_value <> (select coalesce(sum(i.value), 0) from bom_inputs i where i.bom_id = b.id)
+              or b.wastage_value <> (select coalesce(sum(i.wastage_value), 0) from bom_inputs i where i.bom_id = b.id)
+              or b.value_added <> (select coalesce(sum(c.amount), 0) from bom_costs c where c.bom_id = b.id)
+              or b.price <> b.material_value + b.value_added
+              or b.unit_cost <> b.price - (select coalesce(sum(c.amount), 0) from bom_costs c
+                                           where c.bom_id = b.id and c.head = 'profit')""") == "0",
+              "R5.5: every declaration's values are the sums of its own child rows — material, wastage, value added, "
+              "price and unit cost")
+        pdProbe = pdRows[0]["id"]
+        pdUc0 = float(psql(f"select unit_cost from boms where id = '{pdProbe}'"))
+        pdQty0 = float(psql(f"select qty from bom_inputs where bom_id = '{pdProbe}' and ord = 1"))
+        psql(f"update boms set unit_cost = {jr2(pdUc0 + 1.5)} where id = '{pdProbe}'")
+        psql(f"update bom_inputs set qty = {jr2(pdQty0 * 2)} where bom_id = '{pdProbe}' and ord = 1")
+        pdMoved = arif.get(f"{BASE}/production/boms/{pdProbe}").json()
+        check(pdMoved["unitCost"] == jr2(pdUc0 + 1.5) and pdMoved["inputs"][0]["qty"] == jr2(pdQty0 * 2),
+              f"R5.5: a unit cost and an input quantity changed in SQL alone move the answer at once "
+              f"({pdUc0} → {pdMoved['unitCost']}, {pdQty0} → {pdMoved['inputs'][0]['qty']})")
+        psql(f"update boms set unit_cost = {pdUc0} where id = '{pdProbe}'")
+        psql(f"update bom_inputs set qty = {pdQty0} where bom_id = '{pdProbe}' and ord = 1")
+        pdBack = arif.get(f"{BASE}/production/boms/{pdProbe}").json()
+        check(pdBack["unitCost"] == pdUc0 and pdBack["inputs"][0]["qty"] == pdQty0,
+              "R5.5: …and putting the row back restores the answer exactly")
+
+    pdCsv = arif.get(f"{BASE}/production/boms", params={"format": "csv"})
+    check(pdCsv.status_code == 200 and pdCsv.headers.get("content-type", "").startswith("text/csv")
+          and "price-declarations-" in pdCsv.headers.get("content-disposition", "")
+          and pdCsv.text.splitlines()[0].lstrip("\ufeff").startswith("Declaration,Item,UoM,Version,Submitted,Effective")
+          and len([l for l in pdCsv.text.splitlines()[1:] if l]) == pdPage["total"],
+          "R5.5: the CSV export writes the Mushak 4.3 columns, one row per declaration")
+    check(arif.get(f"{BASE}/production/boms", params={"status": "draft", "size": 50}).json()["total"]
+          == pdPage["facets"]["status"].get("draft", 0)
+          and arif.get(f"{BASE}/production/boms", params={"status": "active", "size": 50}).json()["total"]
+          == pdPage["facets"]["status"].get("active", 0),
+          "R5.5: ?status= narrows the register to one lifecycle state")
+    pdName = pdRows[0]["inputs"][0]["name"].lower()
+    pdQ = arif.get(f"{BASE}/production/boms", params={"q": pdName, "size": 50}).json()
+    check(pdQ["total"] >= 1 and all(pdName in f"{r['no']} {r['itemName']} {r['sku']} {r['hsCode']} "
+                                    + " ".join(i["name"] for i in r["inputs"]).lower() for r in pdQ["data"]),
+          f"R5.5: ?q= finds a declaration by the name of one of its inputs ({pdQ['total']} mention it)")
+    pdSort = arif.get(f"{BASE}/production/boms", params={"sort": "price.desc", "size": 100}).json()
+    check([r["price"] for r in pdSort["data"]] == sorted((r["price"] for r in pdSort["data"]), reverse=True),
+          "R5.5: ?sort=price.desc orders the register by the declared price")
+    pdRange = arif.get(f"{BASE}/production/boms", params={"from": "2026-01-01", "to": "2026-12-31", "size": 100}).json()
+    check(pdRange["total"] >= 1 and all("2026-01-01" <= r["effectiveDate"] <= "2026-12-31" for r in pdRange["data"]),
+          f"R5.5: ?from=&to= filter on the effective date ({pdRange['total']} declarations take effect in 2026)")
+
+    pdTwo = [r for r in pdRows if sum(1 for x in pdRows if x["itemId"] == r["itemId"]) > 1
+             and r["process"] == "Approved"][0]
+    pdOne = arif.get(f"{BASE}/production/boms/{pdTwo['id']}").json()
+    check(pdOne["id"] == pdTwo["id"] and [v["id"] for v in pdOne["versions"]]
+          == [x["id"] for x in sorted((r for r in pdRows if r["itemId"] == pdTwo["itemId"]), key=lambda r: -r["version"])],
+          "R5.5: GET /production/boms/{id} lists every version of the item beside it, newest first")
+    check(arif.get(f"{BASE}/production/boms/{pdTwo['no']}").json()["id"] == pdTwo["id"]
+          and arif.get(f"{BASE}/production/boms/nosuchdeclaration").status_code == 404
+          and arif.get(f"{BASE}/production/boms/nosuchdeclaration").json()["title"] == "Price declaration not found",
+          "R5.5: a declaration is found by its number too, and an unknown one is a 404 problem")
+    pdSku = arif.get(f"{BASE}/items/{pdTwo['itemId']}").json()
+    check(pdOne["salePrice"] == pdSku["salePrice"] and pdOne["status"] == pdTwo["status"],
+          "R5.5: the row carries the item's current sale price beside the declared one")
+
+    # a new version of an item that already has one, effective in a few days: the version in force for a batch dated
+    # today does not change, so what follows cannot disturb the other families' checks
+    pdNextV = max(v["version"] for v in pdOne["versions"]) + 1
+    pdEff = time.strftime("%Y-%m-%d", time.localtime(time.time() + 6 * 86400))
+    pdBody = {"itemId": pdTwo["itemId"], "effectiveDate": pdEff, "licenseDate": tdate,
+              "amendmentReason": f"R5.5 amendment {TAG}: the yarn and the dyeing costs were revised for the season.",
+              "inputs": [{"itemId": i["itemId"], "qty": i["qty"], "wastagePct": i["wastagePct"],
+                          "price": jr2(i["price"] * 1.1)} for i in pdOne["inputs"]],
+              "costs": [{"head": c["head"], "amount": jr2(c["amount"] * 1.05)} for c in pdOne["costs"]],
+              "process": "Created"}
+    pdNew = arif.post(f"{BASE}/production/boms", json=pdBody)
+    pdn = pdNew.json()
+    pdNewId, pdNewNo = pdn.get("id"), pdn.get("no")
+    check(pdNew.status_code == 201 and str(pdNewId).startswith("bom") and pdn["version"] == pdNextV
+          and pdn["no"] == f"BOM-{pdTwo['sku']}-v{pdNextV}" and pdn["status"] == "draft"
+          and pdn["process"] == "Created" and [h["action"] for h in pdn["history"]] == ["created"]
+          and pdn["materialValue"] == jr2(sum(i["value"] for i in pdn["inputs"]))
+          and pdn["wastageValue"] == jr2(sum(i["wastageValue"] for i in pdn["inputs"]))
+          and pdn["valueAdded"] == jr2(sum(c["amount"] for c in pdn["costs"]))
+          and pdn["price"] == jr2(pdn["materialValue"] + pdn["valueAdded"])
+          and pdn["unitCost"] == jr2(pdn["price"] - next(c["amount"] for c in pdn["costs"] if c["head"] == "profit")),
+          f"native (R5.5): a declaration is filed as the item's next version and priced by the mock's own calcBom "
+          f"({pdNew.status_code} {pdNewNo})")
+    check(all(i["value"] == jr2(i["grossQty"] * i["price"]) and i["wastageValue"] == jr2(i["wastageQty"] * i["price"])
+              for i in pdn["inputs"]),
+          "R5.5: each input's value is its gross quantity at its price, and its wastage is valued the same way")
+    if DB_URL:
+        check(psql(f"select count(*) from boms where id = '{pdNewId}' and no = '{pdNewNo}' and version = {pdNextV}"
+                   f" and process = 'Created' and deleted_at is null") == "1"
+              and psql(f"select count(*) from bom_inputs where bom_id = '{pdNewId}'") == str(len(pdn["inputs"]))
+              and psql(f"select count(*) from bom_costs where bom_id = '{pdNewId}'") == str(len(pdn["costs"])),
+              "R5.5: the draft is a row in boms, with its inputs and its cost heads beside it")
+
+    check(arif.post(f"{BASE}/production/boms", json=pdBody).status_code == 409
+          and arif.post(f"{BASE}/production/boms", json=pdBody).json()["title"]
+          == "This item already has a draft declaration — edit or delete it first.",
+          "R5.5: an item keeps one draft declaration — a second one is a 409 that says to edit or delete the first")
+    pdOp = session("kamal")  # the run's own operator session signed out at the start
+    check(pdOp.post(f"{BASE}/production/boms", json=pdBody).status_code == 403
+          and pdOp.get(f"{BASE}/production/boms").status_code == 200
+          and requests.get(f"{BASE}/production/boms").status_code == 401,
+          "R5.5: filing a declaration needs master.edit (403 for an operator, who may still read the register), "
+          "and the register needs a session")
+    pdBad = [("an unknown item", {**pdBody, "itemId": "i6"}, {"itemId": ["unknown"]}),
+             ("a finished good as an input", {**pdBody, "inputs": [{**pdBody["inputs"][0], "itemId": pdTwo["itemId"]}]},
+              {"inputs.0.itemId": ["unknown"]}),
+             ("a repeated input", {**pdBody, "inputs": [pdBody["inputs"][0], pdBody["inputs"][0]]},
+              {"inputs.1.itemId": ["duplicate"]}),
+             ("a repeated cost head", {**pdBody, "costs": [{"head": "labour", "amount": 5}, {"head": "labour", "amount": 6}]},
+              {"costs.1.head": ["duplicate"]}),
+             ("no amendment reason", {k: v for k, v in pdBody.items() if k != "amendmentReason"},
+              {"amendmentReason": ["amendmentReason"]}),
+             ("an effective date before the version in force", {**pdBody, "effectiveDate": pdTwo["effectiveDate"]},
+              {"effectiveDate": ["afterPrevious"]}),
+             ("a license date that is not a date", {**pdBody, "licenseDate": "25-06-2026"},
+              {"licenseDate": ["required"]}),
+             ("nothing but zeros", {**pdBody, "inputs": [{**i, "price": 0} for i in pdBody["inputs"]],
+                                    "costs": [{**c, "amount": 0} for c in pdBody["costs"]]},
+              {"costs": ["pricePositive"]})]
+    for pdWhy, pdBadBody, pdWant in pdBad:
+        pdR = arif.post(f"{BASE}/production/boms", json=pdBadBody)
+        check(pdR.status_code == 422 and pdR.json()["title"] == "Validation failed"
+              and all(pdR.json().get("errors", {}).get(k) == v for k, v in pdWant.items()),
+              f"R5.5: {pdWhy} is refused with the mock's own 422 ({json.dumps(pdR.json().get('errors'))[:90]})")
+
+    pdEdit = {**pdBody, "note": f"R5.5 note {TAG}",
+              "inputs": [{**pdBody["inputs"][0], "qty": pdBody["inputs"][0]["qty"] * 1.5,
+                          "price": jr2(pdBody["inputs"][0]["price"] * 1.2)}, *pdBody["inputs"][1:]]}
+    pdPut = arif.put(f"{BASE}/production/boms/{pdNewId}", json=pdEdit)
+    pdEdited = pdPut.json()
+    check(pdPut.status_code == 200 and pdEdited["price"] > pdn["price"] and pdEdited["note"] == pdEdit["note"]
+          and pdEdited["version"] == pdNextV and pdEdited["no"] == pdNewNo
+          and [h["action"] for h in pdEdited["history"]] == ["created", "edited"],
+          f"R5.5: editing the draft prices it again and keeps its version ({pdn['price']} → {pdEdited['price']})")
+    pdAudit = arif.get(f"{BASE}/audit", params={"entity": "bom", "entityId": pdNewId, "size": 20}).json()["data"]
+    pdChanges = next((e.get("changes") or [] for e in pdAudit if e["action"] == "edited"), [])
+    check(any(c["field"] == "price" for c in pdChanges) and any(c["field"] == "inputs" for c in pdChanges)
+          and all(e["ref"] == pdNewNo for e in pdAudit),
+          f"R5.5: …and the audit trail records the price that moved and the inputs' new signature "
+          f"({[c['field'] for c in pdChanges]})")
+    check(arif.put(f"{BASE}/production/boms/{pdTwo['id']}", json={}).status_code == 409
+          and arif.put(f"{BASE}/production/boms/{pdTwo['id']}", json={}).json()["title"]
+          == f"Only drafts can be edited — {pdTwo['no']} is {pdTwo['process']}. Amend it to create a new version.",
+          "R5.5: a filed declaration cannot be edited — the 409 comes before the body is even parsed")
+
+    pdApp = arif.patch(f"{BASE}/production/boms/{pdNewId}", json={"process": "Approved"})
+    pdApproved = pdApp.json()
+    check(pdApp.status_code == 200 and pdApproved["status"] == "active" and pdApproved["process"] == "Approved"
+          and [h["action"] for h in pdApproved["history"]] == ["created", "edited", "approved"],
+          f"R5.5: approving files the version — {pdNewNo} is the declaration in force from {pdEff}")
+    pdOld = arif.get(f"{BASE}/production/boms/{pdTwo['id']}").json()
+    check(pdOld["status"] == "superseded" and pdOld["process"] == "Approved"
+          and (not DB_URL or psql(f"select count(*) from boms where id = '{pdTwo['id']}'"
+                                  " and superseded_at is not null") == "1"),
+          "R5.5: …and supersedes the version that was in force, on the row as well as in the register")
+    check([v["status"] for v in arif.get(f"{BASE}/production/boms/{pdNewId}").json()["versions"]]
+          == ["active", "superseded"] + ["superseded"] * (pdNextV - 2),
+          "R5.5: the version list beside it shows which one is in force")
+    check(arif.patch(f"{BASE}/production/boms/{pdNewId}", json={"process": "Approved"}).status_code == 409
+          and arif.patch(f"{BASE}/production/boms/{pdNewId}", json={"process": "Approved"}).json()["title"]
+          == f"Cannot approve — {pdNewNo} is Approved.",
+          "R5.5: a version that is filed cannot be approved again (409)")
+    check(arif.patch(f"{BASE}/production/boms/{pdNewId}", json={"process": "Cancelled", "reason": f"R5.5 {TAG}"}).status_code == 409
+          and arif.patch(f"{BASE}/production/boms/{pdNewId}", json={}).status_code == 400,
+          "R5.5: …cannot be cancelled either (409), and a transition that is neither is a 400")
+
+    # the batch rules read the declarations through the mirror this module writes through: a batch issued on the new
+    # version's effective date is priced and consumed from it, while one issued today still follows the version in
+    # force — so a natively filed declaration is what production is priced from, without a restart
+    pdBatch = {"mode": "inHouse", "issueDate": pdEff, "receiveDate": pdEff, "remark": f"R5.5 batch {TAG}",
+               "issuedBy": "Arif Hossain", "designation": "Shift-In-Charge",
+               "lines": [{"itemId": pdTwo["itemId"], "issueQty": 10, "receiveQty": 0, "damageQty": 0}],
+               "process": "Created"}
+    pdB = arif.post(f"{BASE}/production/batches", json=pdBatch)
+    pdMade = pdB.json()
+    pdUses = {c["itemId"]: c["qty"] for c in pdMade.get("consumption", [])}
+    check(pdB.status_code == 201 and pdMade["lines"][0]["unitCost"] == pdApproved["unitCost"]
+          and pdMade["lines"][0].get("bomId") == pdNewId and pdMade["lines"][0].get("bomVersion") == pdNextV
+          and pdUses == {i["itemId"]: jr2(i["grossQty"] * 10) for i in pdApproved["inputs"]},
+          f"R5.5: a batch issued on {pdEff} is priced from the version filed here and consumes its inputs "
+          f"({pdMade.get('no')} at {pdMade['lines'][0]['unitCost']})")
+    pdForce = sorted((r for r in pdRows if r["itemId"] == pdTwo["itemId"] and r["process"] == "Approved"
+                      and r["effectiveDate"] <= tdate), key=lambda r: -r["version"])[0]
+    pdB0 = arif.post(f"{BASE}/production/batches", json={**pdBatch, "issueDate": tdate, "receiveDate": tdate}).json()
+    check(pdB0["lines"][0].get("bomId") == pdForce["id"] and pdB0["lines"][0]["unitCost"] == pdForce["unitCost"],
+          f"R5.5: …while a batch issued today is still priced from the version in force ({pdForce['no']}, whose "
+          f"effective date has passed — the new one has not)")
+    for pdDraftBatch in (pdMade, pdB0):
+        arif.delete(f"{BASE}/production/batches/{pdDraftBatch['id']}")
+
+    pdFg2 = [r for r in pdRows if r["process"] == "Approved"
+             and sum(1 for x in pdRows if x["itemId"] == r["itemId"]) == 1][0]
+    pdCancel = arif.post(f"{BASE}/production/boms", json={**pdBody, "itemId": pdFg2["itemId"]}).json()
+    check(pdCancel["version"] == 2 and pdCancel["no"] == f"BOM-{pdFg2['sku']}-v2",
+          f"R5.5: another item's first amendment becomes v2 ({pdCancel['no']})")
+    check(arif.patch(f"{BASE}/production/boms/{pdCancel['id']}", json={"process": "Cancelled"}).status_code == 422
+          and arif.patch(f"{BASE}/production/boms/{pdCancel['id']}", json={"process": "Cancelled"}).json()["errors"]
+          == {"reason": ["reasonMin"]},
+          "R5.5: cancelling a draft needs a reason of ten characters (422)")
+    pdCancelled = arif.patch(f"{BASE}/production/boms/{pdCancel['id']}",
+                             json={"process": "Cancelled", "reason": f"R5.5 cancelled {TAG}"}).json()
+    check(pdCancelled["status"] == "cancelled" and pdCancelled["cancelReason"] == f"R5.5 cancelled {TAG}"
+          and (not DB_URL or psql(f"select count(*) from boms where id = '{pdCancel['id']}'"
+                                  " and process = 'Cancelled' and cancel_reason is not null") == "1"),
+          "R5.5: …and with one the draft is cancelled, on the row as well")
+    pdGone = arif.post(f"{BASE}/production/boms", json={**pdBody, "itemId": pdFg2["itemId"]}).json()
+    check(pdGone["version"] == 3 and pdGone["no"] == f"BOM-{pdFg2['sku']}-v3",
+          "R5.5: a cancelled version keeps its number retired — the next draft is v3")
+    check(arif.delete(f"{BASE}/production/boms/{pdGone['id']}").status_code == 200
+          and arif.delete(f"{BASE}/production/boms/{pdGone['id']}").status_code == 404,
+          "R5.5: deleting a draft answers {ok: true}, and a second delete of it is a 404")
+    check(arif.get(f"{BASE}/production/boms/{pdGone['id']}").status_code == 404
+          and (not DB_URL or psql(f"select count(*) from boms where id = '{pdGone['id']}'"
+                                  " and deleted_at is not null") == "1"),
+          "R5.5: …the row is stamped rather than removed, and leaves the register")
+    check(arif.delete(f"{BASE}/production/boms/{pdGone['no']}").status_code == 404
+          and arif.delete(f"{BASE}/production/boms/{pdTwo['id']}").status_code == 409,
+          "R5.5: a delete matches the id only, as the mock's did, and a filed declaration cannot be deleted (409)")
+    pdAgain = arif.post(f"{BASE}/production/boms", json={**pdBody, "itemId": pdFg2["itemId"]}).json()
+    check(pdAgain["no"] == pdGone["no"] and int(pdAgain["id"][3:]) > int(pdGone["id"][3:]),
+          f"R5.5: filing that item again takes the deleted draft's version but never its id "
+          f"({pdGone['id']} {pdGone['no']} → {pdAgain['id']} {pdAgain['no']})")
+    arif.delete(f"{BASE}/production/boms/{pdAgain['id']}")
+    if DB_URL:
+        pdDup = ("insert into boms (id, no, item_id, item_name, sku, hs_code, uom, version, effective_date,"
+                 " material_value, wastage_value, value_added, price, unit_cost, process, created_at, deleted_at)"
+                 f" select 'dupm{TAG}', no, item_id, item_name, sku, hs_code, uom, version, effective_date,"
+                 " material_value, wastage_value, value_added, price, unit_cost, process, created_at, DELETED"
+                 f" from boms where id = '{pdTwo['id']}'")
+        pdLive = subprocess.run(["psql", DB_URL, "-c", pdDup.replace("DELETED", "null")], capture_output=True, text=True)
+        pdStamped = subprocess.run(["psql", DB_URL, "-c", pdDup.replace("DELETED", "now()")], capture_output=True, text=True)
+        check(pdLive.returncode != 0 and pdStamped.returncode == 0,
+              "R5.5: the database refuses a second live declaration with the same number, but a deleted draft's "
+              "number may come back — which is why the unique index covers the live rows only")
+        psql(f"delete from boms where id = 'dupm{TAG}'")
+
+    pdCfg0 = arif.get(f"{BASE}/production/config").json()
+    check(set(pdCfg0) >= {"procedure", "consumption"} and pdCfg0["procedure"] in ("directStock", "workOrder")
+          and pdCfg0["consumption"] in ("standard", "actual"),
+          f"native (R5.5): GET /production/config answers the procedure and the consumption ({json.dumps(pdCfg0)})")
+    if DB_URL:
+        check(psql("select count(*) from production_config") == "1"
+              and psql("select procedure || '/' || consumption from production_config")
+              == f"{pdCfg0['procedure']}/{pdCfg0['consumption']}",
+              "R5.5: …and it is the single row of production_config")
+    check(pdOp.put(f"{BASE}/production/config", json={"procedure": "workOrder", "consumption": "standard"}).status_code == 403
+          and arif.put(f"{BASE}/production/config", json={"procedure": "workOrder", "consumption": "standard"}).status_code == 403,
+          "R5.5: only an administrator may change how the factory produces (403 for an operator and an approver)")
+    pdCfg1 = admin.put(f"{BASE}/production/config", json={"procedure": "workOrder", "consumption": "actual"})
+    check(pdCfg1.status_code == 200 and pdCfg1.json()["procedure"] == "workOrder"
+          and pdCfg1.json()["consumption"] == "actual" and pdCfg1.json().get("updatedBy")
+          and pdCfg1.json().get("updatedAt")
+          and (not DB_URL or psql("select procedure || '/' || consumption from production_config") == "workOrder/actual"),
+          "R5.5: an administrator's PUT replaces the row and stamps who changed it")
+    pdWo = arif.post(f"{BASE}/production/batches", json={**pdBatch, "issueDate": tdate, "receiveDate": tdate})
+    check(pdWo.status_code == 422 and pdWo.json().get("errors", {}).get("lines.0.workOrderId") == ["required"],
+          f"R5.5: with the work-order procedure a batch has to draw on one — buildBatch read the row at once "
+          f"({pdWo.status_code})")
+    check(admin.put(f"{BASE}/production/config", json={"procedure": "nope"}).status_code == 422
+          and admin.put(f"{BASE}/production/config", json={}).status_code == 422,
+          "R5.5: a body the configuration's schema refuses is a 422")
+    pdCfgAudit = admin.get(f"{BASE}/audit", params={"entity": "productionConfig", "size": 5}).json()["data"]
+    pdCfgEvent = next((e for e in pdCfgAudit if e["action"] == "updated"), {})
+    check(pdCfgEvent.get("ref") == "Production configuration"
+          and {c["field"] for c in pdCfgEvent.get("changes") or []} >= {"procedure", "consumption"}
+          and pdCfgEvent.get("actor") == "System Administrator",
+          f"R5.5: …and the audit trail records what changed ({[c['field'] for c in pdCfgEvent.get('changes') or []]})")
+    pdCfg2 = admin.put(f"{BASE}/production/config", json={"procedure": "directStock", "consumption": "standard"})
+    pdFree = arif.post(f"{BASE}/production/batches", json={**pdBatch, "issueDate": tdate, "receiveDate": tdate})
+    check(pdCfg2.status_code == 200 and pdFree.status_code == 201,
+          "R5.5: …and setting it back lets a batch be created without a work order again")
+    arif.delete(f"{BASE}/production/batches/{pdFree.json()['id']}")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -2205,6 +2543,83 @@ def run():
         check(wb.status_code == 201 and psql(f"select count(*) from batches where id = '{wb.json().get('id')}'") == "1",
               f"and writes land in the tables on the upgraded database ({wb.status_code})")
         arif.delete(f"{BASE}/production/batches/{wb.json()['id']}")
+        # … and the price declarations with the production configuration, which the next release moved out: a
+        # database written before them holds the declarations inside compat_state — each with its inputs and its cost
+        # heads — and the configuration as one object beside them. A draft deleted before the upgrade has no place
+        # there, so what has to survive the round trip is the id counter, not the row; its version, on the other
+        # hand, is free again exactly as it was before.
+        print("\nR5.5: upgrading a pre-R5.5 database moves the price declarations into their tables")
+        def pd_counts():
+            return (psql("select count(*) from boms where deleted_at is null"),
+                    psql("select count(*) from bom_inputs i join boms b on b.id = i.bom_id"
+                         " where b.deleted_at is null"),
+                    psql("select count(*) from bom_costs c join boms b on b.id = c.bom_id"
+                         " where b.deleted_at is null"),
+                    psql("select count(*) from production_config"))
+
+        def pd_registers():
+            return {"boms": arif.get(f"{BASE}/production/boms", params={"size": 100}).json(),
+                    "one": arif.get(f"{BASE}/production/boms/{pdNewId}").json(),
+                    "csv": arif.get(f"{BASE}/production/boms", params={"format": "csv"}).text,
+                    "config": arif.get(f"{BASE}/production/config").json(),
+                    "batches": arif.get(f"{BASE}/production/batches", params={"size": 200}).json(),
+                    "lots": arif.get(f"{BASE}/production/lots", params={"all": 1}).json(),
+                    "bond": arif.get(f"{BASE}/vat/bond-uds").json()}
+
+        def pd_boots():
+            """How many boots adopted the R5.5 collections — one `R5.5 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return fh.read().count("R5.5 upgrade:")
+
+        pdGone = arif.post(f"{BASE}/production/boms", json={**pdBody, "itemId": pdFg2["itemId"]}).json()
+        arif.delete(f"{BASE}/production/boms/{pdGone['id']}")
+        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
+        pdc, pdbefore, pdboots = pd_counts(), pd_registers(), pd_boots()
+        psql(PRE_R55_BOMS)
+        psql("delete from bom_costs")
+        psql("delete from bom_inputs")
+        psql("delete from boms")
+        psql("delete from production_config")
+        check(pd_counts() == ("0", "0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'boms'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'productionConfig'") == "1",
+              f"the database is back in the pre-R5.5 shape ({pdc[0]} declarations, {pdc[1]} inputs, {pdc[2]} cost "
+              f"heads and the configuration inside the snapshot)")
+        restart()
+        check(pd_counts() == pdc and psql("select count(*) from boms") == pdc[0],
+              f"the first boot moved every live declaration into the tables ({pdc[0]} of them, with {pdc[1]} inputs "
+              f"and {pdc[2]} cost heads) and the configuration into its one row — a stamped draft left nothing to "
+              f"adopt, so no row came back")
+        check(psql("select count(*) from compat_state where data->'db' ? 'boms'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'productionConfig'") == "0",
+              "…and rewrote the snapshot without them")
+        check(pd_registers() == pdbefore,
+              "…and serves the same registers, row for row — the declarations, one with its versions, the CSV, the "
+              "configuration, and the batch, lot and bond registers that read them")
+        check(psql(f"select count(*) from boms where id = '{pdGone['id']}'") == "0",
+              "a declaration deleted before the upgrade stays deleted — the mock kept no row for it either")
+        pdRefiled = arif.post(f"{BASE}/production/boms", json={**pdBody, "itemId": pdFg2["itemId"]}).json()
+        check(pdRefiled["no"] == pdGone["no"] and int(pdRefiled["id"][3:]) > int(pdGone["id"][3:]),
+              f"…but its version is free again while its id stays retired ({pdGone['id']} → {pdRefiled['id']}, "
+              f"both {pdRefiled['no']})")
+        arif.delete(f"{BASE}/production/boms/{pdRefiled['id']}")
+        pdAfter = arif.post(f"{BASE}/production/batches", json=pdBatch)
+        check(pdAfter.status_code == 201 and pdAfter.json()["lines"][0].get("bomId") == pdNewId
+              and pdAfter.json()["lines"][0]["unitCost"] == pdApproved["unitCost"],
+              "…and a batch is still priced from the adopted declaration, through the mirror the module writes")
+        arif.delete(f"{BASE}/production/batches/{pdAfter.json()['id']}")
+        pdboots_after, pdnow = pd_boots(), pd_counts()
+        restart()
+        check(pd_counts() == pdnow and (pdboots is None or pdboots_after == pdboots + 1)
+              and (pdboots is None or pd_boots() == pdboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        pdUp = admin.put(f"{BASE}/production/config", json={"procedure": "workOrder", "consumption": "actual"})
+        check(pdUp.status_code == 200
+              and psql("select procedure || '/' || consumption from production_config") == "workOrder/actual",
+              f"and writes land in the tables on the upgraded database ({pdUp.status_code})")
+        admin.put(f"{BASE}/production/config", json={"procedure": "directStock", "consumption": "standard"})
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

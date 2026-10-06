@@ -14,6 +14,7 @@ import { ItemsController, ItemsService, MasterItemsController } from "./modules/
 import { DamageController, StockService, TransfersController } from "./modules/stock"
 import { CreditNotesController, DebitNotesController, NotesService } from "./modules/notes"
 import { OpeningsController, OpeningsService } from "./modules/openings"
+import { BomsController, BomsService, ProductionConfigController, ProductionConfigService } from "./modules/production"
 import { PurchasesController, PurchasesService } from "./modules/purchases"
 import { SalesController, SalesService } from "./modules/sales"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
@@ -28,6 +29,7 @@ const NATIVE_CONTROLLERS = [
   DebitNotesController,
   OpeningsController,
   BatchesController,
+  BomsController, ProductionConfigController,
   StockController, ItemLedgerController,
   SalesController,
 ]
@@ -36,11 +38,13 @@ const NATIVE_CONTROLLERS = [
 @Module({
   providers: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
-    PurchasesService, NotesService, OpeningsService, BatchesService, DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService, DerivedService,
+    CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
-    PurchasesService, NotesService, OpeningsService, BatchesService, DerivedService, CompatService, BackupsService,
+    PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService, DerivedService,
+    CompatService, BackupsService,
   ],
 })
 class CoreModule {}

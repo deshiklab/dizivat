@@ -33,7 +33,7 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     - Lists are filtered, faceted and sorted in SQL.
   - **Compat layer:** the other 70 route modules run unchanged inside Nest, with their state saved to PostgreSQL after every write.
   - **Tests:** the full existing suite passes against it (520 contract checks, every E2E suite, axe, 32/32 visual baselines). `scripts/api_native.py` adds 39 backend checks, including persistence across API restarts.
-  - **Deployment:** one Docker image runs both processes, via `render.yaml` for Render with Neon Postgres. The roadmap R5.2–R5.5 moves each business module to relational tables.
+  - **Deployment:** one Docker image runs both processes, via `render.yaml` for Render with Neon Postgres. The roadmap R5.2–R5.6 moves each business module to relational tables.
 - **PDF download of the statutory forms (v0.9.1):** every printable form has a **PDF** button next to **Print**: Mushak 6.3 invoices, 6.7 credit and 6.8 debit notes, 6.6 VDS certificates, TR-6 challans, money receipts and payment vouchers, 6.4 batches, 4.3 declarations (sheet and register), the 6.10 report, the 9.1 return, party statements, purchases, and the 6.1/6.2 books (landscape). It replaces the old *“Server-side PDF (Gotenberg) is wired in R3”* notice.
   - **How it works:** the PDF is made **in the browser** from the same A4 template that is printed (`src/lib/pdf/export.ts`, lazy-loaded on click), so Bangla shaping and fonts are identical to Print. It needs no server memory and also works on the static demo.
   - **Layout:** the form is laid out in an off-screen A4-wide frame (paper-width breakpoints, always the light print look, even in dark mode), paginated between table rows, rasterised at about 240 dpi and written as a multi-page A4 PDF named after the form and document (e.g. `Mushak-6.3_S-09260012.pdf`).
@@ -465,8 +465,52 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     purpose, moves the answer at once** — a transfer line the branch split and that branch's ledger but not the
     company-wide one, an invoice line the ledger but not the split, and putting both back restores every number).
     Contract unchanged: 676 checks / 226 endpoints.
-  - **Next:** the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots
-    and subcontracting registers — then accounting and the VAT returns (R5.5), which is what removes `compat_state`.
+  - **Next in R5.5:** the rest of production — the price declarations and the production configuration (below), then
+    the work orders and the lots and subcontracting registers.
+
+- **R5.5 — Backend: the price declarations and the production configuration (branch `r5-nestjs`):** the Mushak 4.3
+  bills of materials — `production/boms` and `production/boms/{id}` — and `production/config` leave the compat layer
+  and move into **`boms`** + **`bom_inputs`** + **`bom_costs`** and the one row of **`production_config`** — **59 route
+  modules left, 57 native**. A declaration is the input–output coefficient of ONE unit of a finished good, and the
+  version in force for an item on a date is what a production batch prices its lines and consumes its inputs from; the
+  configuration says whether a batch follows a work order and whether it records the standard or the actual
+  consumption. See
+  [docs/BACKEND.md › R5.5](docs/BACKEND.md#r55--the-price-declarations-and-the-production-configuration-on-their-own-tables).
+  - **The rules are the mock's own, as data:** `buildBom` (an active finished good, inputs that are active and not
+    finished goods and not repeated, cost heads not repeated, an amendment reason and a later effective date from
+    version 2 on, and `calcBom`'s pricing), `approveBom`, `activeBom`, `bomRow`, `bomVersions`, the five lifecycle
+    rules, `bomIdentity`, `bomDiff`, the register's spec, CSV columns and facet labels, and the configuration's
+    `buildConfig` / `configDiff` all moved into `src/app/api/v1/_r3.ts` as functions that take the data they read, so
+    the Next.js handlers and the API's native module answer from one implementation.
+  - **A declaration is three tables,** so the material value, the wastage and the value added of the version in force
+    are `SUM`s over its own child rows. Its number carries its version (`BOM-{sku}-v{n}`) and the version comes from
+    the item's other declarations, so a deleted draft frees its number while its id stays retired — the row is stamped
+    with `deleted_at` and the number's unique index covers the *live* rows only. Approving supersedes the version in
+    force in the same transaction, and `license_date` is text because a draft may be filed without one.
+  - **The in-memory copies stay,** because `buildBatch` prices a line and works out its consumption from the version
+    in force and reads the procedure and the consumption, and the bond and settlement registers quote a declaration.
+    Every native write goes through to the mirror and a compat write is written back to the rows.
+  - **Proved both ways, byte for byte:** 676 contract checks with the three routes served natively, 676 again with the
+    mock handlers serving them, and **65 captured answers compared across the two configurations** — every filter,
+    sort, facet and date range, both CSV exports, every declaration with the versions beside it, the 404s, the
+    configuration, and the batch, lot, work-order and bond registers that read them — with **0 differences**.
+  - **Tests:** `api_native.py` 470 checks (+64: the register with its facets, filters, sorts, ranges and CSV; every
+    declaration checked against its own child rows in SQL — material value, wastage, value added, price and unit cost;
+    **a unit cost or an input quantity changed in SQL alone moves the answer at once**; filing, editing, approving
+    (which supersedes the version in force), cancelling and deleting, with the eight 422s, the 409s and the 403s the
+    mock's rules give; **a batch issued on the new version's effective date is priced from the declaration filed here
+    and consumes its inputs, while one issued today is still priced from the version in force** — the mirror
+    `buildBatch` reads is the row this module wrote; a cancelled version keeps its number retired and a deleted one
+    frees it, so filing again takes the same number but never the same id, and the database refuses a second *live*
+    declaration with one number while a stamped row may carry it; the configuration's single row, its 403s, its audit
+    event and a batch that has to name a work order the moment the procedure says so — and the **R5.5 upgrade drill**:
+    the database is rewritten into its pre-R5.5 shape, the API restarted, and the same declarations, the same
+    configuration and the same seven registers row for row are required back, with a declaration deleted before the
+    upgrade staying deleted while its version is free again and its id stays retired).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.5:** the work orders, then the two registers derived from the batches and the sales — the
+    finished-goods lots and the subcontracting register — then accounting and the VAT returns (R5.6), which is what
+    removes `compat_state`.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

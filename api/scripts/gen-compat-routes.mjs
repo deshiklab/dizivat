@@ -25,8 +25,11 @@ export const NATIVE = [
   "credit-notes", "credit-notes/[id]", "debit-notes", "debit-notes/[id]",
   "opening-stock", "opening-stock/[id]",
   // R5.4: production batches live in `batches` (their finished goods in `batch_lines`, the inputs they consume in
-  // `batch_consumption`); the BOMs, the work orders and the production configuration they are built from stay here
+  // `batch_consumption`); the work orders they may draw on stay here
   "production/batches", "production/batches/[id]", "production/batches/[id]/receive",
+  // R5.5: the price declarations (Mushak 4.3) live in `boms` — their inputs in `bom_inputs`, their cost heads in
+  // `bom_costs` — and the configuration that decides how a batch is produced is the one row of `production_config`
+  "production/boms", "production/boms/[id]", "production/config",
   // R5.4: the derived stock — the branch split and an item's ledger add up every movement document, and every
   // family has a table now, so both are read back from the database instead of walked in memory
   "stock", "items/[id]/ledger",

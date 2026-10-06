@@ -1,13 +1,14 @@
 /**
  * The in-process world shared with the compat bundle. Native modules own users, company, units, (R5.2) the
  * parties and items, (R5.3) the stock documents, the sales invoices, the purchases and the credit and debit notes
- * and (R5.4) the opening stock entries and the production batches in PostgreSQL, and write every change through to
- * these globals, so unported handlers (which read them) see the same data. One instance per database — the compat layer is single-writer by design until R5.5 removes it.
+ * and (R5.4) the opening stock entries and the production batches, and (R5.5) the Mushak 4.3 price declarations and
+ * the production configuration in PostgreSQL, and write every change through to these globals, so unported handlers
+ * (which read them) see the same data. One instance per database — the compat layer is single-writer by design until R5.6 removes it.
  */
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
-import type { AuditEvent, Batch, Company, CreditNote, DebitNote, Item, MasterItem, OpeningEntry, Party, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
+import type { AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind, Unit } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
 /** The undo buffer: deleted documents (compat state), deleted parties (R5.2) and deleted sales and purchases
@@ -26,6 +27,7 @@ interface Globals {
     units: Unit[]; customers: Party[]; vendors: Party[]; items: Item[]; masterItems: MasterItem[]
     transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; purchases: Purchase[]
     creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
+    boms: Bom[]; productionConfig: ProductionConfig
     trash: TrashEntry[]
   }
   __dzUsers?: UserStore
@@ -56,6 +58,7 @@ export function restoreGlobals(s: {
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
   creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
+  boms: Bom[]; productionConfig: ProductionConfig
   events: AuditEvent[]
 }) {
   // documents only: an older snapshot's deleted parties, sales and purchases are rebuilt from their `deleted_at` rows
@@ -65,6 +68,7 @@ export function restoreGlobals(s: {
     ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, items: s.items, masterItems: s.masterItems,
     transfers: s.transfers, damages: s.damages, sales: s.sales, purchases: s.purchases,
     creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings, batches: s.batches,
+    boms: s.boms, productionConfig: s.productionConfig,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
@@ -234,6 +238,26 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
+  /** R5.5: the price declarations — a batch's lines are priced and consumed from the version in force, and the
+   *  bond, the settlement and the VAT registers read them */
+  boms: (): Bom[] => G.__dzDb!.boms,
+  putBoms(list: Bom[]) { const a = mirror.boms(); a.splice(0, a.length, ...list) },
+  findBom: (idOrNo: string) => mirror.boms().find((b) => b.id === idOrNo || b.no === idOrNo),
+  putBom(b: Bom) {
+    const list = mirror.boms()
+    const cur = list.find((x) => x.id === b.id)
+    if (cur) replaceObject(cur, b)
+    else list.push(b)
+    return cur ?? b
+  },
+  removeBom(id: string) {
+    const list = mirror.boms()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.5: the production configuration — one object, replaced in place so `buildBatch` reads the new procedure */
+  productionConfig: (): ProductionConfig => G.__dzDb!.productionConfig,
+  putProductionConfig(c: ProductionConfig) { replaceObject(G.__dzDb!.productionConfig, c) },
   /** R5.3: the stock documents of one kind — the VAT returns and the Mushak books derive from them */
   stockDocs: (kind: StockDocKind): StockDoc[] => (kind === "transfer" ? G.__dzDb!.transfers : G.__dzDb!.damages),
   putStockDocs(kind: StockDocKind, list: StockDoc[]) { const a = mirror.stockDocs(kind); a.splice(0, a.length, ...list) },

@@ -35,13 +35,13 @@ export {
 // notes and settlements that block a cancellation, the export proceeds (PRC) entries, the document's own history,
 // the diff an edit records and the register's spec, CSV columns and facet labels. The invoices themselves live in
 // `sales`; the branch stock and the ledger are served from the rows since R5.4 (see `_derived` below), and the VAT
-// returns still derive from every document, so they stay with the compat layer until R5.5.
+// returns still derive from every document, so they stay with the compat layer until R5.6.
 export {
   approveRule, buildRealisation, cancelRule, deleteRule, docDiff, editDraftRule, parseRealisation, purchaseCategory,
   purchaseCategoryRule, purchaseCsvColumns, purchaseCsvRows, purchaseFacetLabels, purchaseIdentity, parsePurchase,
   purchaseSpec, realisableRule, realisationNotes, realisationRemovedNotes, saleCategory, saleCsvColumns, saleCsvRows,
   saleFacetLabels, saleIdentity, saleSpec, saleStockRule, stampDocHistory, noteDiff, noteDraftRule, stampNoteHistory,
-  stampOpeningHistory, stampBatchHistory,
+  stampOpeningHistory, stampBatchHistory, stampBomHistory,
 } from "@/app/api/v1/_docs"
 // R5.3: the credit and debit note rules, shared the same way — what a note body may contain and how a returned line
 // is priced pro rata, the numbers a new note takes, the source document that has to still be approved, the stock a
@@ -68,8 +68,9 @@ export {
 // prices its lines and consumes its inputs, the number a new batch takes, the input stock an approval needs and a
 // cancellation gives back, the contractor's receipt that completes a Mushak 6.4 challan, and the register's spec,
 // work-order filter and CSV columns. The batches themselves live in `batches` (their lines in `batch_lines`, their
-// consumption in `batch_consumption`); the BOMs, the work orders and the production configuration they are built
-// from are compat state; the branch stock and an item's ledger are served from the rows (see `_derived` below).
+// consumption in `batch_consumption`); the price declarations and the production configuration they are built from
+// have tables of their own since R5.5 (see below) and the work orders are compat state; the branch stock and an
+// item's ledger are served from the rows (see `_derived` below).
 export {
   applyBatchReceive, batchApproveRule, batchCancelRule, batchCsvColumns, batchCsvRows, batchDeleteRule, batchDiff,
   batchDraftRule, batchIdentity, batchReceiveChanges, batchReceiveStateRule, batchSpec, batchStockRule,
@@ -77,6 +78,18 @@ export {
   type BatchFields, type BatchReceiveFields,
 } from "@/app/api/v1/_r3"
 export { creditable, parseSale } from "@/app/api/v1/_r3"
+// R5.5: the price-declaration rules (the Mushak 4.3 bill of materials), shared the same way — what a body may
+// contain and how `calcBom` prices it, which version of the item it becomes, what approving supersedes, the
+// lifecycle a draft may go through, the register's spec, CSV columns, name and facet labels, and the production
+// configuration's own schema and diff. The declarations live in `boms` (their inputs in `bom_inputs`, their cost
+// heads in `bom_costs`) and the configuration in the one row of `production_config`; the work orders are compat
+// state, and a batch still prices its lines from the declarations through the mirror this module writes.
+export {
+  activeBom, approveBom, bomApproveRule, bomCancelRule, bomCsvColumns, bomCsvName, bomDeleteRule, bomDiff,
+  bomDraftRule, bomDraftTakenRule, bomFacetLabels, bomIdentity, bomRow, bomSpec, bomStatus, bomVersions, buildBom,
+  buildConfig, claimBomId, configDiff, CONFIG_DIFF_FIELDS, BOM_DIFF_FIELDS,
+  type BomFields, type BomSource,
+} from "@/app/api/v1/_r3"
 // R5.4: the derived stock itself — the branch split (`/stock`) and one item's ledger (`/items/{id}/ledger`). Both add
 // up every movement document, and every family has a table now, so the native module reads them back from the tables
 // and hands them to the mock's own derivation: the register's spec, rows, per-branch valuation and CSV columns, and

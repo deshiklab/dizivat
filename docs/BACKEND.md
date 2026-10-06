@@ -40,8 +40,10 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | Opening stock (R5.4) | `opening-stock`, `opening-stock/{id}` | **native** — `opening_entries` (the R6.4 bond block of a go-live entry is columns of its row) |
 | Production batches (R5.4) | `production/batches`, `production/batches/{id}`, `production/batches/{id}/receive` | **native** — `batches` + `batch_lines` + `batch_consumption` (the contractor, the job process and the receipt are columns of the row) |
 | The derived stock (R5.4) | `stock`, `items/{id}/ledger` | **native** — no tables of their own: both add up the ten movement families' rows with the mock's own derivation (`src/app/api/v1/_derived.ts`) |
+| Price declarations (R5.5) | `production/boms`, `production/boms/{id}` | **native** — `boms` + `bom_inputs` + `bom_costs` (Mushak 4.3: the version in force is what a production batch is priced from) |
+| The production configuration (R5.5) | `production/config` | **native** — `production_config` (one row: the procedure a batch follows and the consumption it records) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: the rest of production (BOMs and 4.3 versions, work orders, the production configuration, the lots and subcontracting registers), accounting, VAT returns, notifications, dashboard, search… | 62 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: the rest of production (the work orders, the lots and subcontracting registers), accounting, VAT returns, notifications, dashboard, search… | 59 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -80,7 +82,7 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
      compares the in-memory rows with what was last saved and adopts the difference into the table
      (`api/src/common/writeback.ts`).
 
-**Single instance by design** until R5.5 removes the compat layer: run one API process per database. Render's free
+**Single instance by design** until R5.6 removes the compat layer: run one API process per database. Render's free
 plan runs exactly one.
 
 ## R5.2 — customers and vendors on their own table
@@ -393,9 +395,61 @@ ledger company-wide and per branch, and the 404s).
   approving a document (`stockShortfall`). What changed is that these two endpoints no longer depend on them — a row
   changed in SQL alone, with the in-memory copies left stale, moves both answers at once, which is what
   `api_native.py` now proves.
-- **62 compat route modules are left, 54 native.** What is still derived in memory is the registers above; the rest of
-  production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting
-  registers — is the next slice's.
+- **62 compat route modules were left, 54 native.** What is still derived in memory is the registers above; the rest
+  of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting
+  registers — was the next slice's, and the declarations and the configuration have moved since (R5.5, below).
+
+## R5.5 — the price declarations and the production configuration on their own tables
+
+`api/src/modules/production.ts` serves `production/boms`, `production/boms/{id}` and `production/config` from
+**`boms`**, **`bom_inputs`**, **`bom_costs`** and the one row of **`production_config`**. A declaration is the Mushak
+4.3 input–output coefficient of ONE unit of a finished good: what it takes, the wastage each input allows, and the
+cost heads that turn the material value into the declared price — and the version in force for an item on a date is
+what a production batch prices its lines and consumes its inputs from. The configuration says whether a batch follows
+a work order and whether it records the standard or the actual consumption, so `buildBatch` reads both on every create
+and every edit. The contract is unchanged and the rules are the mock's own (`src/app/api/v1/_r3.ts` and `_docs.ts`,
+re-exported by `api/src/compat/entry.ts`): `buildBom` (an active finished good; inputs that are active, not finished
+goods and not repeated; cost heads not repeated; from version 2 on an amendment reason and an effective date after the
+version it replaces; and `calcBom`'s pricing), `approveBom` (which supersedes the version in force), `activeBom`,
+`bomRow`, `bomVersions`, the five lifecycle rules, `bomIdentity`, `bomDiff`, the register's spec, its CSV columns,
+name and facet labels, and the configuration's `buildConfig` and `configDiff` cannot drift. Both sides were held
+against the same contract suite again — 676 checks with the three routes served natively, 676 with the mock handlers
+serving them — and all 65 captured answers were identical: every filter, sort, facet, date range and both CSV exports,
+every declaration with the versions beside it, the 404s, the configuration, and the batch, lot, work-order and bond
+registers that read them.
+
+- **A declaration is three tables:** the row (the item as printed, the version, the two dates, the five values, the
+  process, `superseded_at`, its own history), one row per input in `bom_inputs` (the net quantity, the wastage
+  percent, the wastage and gross quantity, the price and the two values) and one per cost head in `bom_costs` — so the
+  material value, the wastage and the value added of the version in force are `SUM`s over its own child rows, which is
+  what `api_native.py` now checks for every declaration in the database.
+- **The number is unique among the *live* rows only.** A declaration's number carries its version (`BOM-{sku}-v{n}`)
+  and the version is worked out from the item's other declarations, so a draft that is deleted frees its version and
+  filing that item again takes the same number. Its *id* is not free again: the counter the mock kept in `db.seq`
+  moved on when the draft was removed, so the row is stamped with `deleted_at` instead of being removed and
+  `boms_live_no_key` is a partial unique index. A cancelled version stays on record and keeps its number retired.
+- **Approving writes more than one row:** the version approved becomes the one in force and every other approved
+  version of the item is superseded, in the same transaction — and a transaction that rolls back puts those stamps
+  back the way the in-memory copies had them.
+- **The configuration is one row** (`id = 1`, with the check that keeps it single), and an update stamps who changed
+  it, which the audit trail records as a `productionConfig` event carrying both fields' changes — as the mock did.
+- **`license_date` is text, not a date:** a draft may be filed without one and the demo data set holds that as an
+  empty string, which is the same reason a sale's export bill date is text. The rules still require a `YYYY-MM-DD`
+  shape when there is one.
+- **The in-memory copies stay**, because the readers that are still compat use them: `buildBatch` prices a line and
+  works out its consumption from the version in force and reads the procedure and the consumption, and the bond and
+  settlement registers quote a declaration. Every native write goes through to the mirror, and a compat handler that
+  writes through the mock's array — a restored backup, the demo runtime — is written back to the rows. So a
+  declaration filed through this module is what the very next batch is priced from, with no restart in between, which
+  is what `api_native.py` proves.
+- **Upgrade:** the first boot on a database written before this slice moves the declarations out of `compat_state`
+  into the three tables and the configuration into its row, then rewrites the snapshot without them; restoring a
+  pre-R5.5 backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI. A declaration
+  deleted before the upgrade left no row to adopt — the mock removed it for good — so what survives the round trip is
+  the id counter, not the row, and its version is free again exactly as it was.
+- **59 compat route modules are left, 57 native.** What is left of production is the work orders and the two
+  registers derived from the batches and the sales — the finished-goods lots and the subcontracting register — which
+  is the next slice's.
 
 ## Tables
 
@@ -426,7 +480,11 @@ ledger company-wide and per branch, and the 404s).
 | `batch_lines` | **R5.4:** a batch's finished goods — item, issued / received / rejected quantity (a check keeps received + rejected within issued), the BOM and its version, the unit cost and the value, the work order the line draws on; primary key (batch, position) |
 | `batch_consumption` | **R5.4:** the inputs a batch consumes — item, quantity, price and value, merged per input as the BOM (or the actual consumption) states; primary key (batch, position) |
 | `opening_entries` | **R5.4:** opening stock — one SKU, one branch, the quantity brought forward, its purchase price and value, the VAT paid on it and its input-tax class; the R6.4 bond block of a go-live entry (BoE, quantity still warehoused, duty suspended) as columns; `deleted_at` keeps a deleted draft's id and number retired |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4) |
+| `boms` | **R5.5:** price declarations / bills of materials (Mushak 4.3) — the item as printed, the version, the submitted and effective dates, the material value, the wastage, the value added, the declared price and the unit cost a receipt is valued at (`numeric`), the process, `superseded_at`, own history (JSONB); `deleted_at` keeps a deleted draft's id retired while its version may be filed again, so the number's unique index covers the live rows only |
+| `bom_inputs` | **R5.5:** a declaration's inputs — item, net quantity, wastage percent, the wastage and gross quantity (`numeric(18,4)`, the coefficients are rounded to four decimals), the price and the two values; one row per input (unique per declaration and item); primary key (declaration, position) |
+| `bom_costs` | **R5.5:** a declaration's cost heads — labour, power, overhead, packing, admin, finance, profit, other — and what each adds; a head appears at most once and only with an amount (a zero head is dropped before pricing); primary key (declaration, position) |
+| `production_config` (single row) | **R5.5:** how the factory produces — `procedure` (directStock / workOrder) and `consumption` (standard / actual), with who changed it last; `buildBatch` reads both |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations or production configuration since R5.5) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -469,7 +527,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 406 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 470 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -589,6 +647,37 @@ ledger and not the company-wide one; an invoice line changed the same way moves 
 the invoice is at the factory; and putting both back restores every number — which is what "served from the database"
 has to mean.
 
+And since R5.5 it checks the price declarations and the production configuration the same way. The register answers a
+page of declarations sorted by SKU with their status and the item's sale price beside the declared one, facets that
+count the same rows twice over, `?status=`, `?item=`, `?q=` (which finds a declaration by the name of one of its
+inputs), `?sort=`, `?from=`/`?to=` on the effective date, paging and the Mushak 4.3 CSV; one declaration comes with
+every version of its item beside it, newest first, and is found by its number as well as its id. Every declaration in
+the database is checked against its own child rows in SQL — the material value is the sum of its inputs' values, the
+wastage the sum of theirs, the value added the sum of the cost heads, the price the first two together and the unit
+cost the price less the profit head — and a unit cost or an input quantity changed in SQL alone, with the in-memory
+copies left stale on purpose, moves the answer at once. Filing a declaration makes it the item's next version, priced
+by the mock's own `calcBom`; an unknown item, a finished good as an input, a repeated input or cost head, a missing
+amendment reason, an effective date that is not after the version in force, a license date that is not a date and a
+declaration that prices at zero are 422s from those same rules, a second draft for one item is a 409, and an operator
+may read the register but not file one. Editing a draft prices it again and records the price that moved and the
+inputs' new signature; approving files it and supersedes the version that was in force — on the row as well as in the
+register — and a filed version is neither approved again nor cancelled nor edited nor deleted. The decisive check is
+the one that crosses families: a batch issued on the new version's effective date is priced from the declaration filed
+through this module and consumes its inputs, while a batch issued today is still priced from the version in force —
+so the mirror `buildBatch` reads is the row this module wrote, with no restart in between. A cancelled draft keeps its
+number retired and a deleted one frees it, so filing that item again takes the same number but never the same id, and
+the database refuses a second *live* declaration with one number while allowing a stamped row to carry it. The
+configuration is the single row: an administrator's PUT replaces it and stamps who changed it, the audit trail records
+both fields, an operator and an approver get a 403, and with the work-order procedure a batch has to name one at once —
+`buildBatch` read the row. Plus the snapshot carrying neither collection, the demo declarations seeded into their
+tables with their inputs and cost heads. And it **drills the same upgrade**: the live database is rewritten back into
+its pre-R5.5 shape (the declarations with their inputs and cost heads and the configuration inside `compat_state`, the
+four tables empty), the API restarts, and the same declarations, the same configuration and the same seven registers
+row for row (the declarations, one with its versions, the CSV, the configuration, the batches, the lots and the bond
+register) are required back, with a declaration deleted before the upgrade staying deleted while its version is free
+again and its id stays retired, a batch still priced from the adopted declaration, a second boot adopting nothing
+again, and writes landing in the tables.
+
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
 1. Starts a PostgreSQL 16 service, runs the full suite plus `api_native.py`, and checks that the migrations and the compat table are current.
@@ -665,8 +754,10 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | R5.2 | **done** — customers and vendors (`parties`), items and master items (`items`, `master_items`). The stock ledger and branches' stock are *derived* from documents (there is no stored movement table), so they become relational with the documents in R5.3 |
 | R5.3 | **done** — transfers and damage (`stock_documents` + `stock_document_lines`), sales (6.3, `sales` + `sale_lines` + `sale_realisations`), purchases incl. imports and services (`purchases` + `purchase_lines`), credit and debit notes (6.7/6.8, `notes` + `note_lines`) |
 | R5.4 | **done** — the derived stock: the opening entries (`opening_entries`) and the production batches (6.4, `batches` + `batch_lines` + `batch_consumption`) are rows, and since every family the branch split and an item's ledger add up is relational now, `stock` and `items/{id}/ledger` are served from those rows by the mock's own derivation. Next: the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting registers |
-| R5.5 | accounting (accounts, receipts/payments, allocations), VAT: 9.1 returns, period lock, treasury/TR-6, VDS/6.6, adjustments — then `compat_state` and the lock are removed and the API can scale out |
+| R5.5 | the rest of production — **in progress**: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`) and the production configuration (`production_config`) are rows. Next: the work orders (`work_orders` + `work_order_lines`), then the two registers derived from the batches and the sales — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) |
+| R5.6 | accounting (accounts, receipts/payments, allocations), VAT: 9.1 returns, period lock, treasury/TR-6, VDS/6.6, adjustments — then `compat_state` and the lock are removed and the API can scale out |
 
 Money columns will be `numeric(18,2)` (as `parties.credit_limit`, the `items` prices and `tariff_lines` already are),
-quantities `numeric(18,3)` (the units allow up to three decimals), with row-level
+quantities `numeric(18,3)` (the units allow up to three decimals) and a declaration's coefficients `numeric(18,4)`
+(the Mushak 4.3 wastage is rounded to four), with row-level
 period-lock checks in the database, plus server-side PDF (R4 used print CSS) and the NBR tariff import.

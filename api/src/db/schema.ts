@@ -2,7 +2,7 @@
  * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables, R5.2 the
  * master data (customers and vendors as `parties`, SKUs as `items`, HS-code products as `master_items`) and R5.3
  * the documents (transfers and damage entries as `stock_documents`, sales invoices as `sales`) with their lines;
- * the remaining documents still live in `compat_state` until R5.3–R5.5 give each module its own tables.
+ * the remaining documents still live in `compat_state` until R5.3–R5.6 give each module its own tables.
  * Migrations are generated with `npm run db:generate` into ./drizzle and applied at boot.
  */
 import { sql } from "drizzle-orm"
@@ -975,8 +975,12 @@ export const boms = pgTable("boms", {
   hsCode: text("hs_code").notNull(),
   uom: text("uom").notNull(),
   version: integer("version").notNull(),
-  /** date the declaration is submitted to / accepted by the VAT office */
-  licenseDate: date("license_date", { mode: "string" }),
+  /**
+   * Date the declaration is submitted to / accepted by the VAT office. Text, not a date: a draft may be filed
+   * without one, and the demo data set holds that as an empty string — the same reason a sale's export bill date is
+   * text. The rules still require a `YYYY-MM-DD` shape when there is one.
+   */
+  licenseDate: text("license_date"),
   /** date the coefficients take effect */
   effectiveDate: date("effective_date", { mode: "string" }).notNull(),
   /** why this version replaced the previous one (version 2 and up) */
