@@ -36,6 +36,76 @@
       "when": 1790861155383,
       "tag": "0004_r62_officer_backups",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790972431198,
+      "tag": "0005_r52_parties",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790975353267,
+      "tag": "0006_r52_items",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791009616504,
+      "tag": "0007_r53_stock_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791016371272,
+      "tag": "0008_r53_sales",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791028481907,
+      "tag": "0009_r53_purchases",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791054573425,
+      "tag": "0010_r53_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791083409498,
+      "tag": "0011_r54_opening_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791098862257,
+      "tag": "0012_r54_batches",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791317629165,
+      "tag": "0013_r55_production_boms",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791320174228,
+      "tag": "0014_r55_work_orders",
+      "breakpoints": true
     }
   ]
 }

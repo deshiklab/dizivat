@@ -5,21 +5,48 @@ import { ACCESS_LOGGER, AuthGuard, SessionService } from "./common/auth"
 import { db } from "./db/client"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
+import { BatchesController, BatchesService } from "./modules/batches"
+import { DerivedService, ItemLedgerController, LotsController, StockController, SubcontractController } from "./modules/derived"
 import { CompatController, CompatService } from "./modules/compat"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
+import { CustomersController, PartiesService, VendorsController } from "./modules/parties"
+import { ItemsController, ItemsService, MasterItemsController } from "./modules/items"
+import { DamageController, StockService, TransfersController } from "./modules/stock"
+import { CreditNotesController, DebitNotesController, NotesService } from "./modules/notes"
+import { OpeningsController, OpeningsService } from "./modules/openings"
+import { BomsController, BomsService, ProductionConfigController, ProductionConfigService } from "./modules/production"
+import { PurchasesController, PurchasesService } from "./modules/purchases"
+import { SalesController, SalesService } from "./modules/sales"
+import { WorkOrdersController, WorkOrdersService } from "./modules/workorders"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
 import { SEED_VERSION } from "./boot"
 
 export const VERSION = "0.15.0"
-const NATIVE_CONTROLLERS = [AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController]
+const NATIVE_CONTROLLERS = [
+  AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController,
+  CustomersController, VendorsController, ItemsController, MasterItemsController, TransfersController, DamageController,
+  PurchasesController,
+  CreditNotesController,
+  DebitNotesController,
+  OpeningsController,
+  BatchesController,
+  BomsController, ProductionConfigController, WorkOrdersController,
+  StockController, ItemLedgerController, LotsController, SubcontractController,
+  SalesController,
+]
 
 @Global()
 @Module({
   providers: [
-    SessionService, AuditService, UsersService, UnitsService, CompatService, BackupsService,
-    { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
+    PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
+    WorkOrdersService, DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [SessionService, AuditService, UsersService, UnitsService, CompatService, BackupsService],
+  exports: [
+    SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
+    PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
+    WorkOrdersService, DerivedService, CompatService, BackupsService,
+  ],
 })
 class CoreModule {}
 

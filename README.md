@@ -33,7 +33,7 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     - Lists are filtered, faceted and sorted in SQL.
   - **Compat layer:** the other 70 route modules run unchanged inside Nest, with their state saved to PostgreSQL after every write.
   - **Tests:** the full existing suite passes against it (520 contract checks, every E2E suite, axe, 32/32 visual baselines). `scripts/api_native.py` adds 39 backend checks, including persistence across API restarts.
-  - **Deployment:** one Docker image runs both processes, via `render.yaml` for Render with Neon Postgres. The roadmap R5.2–R5.5 moves each business module to relational tables.
+  - **Deployment:** one Docker image runs both processes, via `render.yaml` for Render with Neon Postgres. The roadmap R5.2–R5.6 moves each business module to relational tables.
 - **PDF download of the statutory forms (v0.9.1):** every printable form has a **PDF** button next to **Print**: Mushak 6.3 invoices, 6.7 credit and 6.8 debit notes, 6.6 VDS certificates, TR-6 challans, money receipts and payment vouchers, 6.4 batches, 4.3 declarations (sheet and register), the 6.10 report, the 9.1 return, party statements, purchases, and the 6.1/6.2 books (landscape). It replaces the old *“Server-side PDF (Gotenberg) is wired in R3”* notice.
   - **How it works:** the PDF is made **in the browser** from the same A4 template that is printed (`src/lib/pdf/export.ts`, lazy-loaded on click), so Bangla shaping and fonts are identical to Print. It needs no server memory and also works on the static demo.
   - **Layout:** the form is laid out in an off-screen A4-wide frame (paper-width breakpoints, always the light print look, even in dark mode), paginated between table rows, rasterised at about 240 dpi and written as a multi-page A4 PDF named after the form and document (e.g. `Mushak-6.3_S-09260012.pdf`).
@@ -159,6 +159,420 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     [docs/RMG.md](docs/RMG.md) §8.
   - **Tests:** `e2e_r66.py` (8 sections); contract 676 checks / 226 endpoints; `api_native.py` 95 checks;
     axe 0 violations / 288 runs (143 pages).
+
+- **R5.2 — Backend: the master data on real tables (branch `r5-nestjs`):** customers, vendors, items and master items
+  leave the compat layer and get their own PostgreSQL tables. See
+  [docs/BACKEND.md › R5.2](docs/BACKEND.md#r52--customers-and-vendors-on-their-own-table) (parties) and
+  [› items](docs/BACKEND.md#r52--items-and-master-items-on-their-own-table).
+  - **`parties`:** customers and vendors in one table (`kind` tells them apart), `ord` keeping each kind's insertion
+    order so lists tie-break exactly as they did in memory. The duplicate rules are enforced by the database too
+    (partial unique indexes per kind on the name and on the BIN with its `NID ` prefix ignored), and a race that slips
+    past the application check is still a 422.
+  - **Deleting is a `deleted_at` stamp**, so master data never leaves relational storage: the 10-second undo trash is
+    rebuilt from the table at boot, a deleted customer is still a row, and it is still in every backup.
+  - **`items` and `master_items`:** SKUs and the HS-code products they belong to, with the six movement counters an
+    item's `remain` is derived from as columns — so stock travels with its row. Unique by the database as well
+    (`lower(sku)`, `lower(name)`), a master item's rename carries its SKUs along in the same transaction (they quote
+    its name), and its tax profile is stored flat, like the tariff's own columns, so the two can be compared in SQL.
+  - **Documents still move those counters** (a sale approved, an opening entry, a damage note), so the write-back
+    saves what a compat handler changed and reads the stored row back into memory — a column type that rounds cannot
+    leave the two copies apart. The same path adopts a SKU the R6.2 bulk import creates.
+  - **The rules are shared, not copied:** the native handlers call the mock handlers' own functions (`partyRow`,
+    `partyErrors`, `normaliseParty`, `newPartyId`, `buildItem`, `masterErrors`, `masterRow` …) through the compat
+    bundle — the item and master-item rules were gathered into `src/app/api/v1/_items.ts` for exactly that, and the
+    mock's answers are byte-identical to before (58 request cases compared against the pre-refactor handlers). So the
+    PostgreSQL API, the Next.js mock and the GitHub Pages demo cannot drift: same responses, same 422/404/409 codes,
+    same audit events — and the party register's aggregates still come from the documents, which stay in
+    `compat_state` until R5.3.
+  - **Write-through both ways:** the in-memory copies the 88 unported route modules read are kept in step, and what a
+    compat handler writes — a party or SKU the R6.2 bulk import creates, a counter a document moves — is adopted into
+    the tables after its request.
+  - **Upgrading keeps the data:** the first boot after the migration moves the customers, vendors, items and master
+    items out of `compat_state` into their tables and rewrites the snapshot without them — no re-seed
+    (`SEED_VERSION` unchanged), so a customer installation and a restored pre-R5.2 backup both carry their records
+    over.
+  - **Tests:** `api_native.py` 147 checks (+52: rows in `parties`, `items` and `master_items`, none of those
+    collections left in the snapshot, the database refusing a duplicate party name and SKU, delete → `deleted_at` →
+    undo → still deleted after a restart, an undo whose name was taken again answering 422 instead of a 500 from the
+    unique index, a rename that reaches the SKU in the table, a compat document's counter and a compat import landing
+    in `items`, stock surviving a restart, a stale instance refusing native party and SKU writes during a deploy
+    overlap — and an **upgrade drill**: the database is rewritten into its pre-R5.2 shape, the API restarted, and the
+    same rows, the same four registers and a snapshot without the collections are required back). Contract unchanged:
+    676 checks / 226 endpoints.
+  - **Left for R5.3:** the stock ledger and branches' stock, which are *derived* from documents, become relational
+    with the documents themselves — R5.3 gives the first documents tables, and the derivation follows once every
+    movement family has one.
+
+- **R5.3 — Backend: the first documents on real tables (branch `r5-nestjs`):** stock transfers and damage entries
+  leave the compat layer for `stock_documents` + `stock_document_lines`, the sales invoices (Mushak 6.3) for
+  `sales` + `sale_lines` + `sale_realisations`, the purchases (local, service and import) for `purchases` +
+  `purchase_lines`, and the credit and debit notes (Mushak 6.7/6.8) for `notes` + `note_lines`. See
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--stock-documents-on-their-own-tables) (stock documents),
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--sales-invoices-on-their-own-tables) (sales invoices) and
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--purchases-on-their-own-tables) (purchases) and
+  [docs/BACKEND.md › R5.3](docs/BACKEND.md#r53--credit-and-debit-notes-on-their-own-tables) (the notes).
+  - **One table for both kinds** (`kind` tells a transfer from a damage entry), because that is how the registers and
+    the branch-stock derivation read them. The branch a document consumes is `from_branch_id` for either kind — a
+    transfer's origin, a damage entry's own branch — and only a transfer has a destination. `ord` keeps the insertion
+    order the lists tie-break on, exactly as the in-memory arrays did.
+  - **Lines are rows, not JSON:** each carries its item, quantity and the unit cost at posting (`numeric(18,3)` /
+    `numeric(18,2)`), so what a movement carries can be summed in SQL instead of walked in memory. Editing a draft
+    replaces its lines in the same transaction, deleting a draft deletes them with it, and the document number
+    (`TR-MMYY####` / `DM-MMYY####`) is unique in the database as well — a race that slips past the application check
+    is a 409, not a 500.
+  - **An approval writes what it moves:** a damage entry's `items.damage` counter goes with the document, in its
+    transaction, and is taken back on cancellation; if the transaction fails, the in-memory counters are restored, so
+    the two copies cannot drift apart.
+  - **The rules are shared, not copied:** the native handlers call the mock handlers' own functions (`buildStock`,
+    `nextStockNo`, `approveDoc`, `cancelDoc`, `stockDocDiff`, `stockSpec`, `stockCsvColumns` …) through the compat
+    bundle — the stock rules were gathered into `src/app/api/v1/_stock.ts` for exactly that, and now return data
+    (field errors, a document's fields, a rejection's status and title) rather than a Web `Response`, so each side
+    makes its own response out of the same rules. Both sides were held against the same contract suite: 676 checks
+    with the routes served natively, and 676 again with the mock handlers serving them, so the port is behaviour for
+    behaviour and the Next.js mock and the GitHub Pages demo cannot drift.
+  - **The derived stock still reads every document:** the branch split (`stock`) and an item's ledger
+    (`items/{id}/ledger`) add up sales, purchases, credit and debit notes, opening entries and production batches as
+    well, so they stay derived in memory until those have tables too (R5.3–R5.4). A document written natively reaches
+    them at once — the module keeps the in-memory copies in step, and the write-back adopts whatever a compat handler
+    writes through the mock's arrays.
+  - **Upgrading keeps the data:** the first boot after each migration moves the stock documents out of
+    `compat_state` into their tables, and then the invoices with their lines and proceeds entries into theirs, and
+    rewrites the snapshot without them — no re-seed (`SEED_VERSION` unchanged), so a customer installation and a
+    restored pre-R5.3 backup both carry their documents over.
+  - **An invoice is three tables:** the header carries the money (`numeric(18,2)`), the quantities (`numeric(18,3)`)
+    and its own history (JSONB); `sale_lines` holds the printed lines in order (primary key `(sale, position)`), so an
+    edit replaces rows rather than a JSON array; `sale_realisations` holds the export proceeds recorded against it —
+    bank, PRC number, foreign-currency amount, rate and the BDT value at that rate, plus the R6.6 batch that posted
+    it. The PRC number is upper-cased as the mock did and unique *while it is on an invoice* (the bank batches split
+    one PRC over several invoices, so there is no global unique index), and removing an entry frees it again.
+  - **The shipping documents are columns, not JSON:** an export or deemed-export invoice (Mushak 4.1, zero-rated)
+    keeps its LC, bill of export, customs house, country, currency, foreign-currency value and exchange rate
+    (`numeric(18,6)`) on its own row, so what a bond register or a proceeds report needs is a `WHERE`, not a walk over
+    every invoice. `export_deemed` is the presence marker — NULL means a domestic sale — and two check constraints
+    keep the block coherent.
+  - **A deleted invoice keeps its number:** deleting stamps `deleted_at` and keeps the lines, because the mock handed
+    out the next number by counting the live array *and* the undo buffer. The number is unique in the database as
+    well (`S-MMYY####` for goods and exports, `SS-MMYY####` for services), so a race that slips past the application
+    check is a 409, not a 500; ids stay the mock's (`s<n>`), taken from `saleIdentity` inside the locked transaction.
+    An approval writes what it moves — `items.sold` goes with the invoice, in its transaction, and is taken back on
+    cancellation — and bulk approve answers 200 with `{done, skipped}`, not the 201 a `POST` defaults to, because
+    nothing is created there.
+  - **The rules are shared here too:** the native handlers call the mock's own `parseSale`, `lots`, `lotShortfall`,
+    `creditable`, `customerCredit`, `saleIdentity`, `periodLocked` and the register's facets and CSV columns through
+    the compat bundle, and both sides were held against the same contract suite — 676 checks with the routes served
+    natively, 676 again with the mock handlers serving them (which also proves the write-back: a draft, an approval,
+    an export header, a proceeds entry, a delete and an undo made through the mock's code all reached the tables).
+  - **What is still derived stays derived:** the credit a customer carries, what is returnable on an invoice, the
+    credit and debit notes that quote one, and the branch split and ledger that add up *every* document family read
+    the in-memory copies until the remaining families have tables (R5.3–R5.4). The module keeps those copies in step,
+    and the write-back adopts whatever a compat handler writes — including a delete, which it reads as "this invoice
+    is in the undo buffer now" and stamps exactly as the native delete does.
+  - **A purchase is two tables, and an import is queryable:** the header carries the money, the two totals only a
+    purchase has (`tti`, the total tax incidence, and `rebate`, the input tax credit claimable in Mushak 9.1) and its
+    own history; `purchase_lines` holds the printed lines in order with `rebateable` and `vds` per line. The Bill of
+    Entry an import clears — its number and date, LC, customs house, origin, C&F firm, the bonded flag and the own UD
+    number — is columns of the document's row (`boe_no` is the presence marker), and every import line keeps its duty
+    breakdown as columns: the assessable value, CD, RD, AIT and AT with their rates, plus what a bonded (IM-7) entry
+    left foregone. What the R6.4 bond register and the R6.5 drawback claims report is a `WHERE` and a `SUM` over
+    those columns, not a walk over every document in memory.
+  - **The same discipline as the invoices:** numbers unique in the database as well (`P-MMYY####`, `PS-MMYY####` for
+    services), deleting stamps `deleted_at` and keeps the lines so a deleted draft's number stays retired, ids from
+    `purchaseIdentity` inside the locked transaction, `items.purchased` written with an approval and taken back on
+    cancellation, bulk approve answering 200 with `{done, skipped}`, and a goods purchase that cannot become a
+    service one (409). The rules are the mock's own (`parsePurchase` — the vendor decides between the local, the
+    service and the import schema — `buildPurchaseFields`, `purchaseCategoryRule`, `returnable`, the register's
+    facets and CSV columns) through the compat bundle, and both sides were held against the same contract suite:
+    676 checks natively, 676 again with the mock handlers serving them (which also proved the write-back for an
+    import: a compat-created BoE reached the table with its duty columns and the header's `tti` and `rebate`).
+  - **Both note families are one table:** `kind` tells a credit note (goods a customer returns against a sales
+    invoice — the sold quantity and the output VAT come down) from a debit note (goods returned to a vendor against a
+    purchase — the purchased quantity comes down and the input tax credit is reversed), because the two registers,
+    the two "what is still returnable" answers and the two sides of a VAT return read them the same way. The document
+    a note was raised against is `source_id` and the party is `party_id`; the response names them by kind, as the
+    mock's two shapes do. The two totals only a debit note has (`tti`, `rebate`), a line's `sold_qty` /
+    `purchased_qty` and its debit-only totals are NULL on the other side, and check constraints say so.
+  - **A deleted draft keeps its row:** notes have no undo and the mock removed one from its array for good, but its
+    id counter had moved on and its number lives on in the audit trail — so the row is stamped rather than dropped,
+    which is what stops a later note taking the same id, while the next number still skips the deleted draft's. Ids
+    come from the state's own counter, claimed inside the locked transaction and separately from the identity, so a
+    debit note refused for want of stock consumes no id.
+  - **An approval writes what it moves:** a credit note takes `items.sold` down, a debit note `items.purchased`, each
+    with the note, in its transaction, and reversed on cancellation. Approving a debit note needs the goods still on
+    hand (422 while saving, 409 when approving a draft), and cancelling a credit note needs them still on hand too,
+    because they leave the branch again. The rules are the mock's own (`buildCredit` / `buildDebit` — the source
+    document has to exist and still be approved, the note cannot predate it, the period has to be open, every line
+    has to be returnable and priced pro rata — plus the identities, the approve / cancel / stock / delete rules and
+    both registers' specs and CSV columns) through the compat bundle, and both sides were held against the same
+    contract suite: 676 checks natively, 676 again with the mock handlers serving them (which also proved the
+    write-back: a compat-raised note reached the table with its kind, its source, its party and its lines, its
+    approval moved `items.sold`, and its delete stamped the row while the next note took a higher id).
+  - **Tests:** `api_native.py` 306 checks (+159 over the pre-R5.3 147: a stock draft is a row with its lines and moves no stock, approving it moves
+    the branch split the still-unported endpoints derive in memory, cancelling gives the stock back, a write-off
+    reaches `items.damage` and is taken back, editing a draft replaces the line rows, deleting one removes them and
+    retires its number, a create that cannot be approved leaves no row, the database refusing a duplicate document
+    number, a stale instance refusing a native document write during a deploy overlap — and a **second upgrade drill**: the database is rewritten into its pre-R5.3 shape, the API restarted, and
+    the same documents, lines, registers and derived stock are required back; then the sales invoices the same way — a
+    draft is a row with its line and moves no stock, approving moves the branch split, `items.sold` and the ledger
+    that still adds up every document, cancelling gives both back and stores the reason on the row, the history
+    travels with the row, editing replaces the line rows in the order they are printed, deleting stamps the row and
+    keeps its lines so the next invoice takes a new number and the undo clears the stamp, an export invoice keeps its
+    LC, country and FC value as columns, its proceeds are rows with the PRC upper-cased and the BDT at the rate
+    entered (a duplicate PRC or more than the outstanding FC value is a 422, removing one frees the number), a service
+    sale is numbered in its own series and moves no stock, bulk approve reports what it skipped, the snapshot carries
+    no sales collection, the database refuses a duplicate invoice number — and a **third upgrade drill**: the database
+    is rewritten into its pre-R5.3 shape (invoices, lines and proceeds entries inside `compat_state`, the deleted
+    drafts back in its undo buffer, the three tables empty), the API restarted, and the same rows, registers, export
+    headers, proceeds entries and derived stock are required back, with an invoice deleted before the upgrade still
+    undoable afterwards; then the purchases the same way — a draft is a row with its line and moves no stock,
+    approving moves the branch split, `items.purchased` and the ledger, cancelling takes the stock back out and
+    stores the reason, editing replaces the line rows in order, deleting stamps the row and keeps its lines so the
+    next document takes a new number and the undo clears the stamp, a goods purchase refuses to become a service one,
+    an import keeps its Bill of Entry and every line's duty as columns (with the bonded demo entries keeping their
+    duty foregone), a service purchase is numbered in its own series and moves no stock, bulk approve reports what it
+    skipped, what a debit note may still return is served from those rows, the snapshot carries no purchases
+    collection, the database refuses a duplicate document number — and a **fourth upgrade drill**: the database is
+    rewritten into its pre-R5.3 shape (documents, lines, Bills of Entry and duty breakdowns inside `compat_state`,
+    the deleted drafts back in its undo buffer, the two tables empty), the API restarted, and the same rows, three
+    registers row for row, BoEs, duty columns and derived stock are required back, with a document deleted before
+    the upgrade still undoable afterwards; then the notes the same way — a credit note is raised against an approved
+    invoice and priced pro rata, a draft moves no stock, approving brings the goods back and takes `items.sold` down
+    with the branch split, the ledger and the invoice's returnable quantity following, cancelling sends the goods out
+    again and stores the reason, editing replaces the line rows, a note cannot move to another invoice, returning more
+    than the document sold or bought is a 422, a note against a draft invoice is a 422, deleting stamps the row and
+    keeps its lines so the next note takes a new id and a new number; and on the debit side `tti` and `rebate` are
+    columns of its row, a return the branch no longer holds is a 409, approving takes `items.purchased` down, a
+    service purchase has no goods to return, the snapshot carries neither collection, the database refuses a duplicate
+    note number — and a **fifth upgrade drill**: both collections with their lines back inside `compat_state`, the two
+    tables empty, the API restarted, and the same notes, lines and registers row for row required back, with a note
+    deleted before the upgrade staying deleted while its id and number stay retired). Contract unchanged: 676 checks /
+    226 endpoints.
+  - **Next:** the derived stock itself — the branch split and the item ledger — which becomes relational once the
+    two collections they still read from memory (the opening entries and the production batches) are rows too (R5.4).
+
+- **R5.4 — Backend: the derived stock starts with the opening entries (branch `r5-nestjs`):** the opening stock
+  entries leave the compat layer for `opening_entries` — the first of the two collections the branch split (`stock`)
+  and an item's ledger (`items/{id}/ledger`) still read from memory. See
+  [docs/BACKEND.md › R5.4](docs/BACKEND.md#r54--opening-stock-entries-on-their-own-table).
+  - **One row per entry, one item each** — there are no lines to hold. The quantity brought forward, its purchase
+    price, the value and the VAT paid on the stock are `numeric` columns and the input-tax class is a column too, so
+    the opening value a Mushak 6.1 return quotes is a `SUM`, not a walk over every entry in memory.
+  - **The R6.4 bond block is columns as well:** a go-live entry can say how much of its stock was still warehoused
+    under the customs bond, under which Bill of Entry, and what duty that suspended. `bond_boe_no` is the block's
+    presence marker and a check constraint keeps it all there or not at all — the bond register reads those columns
+    unchanged.
+  - **The same discipline as the notes:** the number (`OS-MMYY####`) is unique in the database and comes from the live
+    entries *and* the audit trail, so a deleted draft's is not reused; the draft itself is stamped rather than
+    dropped, because entries have no undo but the mock's id counter had moved on, and the row is what keeps a later
+    entry from taking its id (on restore the counter is lifted to the highest id the table has seen, so it can never
+    go back). The id is claimed inside the locked transaction and separately from the identity, and `items.opening`
+    is written with an approval and taken back on cancellation — which first checks the stock is still on hand at its
+    branch, because the derived split loses it.
+  - **The rules are the mock's own:** `buildOpening` (the SKU has to exist and be active, the branch a stock-holding
+    one, the quantity rounded to the unit's own decimals), the identity, the approve / cancel / draft / delete rules,
+    the register's spec, its `?item=` filter and its CSV columns, all through the compat bundle. Both sides were held
+    against the same contract suite: 676 checks natively, 676 again with the mock handlers serving them — which also
+    proved the write-back, since a compat-created entry reached the table, its approval moved `items.opening`
+    900 → 904 and the derived branch split 2,917.55 → 2,921.55 with it, and its delete stamped the row while the next
+    entry took a higher id and a new number.
+  - **Tests:** `api_native.py` 337 checks (+31: a draft is a row with its value and the VAT paid on it and moves no
+    stock, approving brings the quantity into the branch split the still-derived endpoints read and writes
+    `items.opening` with it, the ledger quotes the entry as its opening row, cancelling takes the quantity back out
+    and stores the reason, a cancelled entry is neither cancelled twice nor approved again, editing a draft replaces
+    its fields on the row, an unknown SKU or branch is a 422, deleting stamps the row so the next entry takes a new id
+    and number, the `?item=` filter is served from the table, the snapshot carries no openings collection, the demo
+    entries were seeded with their bond blocks and the bond register still answers, the database refuses a duplicate
+    entry number — and the **R5.4 upgrade drill**: the database is rewritten into its pre-R5.4 shape, the API
+    restarted, and the same entries, the same three registers row for row (the entries, the branch split and the
+    items with them) and the same derived stock are required back, with an entry deleted before the upgrade staying
+    deleted while its id and number stay retired). Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.4:** the production batches — the last collection the derivation reads — and then the branch split
+    and the ledger themselves, served from the database.
+
+- **R5.4 — Backend: the production batches, and with them every document the derived stock reads (branch
+  `r5-nestjs`):** the batches leave the compat layer for `batches` + `batch_lines` + `batch_consumption` — the last
+  collection `stockByBranch()` and an item's ledger walked in memory, so from here every family they add up is in the
+  database. See [docs/BACKEND.md › R5.4](docs/BACKEND.md#r54--production-batches-on-their-own-tables).
+  - **A batch is three tables:** the row (mode, dates, totals, process, branch, own history), one row per finished
+    good (issued / received / rejected quantity, the BOM version and its unit cost, the work order it draws on) and
+    one per consumed input — so what a factory produced, rejected and consumed is a `SUM`, not a walk. A check
+    constraint keeps received + rejected within issued on every line.
+  - **The Mushak 6.4 challan is columns too:** a contractual batch names its contractor (as printed), where the inputs
+    are delivered, what job the contractor performs (R6.2) and when the goods came back — which is what the
+    subcontracting register reads, still through the in-memory copy the module keeps in step.
+  - **The same discipline as the opening entries:** the number (`PB-MMYY####`) is unique in the database and comes from
+    the live batches *and* the audit trail; a deleted draft is stamped rather than dropped, its lines and consumption
+    with it, because batches have no undo but the mock's id counter had moved on; the id is claimed inside the locked
+    transaction; and an approval writes both counters it moves — `items.prod_issue` for the inputs and
+    `items.prod_receive` for the goods — in the same transaction, taking them back on a cancellation that first checks
+    the goods are still on hand and no invoice draws on the batch's lots.
+  - **The rules are the mock's own:** `buildBatch` (an active finished good with an approved BOM, an opening batch at
+    its own unit cost, the BOM's consumption or the actual one the configuration asks for, a work order that is
+    approved and still has the quantity left), the identity, the approve / stock / cancel / draft / delete rules, the
+    receipt rules, the register's spec, its `?workOrder=` filter and its CSV columns, all through the compat bundle.
+    Both sides were held against the same contract suite: 676 checks natively, 676 again with the mock handlers serving
+    them — which also proved the write-back, since a compat-created batch reached the three tables, its approval moved
+    `items.prod_issue` 33,294 → 33,296.04 and `items.prod_receive` 65,061 → 65,071 in the rows, a compat receipt set
+    `received_at` and moved the counter again, and a compat delete stamped the row.
+  - **Tests:** `api_native.py` 386 checks (+49: a draft is a row with its finished goods and the inputs its BOM consumes
+    and moves no stock, approving receives the goods and consumes the inputs with both ledgers quoting the batch and
+    the goods becoming a lot, the register's facets, totals and CSV, a batch that issues more than its work order has
+    left is a 422 and the work order's progress follows an approval and a cancellation, cancelling puts the goods and
+    the inputs back, a cancelled batch is neither cancelled twice nor approved, edited or deleted, editing a draft
+    replaces its lines on the row, the batch type cannot change, deleting stamps the row so the next batch takes a new
+    id and number, a contractual challan sends the inputs out, shows in the `receipt` facet and the subcontracting
+    register, and comes back on a receipt of its own — once per challan — an opening batch is created and approved in
+    one step with no consumption, the snapshot carries no batches collection, the demo batches were seeded with their
+    contractors and consumption, the database refuses a duplicate batch number — and the **R5.4 upgrade drill**: the
+    database is rewritten into its pre-R5.4 shape, the API restarted, and the same batches and the same six registers
+    row for row (the batches, the lots, the work orders' progress, the subcontracting register, the derived stock and
+    one SKU's ledger) are required back, with a batch deleted before the upgrade staying deleted while its id and
+    number stay retired).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.4:** serve the two derived endpoints themselves — `stock` and `items/{id}/ledger` — from the tables
+    (below).
+
+- **R5.4 — Backend: the derived stock itself, served from the tables (branch `r5-nestjs`):** `stock` (every SKU with
+  its quantity at each stock-holding branch) and `items/{id}/ledger` (one SKU's movement register) leave the compat
+  layer — **62 route modules left, 54 native**. Neither stores anything of its own: each adds up *every* movement
+  document, and every family has a table now, so both read the documents back from the ten tables and hand them to the
+  mock's own derivation. See
+  [docs/BACKEND.md › R5.4](docs/BACKEND.md#r54--the-derived-stock-served-from-the-tables).
+  - **The derivation takes its documents as data:** `branchSplit(src)`, `ledgerRows(item, src)` and `itemLedger(item,
+    branch, src)` are the mock's own functions over a `MovementSource` — the nine collections they add up. The Next.js
+    handlers pass their in-memory copies, the API passes what it read from the tables, and the third caller
+    (`buildBook`, the Mushak 6.1 and 6.2 books) is unchanged. Everything the two responses are made of moved into
+    `src/app/api/v1/_derived.ts` — the register's spec and rows, the valuation at cost and at sale price, the value
+    each branch holds, the CSV's column per branch, and the ledger's assembly: which rows a `?branch=` shows, the
+    running balance, the totals and the closing quantity — so the two route files that used to hold them are a dozen
+    lines each.
+  - **No migration, and nothing to adopt:** the endpoints have no tables of their own, so the slice adds no schema, no
+    snapshot change and no upgrade path of its own — what they read is what R5.2–R5.4 already put there. The
+    in-memory copies stay, because the readers that are still compat use them: the VAT returns, the Mushak books, the
+    finished-goods lots, the work orders' progress, the subcontracting register, and the stock checks around approving
+    a document.
+  - **Proved both ways, byte for byte:** 676 contract checks with the two routes served natively, 676 again with the
+    mock handlers serving them, and **83 captured answers compared across the two configurations** — every filter and
+    sort, both CSV exports, every SKU's ledger company-wide and per branch, the 404s — with **0 differences**.
+  - **Tests:** `api_native.py` 406 checks (+20: `/stock` answers a page of every SKU with the branches and the value
+    each holds, valued at cost and at sale price, with facets that count the same rows and `?stock=`, `?branch=`,
+    `?q=`, paging and a CSV column per branch; every quantity away from the factory is that branch's own approved
+    documents summed in SQL over the ten families, the factory holds whatever is not explicitly elsewhere, and
+    `remain` is the counters on the SKU's own row; a ledger is sorted by date and type, quotes the document each row
+    came from, keeps the pre-R3 production as a monthly summary and closes on the quantity its SKU's row says is left
+    — for *every* SKU — while `?branch=` closes on that branch's quantity with the transfers shown; an unknown SKU and
+    a branch that cannot hold stock are 404s; a damage entry approved at the other branch is in both answers at once
+    and cancelling takes both back; and **a line changed in SQL alone, with the in-memory copies left stale on
+    purpose, moves the answer at once** — a transfer line the branch split and that branch's ledger but not the
+    company-wide one, an invoice line the ledger but not the split, and putting both back restores every number).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.5:** the rest of production — the price declarations and the production configuration (below), then
+    the work orders and the lots and subcontracting registers.
+
+- **R5.5 — Backend: the price declarations and the production configuration (branch `r5-nestjs`):** the Mushak 4.3
+  bills of materials — `production/boms` and `production/boms/{id}` — and `production/config` leave the compat layer
+  and move into **`boms`** + **`bom_inputs`** + **`bom_costs`** and the one row of **`production_config`** — **59 route
+  modules left, 57 native**. A declaration is the input–output coefficient of ONE unit of a finished good, and the
+  version in force for an item on a date is what a production batch prices its lines and consumes its inputs from; the
+  configuration says whether a batch follows a work order and whether it records the standard or the actual
+  consumption. See
+  [docs/BACKEND.md › R5.5](docs/BACKEND.md#r55--the-price-declarations-and-the-production-configuration-on-their-own-tables).
+  - **The rules are the mock's own, as data:** `buildBom` (an active finished good, inputs that are active and not
+    finished goods and not repeated, cost heads not repeated, an amendment reason and a later effective date from
+    version 2 on, and `calcBom`'s pricing), `approveBom`, `activeBom`, `bomRow`, `bomVersions`, the five lifecycle
+    rules, `bomIdentity`, `bomDiff`, the register's spec, CSV columns and facet labels, and the configuration's
+    `buildConfig` / `configDiff` all moved into `src/app/api/v1/_r3.ts` as functions that take the data they read, so
+    the Next.js handlers and the API's native module answer from one implementation.
+  - **A declaration is three tables,** so the material value, the wastage and the value added of the version in force
+    are `SUM`s over its own child rows. Its number carries its version (`BOM-{sku}-v{n}`) and the version comes from
+    the item's other declarations, so a deleted draft frees its number while its id stays retired — the row is stamped
+    with `deleted_at` and the number's unique index covers the *live* rows only. Approving supersedes the version in
+    force in the same transaction, and `license_date` is text because a draft may be filed without one.
+  - **The in-memory copies stay,** because `buildBatch` prices a line and works out its consumption from the version
+    in force and reads the procedure and the consumption, and the bond and settlement registers quote a declaration.
+    Every native write goes through to the mirror and a compat write is written back to the rows.
+  - **Proved both ways, byte for byte:** 676 contract checks with the three routes served natively, 676 again with the
+    mock handlers serving them, and **65 captured answers compared across the two configurations** — every filter,
+    sort, facet and date range, both CSV exports, every declaration with the versions beside it, the 404s, the
+    configuration, and the batch, lot, work-order and bond registers that read them — with **0 differences**.
+  - **Tests:** `api_native.py` 470 checks (+64: the register with its facets, filters, sorts, ranges and CSV; every
+    declaration checked against its own child rows in SQL — material value, wastage, value added, price and unit cost;
+    **a unit cost or an input quantity changed in SQL alone moves the answer at once**; filing, editing, approving
+    (which supersedes the version in force), cancelling and deleting, with the eight 422s, the 409s and the 403s the
+    mock's rules give; **a batch issued on the new version's effective date is priced from the declaration filed here
+    and consumes its inputs, while one issued today is still priced from the version in force** — the mirror
+    `buildBatch` reads is the row this module wrote; a cancelled version keeps its number retired and a deleted one
+    frees it, so filing again takes the same number but never the same id, and the database refuses a second *live*
+    declaration with one number while a stamped row may carry it; the configuration's single row, its 403s, its audit
+    event and a batch that has to name a work order the moment the procedure says so — and the **R5.5 upgrade drill**:
+    the database is rewritten into its pre-R5.5 shape, the API restarted, and the same declarations, the same
+    configuration and the same seven registers row for row are required back, with a declaration deleted before the
+    upgrade staying deleted while its version is free again and its id stays retired).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.5:** the work orders (below), then the two registers derived from the batches and the sales — the
+    finished-goods lots and the subcontracting register.
+
+- **R5.5 — Backend: the production work orders (branch `r5-nestjs`):** `production/work-orders` and
+  `production/work-orders/{id}` leave the compat layer and move into **`work_orders`** + **`work_order_lines`** —
+  **57 route modules left, 59 native**. A work order is what the floor has to produce, and the progress it shows is
+  the one thing nobody types: it is what the *approved* batches that draw on it have issued, received and rejected.
+  See [docs/BACKEND.md › R5.5](docs/BACKEND.md#r55--the-work-orders-on-their-own-tables).
+  - **The progress follows the batches, in the same transaction:** creating, editing, approving, cancelling or
+    receiving a batch recomputes the work orders it draws on before the transaction commits (`refreshWorkOrderRows`,
+    which the compat write-back calls too), and every answer recomputes it again from the approved batches' rows —
+    exactly as the mock's register does. So what the floor still owes is a `SUM` over `work_order_lines`, and the
+    rules are still the mock's own (`buildWorkOrder`, `woIdentity`, the four lifecycle rules, the batches that block
+    a cancellation or a deletion, `woDiff`, the register's spec, its `?item=` filter and its CSV columns), now taking
+    the data they read.
+  - **Its number is unique and never reused** (the audit trail takes part in it) and a deleted draft keeps its row
+    with `deleted_at`, so a later work order takes neither its id nor its number. Its page lists the batches that
+    draw on it, queried straight from `batch_lines` and `batches`.
+  - **Proved both ways, byte for byte:** 676 contract checks with the two routes served natively, 676 again with the
+    mock handlers serving them, and **61 captured answers compared across the two configurations** — every filter,
+    facet, sort and date range, both CSV exports, every work order with the batches beside it, the 404s, and the
+    batch, lot, subcontracting and declaration registers that read them — with **0 differences**.
+  - **Tests:** `api_native.py` 514 checks (+44: the register with its facets, filters, sorts, ranges and one CSV row
+    per line owed; **every line in the database checked against the approved batches' own rows in SQL** — issued,
+    received and rejected are their sum, and what is owed is the quantity ordered less what went into production;
+    **a quantity ordered changed in SQL alone moves the answer and what is owed with it**; a work order created and
+    approved in one step, a draft challan that moves no progress, an approval that moves it on the row and in the
+    register at once, a contractor's receipt, a batch that cannot issue more than the work order has left, and a
+    cancellation that takes the whole progress back; the 409s that guard a cancellation, an edit and a deletion, the
+    five 422s from the mock's own rules, a viewer refused a write; deleting a draft stamping the row and retiring its
+    id *and* its number, which the database enforces too — and the **R5.5 upgrade drill**: the database is rewritten
+    into its pre-R5.5 shape, the API restarted, and the same work orders, the same progress and the same seven
+    registers row for row are required back, with a second boot adopting nothing again).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.5:** the two registers derived from the batches and the sales — the finished-goods lots and the
+    subcontracting register (below).
+
+- **R5.5 — Backend: the lots and the subcontracting register, served from the tables (branch `r5-nestjs`):**
+  `production/lots` and `production/subcontract` leave the compat layer — **55 route modules left, 61 native**, and
+  production is out of `compat_state` entirely. Neither stores anything: the lots add up `batch_lines` and
+  `sale_lines`, and the subcontracting register walks the contractual rows of `batches`. See
+  [docs/BACKEND.md › R5.5](docs/BACKEND.md#r55--the-lots-and-the-subcontracting-register-served-from-the-tables).
+  - **No migration and nothing to adopt:** both are reads over rows the earlier slices put there. What moved is the
+    rules — `lotsAnswer` in `_r3.ts`, and `subconParams` (the range, which defaults to the fiscal year the RMG
+    registers run on, the overdue threshold and the `?status=` filter), `subconRows`, the CSV columns and its name in
+    `_r62.ts`, out of the route file that held them — so the two mock route files are a dozen lines each and the
+    native registers call the same functions over what they read from the tables.
+  - **`lots` and `subconRegister` take their documents as data.** The Next.js handlers pass their in-memory copies,
+    the API passes the rows. The third caller of `lots` — `lotShortfall`, the rule that refuses an invoice drawing
+    more than a lot holds — still reads the copies, which is why the write-backs stay.
+  - **Proved both ways, byte for byte:** 676 contract checks with the two routes served natively, 676 again with the
+    mock handlers serving them, and **70 captured answers compared across the two configurations** — every lot with
+    and without `?all=1`, `?item=` and `?exclude=`, every range, `?status=`, ten `?days=` values, both CSV exports,
+    the three 422s, and the batch, stock, work-order, declaration and configuration registers beside them — with
+    **0 differences**.
+  - **Tests:** `api_native.py` 549 checks (+35: one lot per batch and SKU an approved batch received, each checked
+    against the same sums in SQL over `batch_lines` and `sale_lines`; an invoice that draws more than a lot holds is
+    a 422 from the mock's own rule, one that draws it moves the lot and cancelling gives the stock back; the
+    subcontracting register's default fiscal year, its rows newest first, its totals, `?status=`, `?days=` and its
+    fourteen-column CSV; and **a batch line's received quantity changed in SQL alone moves that lot and not the
+    branch split, an invoice line moves the lot it draws, and a challan's receipt moves the subcontracting register
+    and leaves the lots alone** — because they read the batch's lines, not its totals).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next:** accounting and the VAT returns (R5.6), which is what removes `compat_state` and the single-writer
+    lock.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

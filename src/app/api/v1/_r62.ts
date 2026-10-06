@@ -1,6 +1,7 @@
 /**
- * R6.2 shared logic for the mock API (the PostgreSQL build runs the same code through the compat layer, except backups,
- * which the native backup module owns).
+ * R6.2 shared logic for the mock API (the PostgreSQL build runs the same code through the compat layer, except the
+ * backups, which the native backup module owns, and the subcontracting register, whose rows the native API derives
+ * from the batches' own table since R5.5 — the rules below are the ones it calls).
  *  - RMG: UD / UP register with bond licence watch-list, subcontracting (Mushak 6.4) register
  *  - NBR enlistment: bulk master-data import, database backups (GO 16/Mushak/2019: at least two a day)
  */
@@ -9,7 +10,7 @@ import { db } from "@/lib/mock/db"
 import { auditStore } from "@/lib/mock/audit"
 import { userStore } from "@/lib/mock/users"
 import { COMPANY } from "@/lib/company"
-import { bondRows, daysBetween, udRow, UD_WARN_PCT } from "@/lib/rmg"
+import { bondRows, daysBetween, registerFrom, udRow, UD_WARN_PCT } from "@/lib/rmg"
 import { itemInput, partyInput, type UdInput } from "@/lib/schemas"
 import type {
   BackupRow, BackupStatus, Batch, ImportEntity, ImportIssue, ImportResult, Item, Party, SubconProcess, SubconRegister, SubconRow,
@@ -18,6 +19,9 @@ import type {
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
 import { badUnit } from "@/lib/mock/units"
+import { buildItem, newItemId } from "./_items"
+import { invalidRule, type RuleProblem } from "./_lib"
+import { newPartyId } from "./_parties"
 
 /* ── UD / UP register ─────────────────────────────────────────────────────── */
 
@@ -67,8 +71,8 @@ export const udInUse = (udNo: string, customerId: string) =>
 
 export const SUBCON_OVERDUE_DAYS = 30
 
-export function subconRegister(from: string, to: string, today: string, overdueDays = SUBCON_OVERDUE_DAYS): SubconRegister {
-  const rows: SubconRow[] = db.batches
+export function subconRegister(from: string, to: string, today: string, overdueDays = SUBCON_OVERDUE_DAYS, src: Batch[] = db.batches): SubconRegister {
+  const rows: SubconRow[] = src
     .filter((b) => b.mode === "contractual" && b.issueDate >= from && b.issueDate <= to)
     .map((b) => subconRow(b, today, overdueDays))
     .sort((a, b) => b.issueDate.localeCompare(a.issueDate) || b.no.localeCompare(a.no))
@@ -83,6 +87,36 @@ export function subconRegister(from: string, to: string, today: string, overdueD
     },
   }
 }
+
+/** A date the register accepts: `YYYY-MM-DD`, as the mock's own route checked it. */
+const SUBCON_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * What the subcontracting register answers for (R5.5: as data, so the API's native register answers with the same
+ * 422 body): the range — by default the fiscal year the RMG registers run on, which `registerFrom` works out — the
+ * overdue threshold in days, and the state `?status=` keeps.
+ */
+export function subconParams(sp: URLSearchParams, today: string): RuleProblem | { from: string; to: string; days: number; only: string | null } {
+  const from = sp.get("from") || registerFrom(today)
+  const to = sp.get("to") || today
+  if (!SUBCON_DATE.test(from) || !SUBCON_DATE.test(to)) return invalidRule({ [SUBCON_DATE.test(from) ? "to" : "from"]: ["date"] })
+  if (to < from) return invalidRule({ to: ["toBeforeFrom"] })
+  const days = Math.min(365, Math.max(1, Number(sp.get("days")) || SUBCON_OVERDUE_DAYS))
+  return { from, to, days, only: sp.get("status") }
+}
+
+/** The rows the register answers with: `?status=` keeps one state of the challan. */
+export const subconRows = (reg: SubconRegister, only: string | null): SubconRow[] =>
+  only ? reg.rows.filter((r) => r.status === only) : reg.rows
+
+/** The register's CSV: one row per challan — sent and returned, what is pending, and for how long. */
+export const SUBCON_CSV_COLUMNS = [
+  { key: "no", label: "Batch No" }, { key: "issueDate", label: "Sent" }, { key: "receiveDate", label: "Returned" }, { key: "vendorName", label: "Contractor" },
+  { key: "vendorBin", label: "BIN" }, { key: "process", label: "Process" }, { key: "issued", label: "Qty sent" }, { key: "received", label: "Qty returned" },
+  { key: "damaged", label: "Wastage" }, { key: "pending", label: "Pending" }, { key: "days", label: "Days" }, { key: "materialValue", label: "Material value" },
+  { key: "value", label: "Finished value" }, { key: "status", label: "Status" },
+]
+export const subconCsvName = (from: string, to: string) => `subcontract-register-${from}-${to}.csv`
 
 function subconRow(b: Batch, today: string, overdueDays: number): SubconRow {
   const issued = b.totalIssue, received = b.totalReceive, damaged = b.totalDamage
@@ -152,11 +186,8 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
       if (badUnit(d.unit)) { issues.push({ row, field: "unit", message: "unknownUnit" }); return }
       if (db.items.some((x) => x.sku.toLowerCase() === key)) { duplicates++; return }
       toCreate.push(() => {
-        const it: Item = {
-          id: `i${db.items.length + 1}-${Date.now().toString(36)}${i}`, ...d, masterItem: d.name.split(" ")[0], brand: "Local",
-          costPrice: d.purchasePrice ? Math.round(d.purchasePrice * 112) / 100 : Math.round(d.salePrice * 78) / 100,
-          opening: 0, purchased: 0, prodReceive: 0, prodIssue: 0, sold: 0, damage: 0,
-        }
+        // the same stored shape the item form produces (R5.2: shared with the native handlers through _items.ts)
+        const it = buildItem(d, d.name.split(" ")[0], newItemId(String(i)))
         db.items.push(it)
         audit({ entity: "item", entityId: it.id, ref: `${it.sku} · ${it.name}`, note: "Bulk import" })
       })
@@ -175,7 +206,7 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
       toCreate.push(() => {
         const { exporterType, bondLicenseNo, bondLicenseExpiry, associationNo, ...rest } = d
         const p: Party = {
-          ...rest, name, id: `${k[0]}${coll.length + db.trash.length + 1}-${Date.now().toString(36)}${i}`, kind: k,
+          ...rest, name, id: newPartyId(k, String(i)), kind: k,
           bin: d.mode === "Non-registered" && d.bin && !d.bin.startsWith("NID ") ? `NID ${d.bin}` : d.bin,
           country: d.mode === "Foreign" ? d.country : undefined,
           exporterType: exporterType || undefined, bondLicenseNo: bondLicenseNo || undefined, bondLicenseExpiry: bondLicenseExpiry || undefined, associationNo: associationNo || undefined,

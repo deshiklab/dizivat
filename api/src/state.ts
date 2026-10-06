@@ -1,12 +1,19 @@
 /**
- * The in-process world shared with the compat bundle. Native modules own users, company and units in PostgreSQL
- * and write every change through to these globals, so unported handlers (which read them) see the same data.
- * One instance per database — the compat layer is single-writer by design until R5.5 removes it.
+ * The in-process world shared with the compat bundle. Native modules own users, company, units, (R5.2) the
+ * parties and items, (R5.3) the stock documents, the sales invoices, the purchases and the credit and debit notes
+ * and (R5.4) the opening stock entries and the production batches, and (R5.5) the Mushak 4.3 price declarations and
+ * the production configuration in PostgreSQL, and write every change through to these globals, so unported handlers
+ * (which read them) see the same data. One instance per database — the compat layer is single-writer by design until R5.6 removes it.
  */
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
-import type { AuditEvent, Company, Unit } from "@/lib/types"
+import type { AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind, Unit, WorkOrder } from "@/lib/types"
+
+export type PartyKind = "customer" | "vendor"
+/** The undo buffer: deleted documents (compat state), deleted parties (R5.2) and deleted sales and purchases
+ *  (R5.3), the latter three rebuilt from their table's `deleted_at`. */
+export interface TrashEntry { kind: PartyKind | "sale" | "purchase"; doc: Party | Sale | Purchase; at: string }
 
 export type CompatModule = typeof import("./compat/entry")
 
@@ -16,7 +23,13 @@ interface UserStore {
   notifRead: Record<string, { ids: string[]; allBefore?: string }>; revokedBefore: Record<string, number>
 }
 interface Globals {
-  __dzDb?: Record<string, unknown> & { units: Unit[] }
+  __dzDb?: Record<string, unknown> & {
+    units: Unit[]; customers: Party[]; vendors: Party[]; items: Item[]; masterItems: MasterItem[]
+    transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; purchases: Purchase[]
+    creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
+    boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
+    trash: TrashEntry[]
+  }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
   __dzCompany?: Company
@@ -39,8 +52,25 @@ export const compat = (): CompatModule => {
 }
 
 /** Restores saved state before the compat bundle initialises (its stores use `globalThis.x ??= seed()`). */
-export function restoreGlobals(s: { db: Record<string, unknown> & { units: Unit[] }; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company; units: Unit[]; events: AuditEvent[] }) {
-  G.__dzDb = { ...s.db, units: s.units }
+export function restoreGlobals(s: {
+  db: Record<string, unknown>; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company
+  units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
+  transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
+  purchases: Purchase[]; purchaseTrash: TrashEntry[]
+  creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
+  boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
+  events: AuditEvent[]
+}) {
+  // documents only: an older snapshot's deleted parties, sales and purchases are rebuilt from their `deleted_at` rows
+  const docsTrash = ((s.db as { trash?: TrashEntry[] }).trash ?? [])
+    .filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale" && t.kind !== "purchase")
+  G.__dzDb = {
+    ...s.db, units: s.units, customers: s.customers, vendors: s.vendors, items: s.items, masterItems: s.masterItems,
+    transfers: s.transfers, damages: s.damages, sales: s.sales, purchases: s.purchases,
+    creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings, batches: s.batches,
+    boms: s.boms, productionConfig: s.productionConfig, workOrders: s.workOrders,
+    trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
+  }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
   G.__dzCompany = s.company
@@ -69,5 +99,199 @@ export const mirror = {
   putCompany: (c: Company) => replaceObject(G.__dzCompany!, c),
   units: (): Unit[] => G.__dzDb!.units,
   putUnits(list: Unit[]) { const u = G.__dzDb!.units; u.splice(0, u.length, ...list) },
+  /** R5.2: the live parties of one kind — the array the unported handlers read (mutated in place) */
+  parties: (kind: PartyKind): Party[] => (kind === "customer" ? G.__dzDb!.customers : G.__dzDb!.vendors),
+  putParties(kind: PartyKind, list: Party[]) { const a = mirror.parties(kind); a.splice(0, a.length, ...list) },
+  findParty: (kind: PartyKind, id: string) => mirror.parties(kind).find((p) => p.id === id),
+  putParty(p: Party) {
+    const list = mirror.parties(p.kind)
+    const cur = list.find((x) => x.id === p.id)
+    if (cur) replaceObject(cur, p)
+    else list.push(p)
+    return cur ?? p
+  },
+  removeParty(kind: PartyKind, id: string) {
+    const list = mirror.parties(kind)
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.2: the SKUs — documents move their counters, the register lists them */
+  items: (): Item[] => G.__dzDb!.items,
+  putItems(list: Item[]) { const a = mirror.items(); a.splice(0, a.length, ...list) },
+  findItem: (id: string) => mirror.items().find((i) => i.id === id),
+  putItem(it: Item) {
+    const list = mirror.items()
+    const cur = list.find((x) => x.id === it.id)
+    if (cur) replaceObject(cur, it)
+    else list.push(it)
+    return cur ?? it
+  },
+  removeItem(id: string) {
+    const list = mirror.items()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.2: the HS-code master items (a SKU references one by name) */
+  masterItems: (): MasterItem[] => G.__dzDb!.masterItems,
+  putMasterItems(list: MasterItem[]) { const a = mirror.masterItems(); a.splice(0, a.length, ...list) },
+  findMasterItem: (id: string) => mirror.masterItems().find((m) => m.id === id),
+  putMasterItem(m: MasterItem) {
+    const list = mirror.masterItems()
+    const cur = list.find((x) => x.id === m.id)
+    if (cur) replaceObject(cur, m)
+    else list.push(m)
+    return cur ?? m
+  },
+  /** R5.3: the live sales invoices — every register, a customer's credit and the VAT returns read them */
+  sales: (): Sale[] => G.__dzDb!.sales,
+  putSales(list: Sale[]) { const a = mirror.sales(); a.splice(0, a.length, ...list) },
+  findSale: (idOrNo: string) => mirror.sales().find((s) => s.id === idOrNo || s.invoiceNo === idOrNo),
+  putSale(sale: Sale) {
+    const list = mirror.sales()
+    const cur = list.find((x) => x.id === sale.id)
+    if (cur) replaceObject(cur, sale)
+    else list.push(sale)
+    return cur ?? sale
+  },
+  removeSale(id: string) {
+    const list = mirror.sales()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.3: the live purchases — the debit notes, the bond register and the VAT returns read them */
+  purchases: (): Purchase[] => G.__dzDb!.purchases,
+  putPurchases(list: Purchase[]) { const a = mirror.purchases(); a.splice(0, a.length, ...list) },
+  findPurchase: (idOrNo: string) => mirror.purchases().find((p) => p.id === idOrNo || p.invoiceNo === idOrNo),
+  putPurchase(p: Purchase) {
+    const list = mirror.purchases()
+    const cur = list.find((x) => x.id === p.id)
+    if (cur) replaceObject(cur, p)
+    else list.push(p)
+    return cur ?? p
+  },
+  removePurchase(id: string) {
+    const list = mirror.purchases()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.3: the credit notes — what is still returnable on an invoice, a customer's credit and the VAT return read them */
+  creditNotes: (): CreditNote[] => G.__dzDb!.creditNotes,
+  putCreditNotes(list: CreditNote[]) { const a = mirror.creditNotes(); a.splice(0, a.length, ...list) },
+  findCreditNote: (idOrNo: string) => mirror.creditNotes().find((n) => n.id === idOrNo || n.no === idOrNo),
+  putCreditNote(n: CreditNote) {
+    const list = mirror.creditNotes()
+    const cur = list.find((x) => x.id === n.id)
+    if (cur) replaceObject(cur, n)
+    else list.push(n)
+    return cur ?? n
+  },
+  removeCreditNote(id: string) {
+    const list = mirror.creditNotes()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.3: the debit notes — what is still returnable on a purchase and the input tax a period reverses */
+  debitNotes: (): DebitNote[] => G.__dzDb!.debitNotes,
+  putDebitNotes(list: DebitNote[]) { const a = mirror.debitNotes(); a.splice(0, a.length, ...list) },
+  findDebitNote: (idOrNo: string) => mirror.debitNotes().find((n) => n.id === idOrNo || n.no === idOrNo),
+  putDebitNote(n: DebitNote) {
+    const list = mirror.debitNotes()
+    const cur = list.find((x) => x.id === n.id)
+    if (cur) replaceObject(cur, n)
+    else list.push(n)
+    return cur ?? n
+  },
+  removeDebitNote(id: string) {
+    const list = mirror.debitNotes()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.4: the opening stock entries — the VAT returns and the Mushak books read them (the derived stock reads the rows) */
+  openings: (): OpeningEntry[] => G.__dzDb!.openings,
+  putOpenings(list: OpeningEntry[]) { const a = mirror.openings(); a.splice(0, a.length, ...list) },
+  findOpening: (idOrNo: string) => mirror.openings().find((o) => o.id === idOrNo || o.no === idOrNo),
+  putOpening(o: OpeningEntry) {
+    const list = mirror.openings()
+    const cur = list.find((x) => x.id === o.id)
+    if (cur) replaceObject(cur, o)
+    else list.push(o)
+    return cur ?? o
+  },
+  removeOpening(id: string) {
+    const list = mirror.openings()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.4: the production batches — the lot a sales approval checks, a work order's open quantity and the VAT
+   *  returns read them (the lots and subcontracting registers themselves read the rows, see derived.ts) */
+  batches: (): Batch[] => G.__dzDb!.batches,
+  putBatches(list: Batch[]) { const a = mirror.batches(); a.splice(0, a.length, ...list) },
+  findBatch: (idOrNo: string) => mirror.batches().find((b) => b.id === idOrNo || b.no === idOrNo),
+  putBatch(b: Batch) {
+    const list = mirror.batches()
+    const cur = list.find((x) => x.id === b.id)
+    if (cur) replaceObject(cur, b)
+    else list.push(b)
+    return cur ?? b
+  },
+  removeBatch(id: string) {
+    const list = mirror.batches()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.5: the price declarations — a batch's lines are priced and consumed from the version in force, and the
+   *  bond, the settlement and the VAT registers read them */
+  boms: (): Bom[] => G.__dzDb!.boms,
+  putBoms(list: Bom[]) { const a = mirror.boms(); a.splice(0, a.length, ...list) },
+  findBom: (idOrNo: string) => mirror.boms().find((b) => b.id === idOrNo || b.no === idOrNo),
+  putBom(b: Bom) {
+    const list = mirror.boms()
+    const cur = list.find((x) => x.id === b.id)
+    if (cur) replaceObject(cur, b)
+    else list.push(b)
+    return cur ?? b
+  },
+  removeBom(id: string) {
+    const list = mirror.boms()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.5: the work orders — a batch draws the quantity it issues from one, and its progress follows the batches */
+  workOrders: (): WorkOrder[] => G.__dzDb!.workOrders,
+  putWorkOrders(list: WorkOrder[]) { const a = mirror.workOrders(); a.splice(0, a.length, ...list) },
+  findWorkOrder: (idOrNo: string) => mirror.workOrders().find((w) => w.id === idOrNo || w.no === idOrNo),
+  putWorkOrder(w: WorkOrder) {
+    const list = mirror.workOrders()
+    const cur = list.find((x) => x.id === w.id)
+    if (cur) replaceObject(cur, w)
+    else list.push(w)
+    return cur ?? w
+  },
+  removeWorkOrder(id: string) {
+    const list = mirror.workOrders()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.5: the production configuration — one object, replaced in place so `buildBatch` reads the new procedure */
+  productionConfig: (): ProductionConfig => G.__dzDb!.productionConfig,
+  putProductionConfig(c: ProductionConfig) { replaceObject(G.__dzDb!.productionConfig, c) },
+  /** R5.3: the stock documents of one kind — the VAT returns and the Mushak books derive from them */
+  stockDocs: (kind: StockDocKind): StockDoc[] => (kind === "transfer" ? G.__dzDb!.transfers : G.__dzDb!.damages),
+  putStockDocs(kind: StockDocKind, list: StockDoc[]) { const a = mirror.stockDocs(kind); a.splice(0, a.length, ...list) },
+  findStockDoc: (kind: StockDocKind, id: string) => mirror.stockDocs(kind).find((d) => d.id === id || d.no === id),
+  putStockDoc(d: StockDoc) {
+    const list = mirror.stockDocs(d.kind)
+    const cur = list.find((x) => x.id === d.id)
+    if (cur) replaceObject(cur, d)
+    else list.push(d)
+    return cur ?? d
+  },
+  removeStockDoc(kind: StockDocKind, id: string) {
+    const list = mirror.stockDocs(kind)
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** Deleted documents and parties (the 10-second undo); party entries mirror `parties.deleted_at`. */
+  trash: (): TrashEntry[] => G.__dzDb!.trash,
   audit: () => G.__dzAudit!,
 }
