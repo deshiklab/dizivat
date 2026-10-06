@@ -40,11 +40,12 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | Opening stock (R5.4) | `opening-stock`, `opening-stock/{id}` | **native** — `opening_entries` (the R6.4 bond block of a go-live entry is columns of its row) |
 | Production batches (R5.4) | `production/batches`, `production/batches/{id}`, `production/batches/{id}/receive` | **native** — `batches` + `batch_lines` + `batch_consumption` (the contractor, the job process and the receipt are columns of the row) |
 | The derived stock (R5.4) | `stock`, `items/{id}/ledger` | **native** — no tables of their own: both add up the ten movement families' rows with the mock's own derivation (`src/app/api/v1/_derived.ts`) |
+| The derived registers of production (R5.5) | `production/lots`, `production/subcontract` | **native** — no tables of their own: the lots add up the batches' and the invoices' rows, the subcontracting register the contractual batches' (`_r3.lotsAnswer`, `_r62.subconRegister`) |
 | Price declarations (R5.5) | `production/boms`, `production/boms/{id}` | **native** — `boms` + `bom_inputs` + `bom_costs` (Mushak 4.3: the version in force is what a production batch is priced from) |
 | The production configuration (R5.5) | `production/config` | **native** — `production_config` (one row: the procedure a batch follows and the consumption it records) |
 | Work orders (R5.5) | `production/work-orders`, `production/work-orders/{id}` | **native** — `work_orders` + `work_order_lines` (the progress the approved batches have made is columns of the lines) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: the rest of production (the lots and subcontracting registers), accounting, VAT returns, notifications, dashboard, search… | 57 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: accounting, the VAT returns and the Mushak books, notifications, dashboard, search, import, the services… | 55 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -491,9 +492,46 @@ beside it, the 404s, and the batch, lot, subcontracting and declaration register
   without them; restoring a pre-R5.5 backup into a fresh database adopts them the same way, and `api_native.py`
   drills it in CI. A work order deleted before the upgrade left no row to adopt, so what survives the round trip is
   the id counter and the number in the audit trail.
-- **57 compat route modules are left, 59 native.** What is left of production is the two registers derived from the
-  batches and the sales — the finished-goods lots (`production/lots`) and the subcontracting register
-  (`production/subcontract`) — which is the next slice's.
+- **57 compat route modules were left, 59 native.** What was left of production was the two registers derived from
+  the batches and the sales — the finished-goods lots and the subcontracting register — and both are served from the
+  rows now (below).
+
+## R5.5 — the lots and the subcontracting register served from the tables
+
+`api/src/modules/derived.ts` now serves four endpoints, and the two it gained are the last of production:
+`production/lots` (the finished-goods lots — what each approved batch received and what the approved invoices have
+drawn on since) and `production/subcontract` (the R6.2 RMG register of the contractual batches — what is still at a
+contract manufacturer under a Mushak 6.4 challan, for how long, and what it is worth). Neither stores anything of its
+own: the lots add up `batch_lines` and `sale_lines`, and the subcontracting register walks the contractual rows of
+`batches` — all of which the R5.3–R5.5 migrations put there. The derivation is the mock's own code, re-exported by
+`api/src/compat/entry.ts`: `lots` / `lotsAnswer` (`_r3.ts`) and `subconRegister` with the range rule, the row filter
+and the CSV columns that the subcontracting route used to hold itself (`_r62.ts`), so the availability of a lot, the
+days at a contractor, the overdue threshold, the totals and the fourteen CSV columns cannot drift. Both sides were
+held against the same contract suite again — 676 checks with the two routes served natively, 676 with the mock
+handlers serving them — and all 70 captured answers were identical: every lot with and without `?all=1`, `?item=` and
+`?exclude=`, every range, `?status=`, ten `?days=` values, both CSV exports, the three 422s, and the batch, stock,
+work-order, declaration and configuration registers beside them.
+
+- **No migration, and nothing to adopt.** Both endpoints are reads over rows that already exist, so this slice adds
+  no schema, no snapshot change and no upgrade path of its own.
+- **The rules moved out of the route files.** `subconParams` (the range, which defaults to the fiscal year the RMG
+  registers run on, the overdue threshold and the state `?status=` keeps), `subconRows`, `SUBCON_CSV_COLUMNS` and
+  `subconCsvName` are `_r62.ts`'s now, and `lotsAnswer` (every lot with stock left, or all of them with `?all=1`) is
+  `_r3.ts`'s — the two mock route files are a dozen lines each, and the native controllers call the same functions.
+- **`lots` and `subconRegister` take their documents as data.** The Next.js handlers pass their in-memory copies; the
+  API passes what it read from `batches`, `batch_lines`, `sales` and `sale_lines`. The third caller of `lots` —
+  `lotShortfall`, the rule that refuses an invoice drawing more than a lot holds — still reads the copies, which is
+  why the write-backs stay.
+- **The in-memory copies stay**, because the readers that are still compat use them: the VAT returns, the Mushak
+  books and that lot check. What changed is that these two registers no longer depend on them — a batch line's
+  received quantity changed in SQL alone moves the lot at once and leaves the branch split alone (which counts the
+  SKU's own counters), an invoice line changed the same way moves the lot it draws, and a challan's receipt changed
+  in SQL moves the subcontracting register and leaves the lots alone (they read the batch's *lines*, not its totals).
+  Those are the checks `api_native.py` adds.
+- **55 compat route modules are left, 61 native** — and production is out of `compat_state` entirely: the
+  declarations, the configuration, the work orders and the batches are tables, and the two registers that watch them
+  are derived from those tables. What is left is accounting, the VAT returns and the Mushak books, the dashboard,
+  search, notifications, the bulk import and the services (R5.6).
 
 ## Tables
 
@@ -573,7 +611,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 514 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 544 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -750,6 +788,21 @@ subcontracting register and the declarations) are required back, with a work ord
 deleted while its id and number stay retired, a batch still creatable, a second boot adopting nothing again, and
 writes landing in the tables.
 
+And since the last R5.5 slice it checks the two derived registers of production the same way it checks the derived
+stock. `/production/lots` answers one lot per batch and SKU an approved batch received — sorted by date, each quoting
+its batch, with what was received, what the invoices drew and what is left — `?all=1` keeps the empty ones, `?item=`
+keeps one SKU's and `?exclude=` leaves one invoice out, which is how the sales form edits a draft. Every lot is
+checked against the same sums written in SQL over `batch_lines` and `sale_lines`, an invoice that draws more than a
+lot holds is a 422 `exceedsLot` from the mock's own rule, an approved invoice that draws one moves it, and cancelling
+the invoice gives the stock back. `/production/subcontract` answers the fiscal year the RMG registers run on by
+default, every contractual challan in the range newest first with what is still at the contractor and for how long,
+totals that count the same rows, `?status=`, `?days=` moving the overdue threshold, a CSV of fourteen columns named
+after the range, and the three 422s its own range rule gives; both registers need a session. And the decisive checks:
+**a batch line's received quantity changed in SQL alone, with the in-memory copies left stale on purpose, moves that
+lot and not the branch split; a line of an invoice that draws a lot moves the lot; a challan's receipt changed the
+same way moves the subcontracting register and leaves the lots alone** — because they read the batch's lines, not its
+totals — and putting each row back restores every number.
+
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
 1. Starts a PostgreSQL 16 service, runs the full suite plus `api_native.py`, and checks that the migrations and the compat table are current.
@@ -826,7 +879,7 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | R5.2 | **done** — customers and vendors (`parties`), items and master items (`items`, `master_items`). The stock ledger and branches' stock are *derived* from documents (there is no stored movement table), so they become relational with the documents in R5.3 |
 | R5.3 | **done** — transfers and damage (`stock_documents` + `stock_document_lines`), sales (6.3, `sales` + `sale_lines` + `sale_realisations`), purchases incl. imports and services (`purchases` + `purchase_lines`), credit and debit notes (6.7/6.8, `notes` + `note_lines`) |
 | R5.4 | **done** — the derived stock: the opening entries (`opening_entries`) and the production batches (6.4, `batches` + `batch_lines` + `batch_consumption`) are rows, and since every family the branch split and an item's ledger add up is relational now, `stock` and `items/{id}/ledger` are served from those rows by the mock's own derivation. Next: the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting registers |
-| R5.5 | the rest of production — **in progress**: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`), the production configuration (`production_config`) and the work orders (`work_orders` + `work_order_lines`, whose progress the approved batches' rows are summed into) are rows. Next: the two registers derived from the batches and the sales — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) |
+| R5.5 | **done** — the rest of production: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`), the production configuration (`production_config`) and the work orders (`work_orders` + `work_order_lines`, whose progress the approved batches' rows are summed into) are rows, and the two registers derived from them — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) — are served from those rows by the mock's own derivation. Production is out of `compat_state` |
 | R5.6 | accounting (accounts, receipts/payments, allocations), VAT: 9.1 returns, period lock, treasury/TR-6, VDS/6.6, adjustments — then `compat_state` and the lock are removed and the API can scale out |
 
 Money columns will be `numeric(18,2)` (as `parties.credit_limit`, the `items` prices and `tariff_lines` already are),

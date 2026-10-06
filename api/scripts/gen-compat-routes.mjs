@@ -36,6 +36,9 @@ export const NATIVE = [
   // R5.4: the derived stock — the branch split and an item's ledger add up every movement document, and every
   // family has a table now, so both are read back from the database instead of walked in memory
   "stock", "items/[id]/ledger",
+  // R5.5: the two derived registers of production — the finished-goods lots and the subcontracting register add up
+  // the batches and the invoices, so both are read back from the database as well
+  "production/lots", "production/subcontract",
 ]
 
 const found = []

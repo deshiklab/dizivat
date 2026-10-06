@@ -12,9 +12,10 @@
  *     values a movement carries can be summed in SQL instead of walked in memory;
  *   - the document number is unique in the database as well, so two requests cannot share one;
  *   - the counters an approval moves are written with the document, in the same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step — the VAT returns, the Mushak
- *     books, the finished-goods lots and the work orders' progress still derive from *every* movement document
- *     through them (the branch split and an item's ledger read the rows themselves since R5.4, see derived.ts).
+ *   - every write goes through the state guard, and the in-memory copies stay in step — the VAT returns and the
+ *     Mushak books still derive from *every* movement document through them, and so does the lot a sales approval
+ *     checks (the branch split and an item's ledger read the rows themselves since R5.4, and the finished-goods lots
+ *     and the subcontracting register since R5.5 — see derived.ts).
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, sql, type SQL } from "drizzle-orm"

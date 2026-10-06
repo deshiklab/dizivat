@@ -1,25 +1,31 @@
 /**
- * R5.4 — the two derived endpoints: the branch split (`/stock`) and one item's stock ledger (`/items/{id}/ledger`).
- * They store nothing of their own. Each adds up every movement document — purchases, sales, credit and debit notes,
- * transfers, damage entries, opening entries and production batches — and after this slice every one of those
- * families has a table, so both are served from the database: the documents are read back from their tables by the
- * modules that own them, and the derivation is the mock's own code (`src/app/api/v1/_derived.ts`, `_ledger.ts` and
- * `branchSplit` in `src/lib/mock/db.ts`, reused through the compat bundle), so the rows, the facets, the valuations,
- * the CSV columns, the running balance and the totals cannot drift between the two runtimes.
+ * R5.4/R5.5 — the derived endpoints, which store nothing of their own: the branch split (`/stock`) and one item's
+ * stock ledger (`/items/{id}/ledger`), and since R5.5 the two registers the rest of production is watched by — the
+ * finished-goods lots (`/production/lots`) and the subcontracting register (`/production/subcontract`). Each adds up
+ * documents that live elsewhere: the branch split and the ledger every movement document — purchases, sales, credit
+ * and debit notes, transfers, damage entries, opening entries and production batches — the lots the batches that
+ * received goods and the invoices that drew on them, and the subcontracting register the contractual batches. Every
+ * one of those families has a table, so all four are served from the database: the documents are read back from their
+ * tables by the modules that own them, and the derivation is the mock's own code (`src/app/api/v1/_derived.ts`,
+ * `_ledger.ts`, `branchSplit` in `src/lib/mock/db.ts`, `lotsAnswer` in `_r3.ts` and `subconRegister` in `_r62.ts`,
+ * reused through the compat bundle), so the rows, the facets, the valuations, the CSV columns, the running balance,
+ * the lot availability, the days at a contractor and the totals cannot drift between the two runtimes.
  *
- * That is the end of the derived stock's dependence on the in-memory copies: until now an approval had to write back
- * into the snapshot's arrays for `/stock` and the ledger to see it. The write-backs stay — the VAT returns, the Mushak
- * books, the work orders' progress, the subcontracting register and the finished-goods lots are still compat routes
- * and still read memory — but these two endpoints now answer from the tables alone.
+ * That is the end of these registers' dependence on the in-memory copies: until now an approval had to write back
+ * into the snapshot's arrays for `/stock`, the ledger, the lots and the subcontracting register to see it. The
+ * write-backs stay — the VAT returns and the Mushak books are still compat routes and still read memory — but these
+ * four endpoints answer from the tables alone.
  *
- * Both are reads, so there is nothing to migrate: no new table, no snapshot change and no upgrade path of their own.
- * What they read is what the R5.2–R5.4 migrations already put there.
+ * All four are reads, so there is nothing to migrate: no new table, no snapshot change and no upgrade path of their
+ * own. What they read is what the R5.2–R5.5 migrations already put there.
  */
 import { Controller, Get, Inject, Injectable, Param, Req, Res } from "@nestjs/common"
 import type { Request, Response } from "express"
 import type { MovementSource } from "@/lib/mock/db"
 import { toCSV } from "@/lib/mock/query"
-import type { CreditNote, Damage, DebitNote, ItemLedger, Transfer } from "@/lib/types"
+import { TODAY } from "@/lib/company"
+import type { Batch, CreditNote, Damage, DebitNote, ItemLedger, Transfer } from "@/lib/types"
+import type { LotSource } from "@/app/api/v1/_r3"
 import { Authed } from "../common/auth"
 import { Problem, searchParams, sendCsv } from "../common/http"
 import { compat } from "../state"
@@ -73,6 +79,18 @@ export class DerivedService {
     return row ? toItem(row) : undefined
   }
 
+  /**
+   * The two families a lot is made of: the batches that received finished goods and the invoices that drew on them.
+   * A lot is what is left of one batch's receipt, so nothing else is read.
+   */
+  async lotSource(): Promise<LotSource> {
+    const [batches, sales] = await Promise.all([this.batches.all(), this.sales.all()])
+    return { batches, sales }
+  }
+
+  /** The batches the subcontracting register walks — it keeps the contractual ones itself. */
+  async subconSource(): Promise<Batch[]> { return this.batches.all() }
+
   /** One item's ledger, restricted to a stock-holding branch when given. */
   async ledger(id: string, branchId?: string): Promise<ItemLedger | undefined> {
     const c = compat()
@@ -106,6 +124,49 @@ export class StockController {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { all, ...page } = r
     res.json({ ...page, branches, branchValue })
+  }
+}
+
+/**
+ * The finished-goods lots: what each approved batch received and what the approved invoices have drawn on since, so
+ * a sales invoice can only promise what a lot still holds. `?item=` keeps one SKU's lots, `?all=1` shows the empty
+ * ones too and `?exclude=<sale id>` leaves one invoice out — which is how the sales form edits a draft. The mock's
+ * own `lotsAnswer`, over the batches' and the invoices' rows.
+ */
+@Controller("api/v1/production/lots")
+export class LotsController {
+  constructor(@Inject(DerivedService) private readonly svc: DerivedService) {}
+
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    res.json(compat().lotsAnswer(searchParams(req), await this.svc.lotSource()))
+  }
+}
+
+/**
+ * The subcontracting register (R6.2, RMG): the contractual production batches — the inputs sent to a contract
+ * manufacturer under a Mushak 6.4 challan — what is still at the contractor, for how long, and what it is worth.
+ * `?from`/`?to` default to the fiscal year the RMG registers run on, `?days=` moves the overdue threshold,
+ * `?status=` keeps one state and `?format=csv` exports it. The mock's own range rule, rows and CSV columns, over the
+ * batches' rows.
+ */
+@Controller("api/v1/production/subcontract")
+export class SubcontractController {
+  constructor(@Inject(DerivedService) private readonly svc: DerivedService) {}
+
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    const range = c.subconParams(sp, TODAY)
+    if ("status" in range) throw new Problem(range.status, range.title, range.errors)
+    const reg = c.subconRegister(range.from, range.to, TODAY, range.days, await this.svc.subconSource())
+    const rows = c.subconRows(reg, range.only)
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(rows, c.SUBCON_CSV_COLUMNS), c.subconCsvName(range.from, range.to))
+      return
+    }
+    res.json({ ...reg, rows })
   }
 }
 

@@ -222,7 +222,8 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
-  /** R5.4: the production batches — the lots, a work order's progress and the VAT returns read them */
+  /** R5.4: the production batches — the lot a sales approval checks, a work order's open quantity and the VAT
+   *  returns read them (the lots and subcontracting registers themselves read the rows, see derived.ts) */
   batches: (): Batch[] => G.__dzDb!.batches,
   putBatches(list: Batch[]) { const a = mirror.batches(); a.splice(0, a.length, ...list) },
   findBatch: (idOrNo: string) => mirror.batches().find((b) => b.id === idOrNo || b.no === idOrNo),

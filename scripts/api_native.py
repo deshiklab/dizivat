@@ -2230,6 +2230,185 @@ def run():
         check(wkDup.returncode != 0, "R5.5: the database refuses a duplicate work order number (unique index), "
                                      "not just the API")
 
+    # ── R5.5: the two derived registers of production ────────────────────────────────────────────────────────
+    # Neither stores anything of its own. The finished-goods lots add up what the approved batches received and what
+    # the approved invoices have drawn on since; the subcontracting register walks the contractual batches — what is
+    # still at a contract manufacturer under a Mushak 6.4 challan, and for how long. Every document both read is a
+    # row now, so both are served from the tables, and the proof is the derived stock's: the numbers agree with the
+    # same sums written in SQL, and a row changed in SQL alone — the in-memory copies left stale on purpose — moves
+    # the answer at once.
+    print("R5.5: the finished-goods lots and the subcontracting register are derived from the tables")
+
+    ltAll = arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+    ltLive = arif.get(f"{BASE}/production/lots").json()
+    check(isinstance(ltAll, list) and len(ltAll) >= 1
+          and all(set(l) == {"batchId", "batchNo", "date", "itemId", "received", "sold", "available"} for l in ltAll)
+          and [l["date"] for l in ltAll] == sorted(l["date"] for l in ltAll)
+          and all(l["available"] > 0 for l in ltLive) and len(ltLive) <= len(ltAll),
+          f"native (R5.5): GET /production/lots answers the lots sorted by date, and ?all=1 keeps the empty ones "
+          f"({len(ltAll)} lots, {len(ltLive)} with stock left)")
+    check(all(l["available"] == jr2(max(0, l["received"] - l["sold"])) for l in ltAll)
+          and all(l["batchNo"].startswith("PB-") for l in ltAll),
+          "R5.5: what is left in a lot is what its batch received less what the invoices drew, and each quotes it")
+    ltItem = ltAll[0]["itemId"]
+    check([l for l in arif.get(f"{BASE}/production/lots", params={"all": 1, "item": ltItem}).json()
+           if l["itemId"] != ltItem] == []
+          and len(arif.get(f"{BASE}/production/lots", params={"all": 1, "item": ltItem}).json()) >= 1,
+          f"R5.5: ?item= keeps one SKU's lots ({ltItem})")
+    if DB_URL:
+        check(psql("""select count(*) from (select l.batch_id, l.item_id from batch_lines l
+                        join batches b on b.id = l.batch_id
+                       where b.process = 'Approved' and b.deleted_at is null and l.receive_qty > 0
+                       group by l.batch_id, l.item_id) t""") == str(len(ltAll)),
+              f"R5.5: …and there is exactly one lot per batch and SKU an approved batch received ({len(ltAll)})")
+        for lt in ltAll[:5]:
+            ltGot = psql(f"""select trim_scale(coalesce(sum(l.receive_qty), 0)) || '/' || trim_scale(coalesce((
+                   select sum(sl.qty) from sale_lines sl join sales sa on sa.id = sl.sale_id
+                    where sl.batch_id = '{lt["batchId"]}' and sl.item_id = '{lt["itemId"]}'
+                      and sa.process = 'Approved' and sa.deleted_at is null), 0))
+                 from batch_lines l join batches b on b.id = l.batch_id
+                where l.batch_id = '{lt["batchId"]}' and l.item_id = '{lt["itemId"]}'
+                  and b.process = 'Approved' and b.deleted_at is null""")
+            check(ltGot == f"{lt['received']}/{lt['sold']}",
+                  f"R5.5: lot {lt['batchNo']} / {lt['itemId']} — received and drawn are the same sums in SQL "
+                  f"({ltGot} = {lt['received']}/{lt['sold']})")
+        # the decisive one: a received quantity changed in SQL alone, with the in-memory copies left stale
+        ltRow = [l for l in ltAll if l["received"] >= 10][0]
+        ltOrd = psql(f"select ord from batch_lines where batch_id = '{ltRow['batchId']}'"
+                     f" and item_id = '{ltRow['itemId']}'")
+        ltQty0 = float(psql(f"select receive_qty from batch_lines where batch_id = '{ltRow['batchId']}'"
+                            f" and item_id = '{ltRow['itemId']}' and ord = {ltOrd}"))
+        ltStock0 = arif.get(f"{BASE}/stock", params={"size": 200}).json()["data"]
+        ltStock0 = [r for r in ltStock0 if r["id"] == ltRow["itemId"]][0]["remain"]
+        psql(f"update batch_lines set receive_qty = {jr2(ltQty0 - 7)} where batch_id = '{ltRow['batchId']}'"
+             f" and item_id = '{ltRow['itemId']}' and ord = {ltOrd}")
+        ltMoved = [l for l in arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+                   if l["batchId"] == ltRow["batchId"] and l["itemId"] == ltRow["itemId"]][0]
+        ltSplit = [r for r in arif.get(f"{BASE}/stock", params={"size": 200}).json()["data"]
+                   if r["id"] == ltRow["itemId"]][0]["remain"]
+        check(ltMoved["received"] == jr2(ltQty0 - 7) and ltMoved["available"] == jr2(max(0, ltQty0 - 7 - ltMoved["sold"]))
+              and ltSplit == ltStock0,
+              f"R5.5: a received quantity changed in SQL alone moves that lot at once ({ltQty0} → {ltMoved['received']},"
+              f" {ltRow['available']} → {ltMoved['available']} left) and not the branch split, which counts the SKU's"
+              f" own counters ({ltSplit})")
+        psql(f"update batch_lines set receive_qty = {ltQty0} where batch_id = '{ltRow['batchId']}'"
+             f" and item_id = '{ltRow['itemId']}' and ord = {ltOrd}")
+        ltBack = [l for l in arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+                  if l["batchId"] == ltRow["batchId"] and l["itemId"] == ltRow["itemId"]][0]
+        check(ltBack == ltRow, "R5.5: …and putting the row back restores the lot exactly")
+
+        # an invoice that draws on a lot: the lot follows it, and a line changed in SQL alone moves it again
+        ltBatch = arif.get(f"{BASE}/production/batches/{ltRow['batchId']}").json()
+        ltAvail = ltRow["available"]
+        ltOver = arif.post(f"{BASE}/sales", json={**inv_body, "branchId": ltBatch["branchId"], "process": "Approved",
+                                                  "lines": [{"itemId": ltRow["itemId"], "qty": jr2(ltAvail + 1),
+                                                             "price": 100, "sdRate": 0, "vatRate": 5,
+                                                             "batchId": ltRow["batchId"]}]})
+        check(ltOver.status_code == 422 and ltOver.json().get("errors", {}).get("lines.0.qty") == ["exceedsLot"],
+              f"R5.5: an invoice cannot draw more than the lot has left ({ltOver.status_code}, from the mock's own "
+              f"rule — which reads the copies this register's tables are written through)")
+        ltSale = arif.post(f"{BASE}/sales", json={**inv_body, "branchId": ltBatch["branchId"], "process": "Approved",
+                                                  "narration": f"R5.5 lot draw {TAG}",
+                                                  "lines": [{"itemId": ltRow["itemId"], "qty": 5, "price": 100,
+                                                             "sdRate": 0, "vatRate": 5, "batchId": ltRow["batchId"]}]})
+        ltSid = ltSale.json().get("id")
+        ltDrawn = [l for l in arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+                   if l["batchId"] == ltRow["batchId"] and l["itemId"] == ltRow["itemId"]][0]
+        check(ltSale.status_code == 201 and ltDrawn["sold"] == jr2(ltRow["sold"] + 5)
+              and ltDrawn["available"] == jr2(max(0, ltRow["received"] - ltDrawn["sold"]))
+              and (ltDrawn["available"] > 0) == (ltDrawn in arif.get(f"{BASE}/production/lots").json()),
+              f"R5.5: an approved invoice that draws on a lot moves it ({ltRow['sold']} → {ltDrawn['sold']} drawn, "
+              f"{ltDrawn['available']} left)")
+        psql(f"update sale_lines set qty = qty + 3 where sale_id = '{ltSid}' and batch_id = '{ltRow['batchId']}'")
+        ltAgain = [l for l in arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+                   if l["batchId"] == ltRow["batchId"] and l["itemId"] == ltRow["itemId"]][0]
+        check(ltAgain["sold"] == jr2(ltDrawn["sold"] + 3),
+              f"R5.5: …and a line of that invoice changed in SQL alone moves the lot again ({ltDrawn['sold']} → "
+              f"{ltAgain['sold']} drawn)")
+        psql(f"update sale_lines set qty = qty - 3 where sale_id = '{ltSid}' and batch_id = '{ltRow['batchId']}'")
+        check(arif.get(f"{BASE}/production/lots", params={"all": 1, "exclude": ltSid}).json()
+              == [dict(l, sold=jr2(l["sold"] - 5), available=jr2(max(0, l["received"] - l["sold"] + 5)))
+                  if l["batchId"] == ltRow["batchId"] and l["itemId"] == ltRow["itemId"] else l
+                  for l in arif.get(f"{BASE}/production/lots", params={"all": 1}).json()],
+              "R5.5: ?exclude= leaves one invoice out — which is how the sales form edits a draft that draws a lot")
+        arif.patch(f"{BASE}/sales/{ltSid}", json={"process": "Cancelled", "reason": f"R5.5 lot probe {TAG}"})
+        check([l for l in arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+               if l["batchId"] == ltRow["batchId"] and l["itemId"] == ltRow["itemId"]][0] == ltRow,
+              "R5.5: …and cancelling the invoice gives the lot its stock back")
+
+    scRow = arif.get(f"{BASE}/production/subcontract").json()
+    check(set(scRow) == {"from", "to", "overdueDays", "rows", "totals"}
+          and scRow["from"] == f"{int(scRow['to'][:4]) - (1 if scRow['to'][5:7] >= '07' else 2)}-07-01"
+          and scRow["overdueDays"] == 30 and set(scRow["totals"]) == {"atContractor", "pendingValue", "overdue", "returned"},
+          f"native (R5.5): GET /production/subcontract answers the fiscal year the RMG registers run on by default "
+          f"({scRow['from']} → {scRow['to']})")
+    scAll = arif.get(f"{BASE}/production/subcontract", params={"from": "2025-01-01", "to": tdate}).json()
+    scFields = {"id", "no", "issueDate", "receiveDate", "vendorId", "vendorName", "vendorBin", "process",
+                "state", "materialValue", "value", "issued", "received", "damaged", "pending", "days", "status"}
+    check(all(set(r) <= scFields and set(r) >= scFields - {"receiveDate"} for r in scAll["rows"])
+          and [(r["issueDate"], r["no"]) for r in scAll["rows"]]
+          == sorted(((r["issueDate"], r["no"]) for r in scAll["rows"]), key=lambda x: (x[0], x[1]), reverse=True)
+          and all(r["pending"] == jr2(max(0, r["issued"] - r["received"] - r["damaged"])) for r in scAll["rows"]),
+          f"R5.5: …every contractual challan in the range, newest first, with what is still at the contractor "
+          f"({len(scAll['rows'])} of them)")
+    check(scAll["totals"]["atContractor"] == sum(1 for r in scAll["rows"] if r["status"] in ("atContractor", "partial", "overdue"))
+          and scAll["totals"]["returned"] == sum(1 for r in scAll["rows"] if r["status"] == "returned")
+          and scAll["totals"]["overdue"] == sum(1 for r in scAll["rows"] if r["status"] == "overdue"),
+          f"R5.5: the totals count the same rows ({json.dumps(scAll['totals'])})")
+    for scWhy, scParams, scWant in [
+        ("?status=", {"status": "returned"}, [r for r in scAll["rows"] if r["status"] == "returned"]),
+        ("?days=1", {"days": 1}, None), ("?days=365", {"days": 365}, None)]:
+        scGot = arif.get(f"{BASE}/production/subcontract", params={"from": "2025-01-01", "to": tdate, **scParams}).json()
+        if scWant is None:
+            scOver = sum(1 for r in scGot["rows"] if r["status"] == "overdue")
+            check((scOver >= 1) if scParams["days"] == 1 else (scOver == 0),
+                  f"R5.5: {scWhy} moves the overdue threshold — {scOver} challans overdue at {scParams['days']} days")
+        else:
+            check(scGot["rows"] == scWant, f"R5.5: {scWhy} keeps one state of the challan")
+    scCsv = arif.get(f"{BASE}/production/subcontract", params={"from": "2025-01-01", "to": tdate, "format": "csv"})
+    check(scCsv.status_code == 200 and scCsv.headers.get("content-type", "").startswith("text/csv")
+          and scCsv.headers.get("content-disposition") == f'attachment; filename="subcontract-register-2025-01-01-{tdate}.csv"'
+          and scCsv.text.splitlines()[0].lstrip("\ufeff").startswith("Batch No,Sent,Returned,Contractor,BIN,Process")
+          and len([l for l in scCsv.text.splitlines()[1:] if l]) == len(scAll["rows"]),
+          "R5.5: the CSV export writes the register's fourteen columns, one row per challan")
+    for scWhy, scParams, scWant in [("a from that is not a date", {"from": "nope"}, {"from": ["date"]}),
+                                    ("a to that is not a date", {"to": "nope"}, {"to": ["date"]}),
+                                    ("a range the wrong way round", {"from": tdate, "to": "2025-01-01"},
+                                     {"to": ["toBeforeFrom"]})]:
+        scBad = arif.get(f"{BASE}/production/subcontract", params=scParams)
+        check(scBad.status_code == 422 and scBad.json()["title"] == "Validation failed"
+              and scBad.json().get("errors") == scWant,
+              f"R5.5: {scWhy} is a 422 from the register's own rule ({json.dumps(scBad.json().get('errors'))})")
+    check(requests.get(f"{BASE}/production/lots").status_code == 401
+          and requests.get(f"{BASE}/production/subcontract").status_code == 401,
+          "R5.5: both registers need a session")
+    if DB_URL:
+        check(psql("""select count(*) from batches where mode = 'contractual' and deleted_at is null
+                       and issue_date >= '2025-01-01'""") == str(len(scAll["rows"])),
+              "R5.5: …and its rows are the contractual batches in the range, straight out of the table")
+        scOne = [r for r in scAll["rows"] if r["status"] == "returned"] or scAll["rows"]
+        scOne = scOne[0]
+        scRec0 = float(psql(f"select total_receive from batches where id = '{scOne['id']}'"))
+        scAt0 = psql(f"select received_at is not null from batches where id = '{scOne['id']}'")
+        scLots0 = arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+        psql(f"update batches set total_receive = {jr2(max(0, scRec0 - 5))}, received_at = null where id = '{scOne['id']}'")
+        scMoved = [r for r in arif.get(f"{BASE}/production/subcontract",
+                                       params={"from": "2025-01-01", "to": tdate}).json()["rows"] if r["id"] == scOne["id"]][0]
+        scLots1 = arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+        check(scMoved["received"] == jr2(max(0, scRec0 - 5)) and scMoved["pending"] == jr2(scOne["pending"] + 5)
+              and scMoved["status"] != "returned" and scMoved["days"] >= scOne["days"] and scLots1 == scLots0,
+              f"R5.5: a challan's receipt changed in SQL alone moves the register at once ({scOne['received']} → "
+              f"{scMoved['received']} returned, {scOne['pending']} → {scMoved['pending']} pending, "
+              f"{scOne['status']} → {scMoved['status']}) and leaves the lots alone")
+        psql(f"update batches set total_receive = {scRec0}, received_at = "
+             f"{'now()' if scAt0 == 't' else 'null'} where id = '{scOne['id']}'")
+        scBack = [r for r in arif.get(f"{BASE}/production/subcontract",
+                                      params={"from": "2025-01-01", "to": tdate}).json()["rows"] if r["id"] == scOne["id"]][0]
+        check(scBack["received"] == scOne["received"] and scBack["pending"] == scOne["pending"]
+              and scBack["status"] == scOne["status"],
+              "R5.5: …and putting the row back restores the register — the lots never moved, because they read the "
+              "batch's lines, not its totals")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")

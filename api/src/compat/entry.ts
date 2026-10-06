@@ -106,6 +106,15 @@ export {
 // and hands them to the mock's own derivation: the register's spec, rows, per-branch valuation and CSV columns, and
 // the ledger's sorted rows, running balance and totals. Nothing is stored here, so there is nothing to migrate.
 export { branchCsvColumns, itemLedger, stockRegister } from "@/app/api/v1/_derived"
+// R5.5: the two registers the rest of production is watched by, served the same way — the finished-goods lots (what
+// an approved batch received less what the approved invoices drew on) and the subcontracting register (the
+// contractual batches, what is still at the contractor and for how long). Both are derived, so they store nothing:
+// the native module reads the batches and the invoices back from their tables and hands them to the mock's own
+// derivation, including the range rule and the CSV columns the subcontracting route used to hold itself.
+export { lots, lotsAnswer, type LotSource } from "@/app/api/v1/_r3"
+export {
+  SUBCON_CSV_COLUMNS, SUBCON_OVERDUE_DAYS, subconCsvName, subconParams, subconRegister, subconRows,
+} from "@/app/api/v1/_r62"
 
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
 // duty per line) variants, priced by the same functions the mock and the static demo run.

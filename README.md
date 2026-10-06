@@ -543,7 +543,36 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     registers row for row are required back, with a second boot adopting nothing again).
     Contract unchanged: 676 checks / 226 endpoints.
   - **Next in R5.5:** the two registers derived from the batches and the sales — the finished-goods lots and the
-    subcontracting register — then accounting and the VAT returns (R5.6), which is what removes `compat_state`.
+    subcontracting register (below).
+
+- **R5.5 — Backend: the lots and the subcontracting register, served from the tables (branch `r5-nestjs`):**
+  `production/lots` and `production/subcontract` leave the compat layer — **55 route modules left, 61 native**, and
+  production is out of `compat_state` entirely. Neither stores anything: the lots add up `batch_lines` and
+  `sale_lines`, and the subcontracting register walks the contractual rows of `batches`. See
+  [docs/BACKEND.md › R5.5](docs/BACKEND.md#r55--the-lots-and-the-subcontracting-register-served-from-the-tables).
+  - **No migration and nothing to adopt:** both are reads over rows the earlier slices put there. What moved is the
+    rules — `lotsAnswer` in `_r3.ts`, and `subconParams` (the range, which defaults to the fiscal year the RMG
+    registers run on, the overdue threshold and the `?status=` filter), `subconRows`, the CSV columns and its name in
+    `_r62.ts`, out of the route file that held them — so the two mock route files are a dozen lines each and the
+    native registers call the same functions over what they read from the tables.
+  - **`lots` and `subconRegister` take their documents as data.** The Next.js handlers pass their in-memory copies,
+    the API passes the rows. The third caller of `lots` — `lotShortfall`, the rule that refuses an invoice drawing
+    more than a lot holds — still reads the copies, which is why the write-backs stay.
+  - **Proved both ways, byte for byte:** 676 contract checks with the two routes served natively, 676 again with the
+    mock handlers serving them, and **70 captured answers compared across the two configurations** — every lot with
+    and without `?all=1`, `?item=` and `?exclude=`, every range, `?status=`, ten `?days=` values, both CSV exports,
+    the three 422s, and the batch, stock, work-order, declaration and configuration registers beside them — with
+    **0 differences**.
+  - **Tests:** `api_native.py` 544 checks (+30: one lot per batch and SKU an approved batch received, each checked
+    against the same sums in SQL over `batch_lines` and `sale_lines`; an invoice that draws more than a lot holds is
+    a 422 from the mock's own rule, one that draws it moves the lot and cancelling gives the stock back; the
+    subcontracting register's default fiscal year, its rows newest first, its totals, `?status=`, `?days=` and its
+    fourteen-column CSV; and **a batch line's received quantity changed in SQL alone moves that lot and not the
+    branch split, an invoice line moves the lot it draws, and a challan's receipt moves the subcontracting register
+    and leaves the lots alone** — because they read the batch's lines, not its totals).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next:** accounting and the VAT returns (R5.6), which is what removes `compat_state` and the single-writer
+    lock.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 

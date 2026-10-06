@@ -6,7 +6,7 @@ import { db } from "./db/client"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
 import { BatchesController, BatchesService } from "./modules/batches"
-import { DerivedService, ItemLedgerController, StockController } from "./modules/derived"
+import { DerivedService, ItemLedgerController, LotsController, StockController, SubcontractController } from "./modules/derived"
 import { CompatController, CompatService } from "./modules/compat"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
 import { CustomersController, PartiesService, VendorsController } from "./modules/parties"
@@ -31,7 +31,7 @@ const NATIVE_CONTROLLERS = [
   OpeningsController,
   BatchesController,
   BomsController, ProductionConfigController, WorkOrdersController,
-  StockController, ItemLedgerController,
+  StockController, ItemLedgerController, LotsController, SubcontractController,
   SalesController,
 ]
 

@@ -1,5 +1,5 @@
 import type { z } from "zod"
-import { branchLabels, db, mainBranchId, branchName, stockShortfall } from "@/lib/mock/db"
+import { branchLabels, db, mainBranchId, branchName, stockShortfall, type MovementSource } from "@/lib/mock/db"
 import { auditStore, diff, recordAudit } from "@/lib/mock/audit"
 import { buildSaleFields, unknownBranch, unknownItems, unknownSaleServices } from "@/lib/mock/build"
 import { consumptionFor, mergeConsumption } from "@/lib/mock/seed-r3"
@@ -88,9 +88,12 @@ export function parseSale(body: unknown, self?: Sale): RuleProblem | { data: Sal
 }
 
 /** Finished-goods lots: received quantity per batch line minus approved sales that drew on it. */
-export function lots(itemId?: string, excludeSaleId?: string): Lot[] {
+/** What the finished-goods lots are made of: the batches that received goods and the invoices that drew on them. */
+export type LotSource = Pick<MovementSource, "batches" | "sales">
+
+export function lots(itemId?: string, excludeSaleId?: string, src: LotSource = db): Lot[] {
   const m = new Map<string, Lot>()
-  for (const b of db.batches) {
+  for (const b of src.batches) {
     if (b.process !== "Approved") continue
     for (const l of b.lines) {
       if (!l.receiveQty || (itemId && l.itemId !== itemId)) continue
@@ -100,7 +103,7 @@ export function lots(itemId?: string, excludeSaleId?: string): Lot[] {
       else m.set(k, { batchId: b.id, batchNo: b.no, date: b.receiveDate ?? b.issueDate, itemId: l.itemId, received: l.receiveQty, sold: 0, available: 0 })
     }
   }
-  for (const s of db.sales) {
+  for (const s of src.sales) {
     if (s.process !== "Approved" || s.id === excludeSaleId) continue
     for (const l of s.lines) {
       const x = l.batchId ? m.get(`${l.batchId}|${l.itemId}`) : undefined
@@ -1207,9 +1210,13 @@ export const configRoutes = {
   }),
 }
 
-export const lotsRoute = withAuth(null, async (req) => {
-  const sp = new URL(req.url).searchParams
-  const item = sp.get("item") ?? undefined
-  const all = lots(item, sp.get("exclude") ?? undefined)
-  return json(sp.get("all") ? all : all.filter((l) => l.available > 0))
-})
+/**
+ * What `/production/lots` answers (R5.5: as data, so the API's native register answers from the rows): every lot
+ * with stock left, or all of them — including the empty ones — with `?all=1`.
+ */
+export const lotsAnswer = (params: URLSearchParams, src: LotSource = db): Lot[] => {
+  const all = lots(params.get("item") ?? undefined, params.get("exclude") ?? undefined, src)
+  return params.get("all") ? all : all.filter((l) => l.available > 0)
+}
+
+export const lotsRoute = withAuth(null, async (req) => json(lotsAnswer(new URL(req.url).searchParams)))

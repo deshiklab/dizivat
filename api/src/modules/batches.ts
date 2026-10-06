@@ -24,11 +24,12 @@
  *     what stops a later batch taking the same id;
  *   - the counters an approval moves (`items.prodIssue`, `items.prodReceive`) are written with the batch, in the
  *     same transaction;
- *   - every write goes through the state guard, and the in-memory copies stay in step: the finished-goods lots and
- *     the VAT returns still read *every* document — while the branch split and an item's ledger read the rows
- *     themselves (derived.ts), and since R5.5 so do the price declarations a batch is priced from, the
- *     configuration that says how it is produced (production.ts) and the work orders it draws on (workorders.ts),
- *     whose progress this module recomputes in the same transaction as the batch that moved it.
+ *   - every write goes through the state guard, and the in-memory copies stay in step: the VAT returns still read
+ *     *every* document, and so does the lot a sales approval checks — while the branch split, an item's ledger, the
+ *     finished-goods lots and the subcontracting register read the rows themselves (derived.ts), and since R5.5 so do
+ *     the price declarations a batch is priced from, the configuration that says how it is produced (production.ts)
+ *     and the work orders it draws on (workorders.ts), whose progress this module recomputes in the same transaction
+ *     as the batch that moved it.
  */
 import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
@@ -133,10 +134,11 @@ export const consumptionValues = (b: Batch) => b.consumption.map((c, i) => ({
 /* ── write-back: what the unported handlers changed ─────────────────────── */
 
 /**
- * The batches are rows now, but the in-memory copies stay: the finished-goods lots, the work orders' progress and
- * the VAT returns derive from all of them, together with the documents that are still compat state — while the branch
- * split and an item's ledger read the rows themselves (derived.ts, R5.4). A compat handler that writes through the mock's array — a restored backup, the demo runtime —
- * is written back here. See common/writeback.ts.
+ * The batches are rows now, but the in-memory copies stay: the VAT returns derive from all of them, together with
+ * the documents that are still compat state, and so does the lot a sales approval checks — while the branch split, an
+ * item's ledger, the finished-goods lots and the subcontracting register read the rows themselves (derived.ts). A
+ * compat handler that writes through the mock's array — a restored backup, the demo runtime — is written back here.
+ * See common/writeback.ts.
  */
 const batchWb = new WriteBack<Batch>("batches", () => mirror.batches(), (b) => b.id)
 export type BatchDelta = Delta<Batch>
