@@ -7,14 +7,13 @@ import { csvResponse, delay, runQuery, toCSV, type QuerySpec } from "@/lib/mock/
 import { batchInput, batchReceiveInput, bomInput, cancelInput, creditNoteInput, productionConfigInput, saleInput, workOrderInput } from "@/lib/schemas"
 import type { AuditChange, Batch, BatchLine, Bom, BomRow, BomStatus, Consumption, CreditLine, CreditNote, HistoryEntry, Item, Lot, Party, ProductionConfig, Sale, WorkOrder } from "@/lib/types"
 import { calcBom, calcCreditLine, round2, round4 } from "@/lib/vat"
-import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, zodProblem, type RuleProblem } from "./_lib"
+import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
 import { noteDiff, noteDraftRule, stampBomHistory } from "./_docs"
 import { lockedConflictProblem, lockedFieldRule } from "./_r4"
 
 type Ctx = { params: Promise<{ id: string }> }
 type Entity = "creditNote" | "bom" | "workOrder" | "batch"
 type Doc = CreditNote | Bom | WorkOrder | Batch
-const invalid = (errors: Record<string, string[]>) => problem(422, "Validation failed", errors)
 const has = (e: Record<string, string[]>) => Object.keys(e).length > 0
 
 /** Next CN-/PB-/PW-MMYY#### — numbers of deleted drafts live on in the audit trail and are skipped. */
@@ -594,9 +593,17 @@ export function bomDocRoutes() {
 
 /* ── Work orders ───────────────────────────────────────────────────────── */
 
+/**
+ * What a work order's progress is computed from: the lines of the approved batches, each quoting the work order it
+ * draws on. The API reads them straight out of `batch_lines`, the mock flattens its in-memory batches.
+ */
+export type ProgressLine = Pick<BatchLine, "itemId" | "issueQty" | "receiveQty" | "damageQty" | "workOrderId">
+export const approvedBatchLines = (src: Batch[] = db.batches): ProgressLine[] =>
+  src.filter((b) => b.process === "Approved").flatMap((b) => b.lines)
+
 /** Recomputes a work order's progress from approved batches (issued / received / damaged / remaining + status). */
-export function refreshWorkOrder(w: WorkOrder) {
-  const bl = db.batches.filter((b) => b.process === "Approved").flatMap((b) => b.lines.filter((l) => l.workOrderId === w.id))
+export function refreshWorkOrder(w: WorkOrder, lines: ProgressLine[] = approvedBatchLines()): WorkOrder {
+  const bl = lines.filter((l) => l.workOrderId === w.id)
   for (const l of w.lines) {
     const mine = bl.filter((x) => x.itemId === l.itemId)
     l.issued = round2(mine.reduce((a, x) => a + x.issueQty, 0))
@@ -608,6 +615,18 @@ export function refreshWorkOrder(w: WorkOrder) {
     : w.lines.every((l) => l.received + l.damaged >= l.qty - 1e-9) ? "completed" : w.lines.some((l) => (l.issued ?? 0) > 0) ? "partial" : "open"
   return w
 }
+
+/** The batches that draw on a work order: what blocks its cancellation and its deletion, and what its page lists. */
+export const woBatches = (w: WorkOrder, src: Batch[] = db.batches): Batch[] =>
+  src.filter((b) => b.lines.some((l) => l.workOrderId === w.id))
+
+/** The batches beside a work order on its own page. */
+export const woBatchRows = (w: WorkOrder, src: Batch[] = db.batches) =>
+  woBatches(w, src).map((b) => ({
+    id: b.id, no: b.no, mode: b.mode, issueDate: b.issueDate, process: b.process,
+    totalIssue: b.totalIssue, totalReceive: b.totalReceive,
+  }))
+
 /** Quantity of an item still to put into production on a work order (approved AND draft batches count). */
 function woOpenQty(w: WorkOrder, itemId: string, excludeBatchId?: string) {
   const l = w.lines.find((x) => x.itemId === itemId)
@@ -616,51 +635,118 @@ function woOpenQty(w: WorkOrder, itemId: string, excludeBatchId?: string) {
   return round2(l.qty - used)
 }
 
-function buildWorkOrder(body: unknown) {
+/** What `buildWorkOrder` returns: every field of the work order but the identity and the lifecycle the caller adds. */
+export type WorkOrderFields = Omit<WorkOrder, "id" | "no" | "process" | "status" | "issuedBy" | "createdAt" | "history">
+
+/**
+ * Validates a work order body (R5.5: as data, so the API's native module answers with the same 422 body): every line
+ * an active finished good with a declaration in force on the issue date, no line twice, and a due date that is not
+ * before the issue date.
+ */
+export function buildWorkOrder(body: unknown, src: BomSource = db): RuleProblem | { process: "Created" | "Approved"; fields: WorkOrderFields } {
   const parsed = workOrderInput.safeParse(body)
-  if (!parsed.success) return { error: zodProblem(parsed.error) }
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
   const d = parsed.data
   const errors: Record<string, string[]> = {}
   const seen = new Set<string>()
   d.lines.forEach((l, i) => {
-    const it = db.items.find((x) => x.id === l.itemId && x.active && x.group === "Finished Goods")
+    const it = src.items.find((x) => x.id === l.itemId && x.active && x.group === "Finished Goods")
     if (!it) errors[`lines.${i}.itemId`] = ["unknown"]
     else if (seen.has(it.id)) errors[`lines.${i}.itemId`] = ["duplicate"]
-    else if (!activeBom(it.id, d.issueDate)) errors[`lines.${i}.itemId`] = ["noBom"]
+    else if (!activeBom(it.id, d.issueDate, src.boms)) errors[`lines.${i}.itemId`] = ["noBom"]
     seen.add(l.itemId)
   })
   if (d.dueDate && d.dueDate < d.issueDate) errors.dueDate = ["beforeIssue"]
-  if (has(errors)) return { error: invalid(errors) }
+  if (has(errors)) return invalidRule(errors)
   return {
     process: d.process,
     fields: {
       requisitionNo: d.requisitionNo || undefined, issueDate: d.issueDate, dueDate: d.dueDate || undefined, remark: d.remark || undefined,
-      lines: d.lines.map((l) => { const it = db.items.find((x) => x.id === l.itemId)!; return { itemId: it.id, name: it.name, sku: it.sku, uom: it.unit, qty: l.qty, issued: 0, received: 0, damaged: 0, remaining: l.qty } }),
-    } satisfies Partial<WorkOrder>,
+      lines: d.lines.map((l) => { const it = src.items.find((x) => x.id === l.itemId)!; return { itemId: it.id, name: it.name, sku: it.sku, uom: it.unit, qty: l.qty, issued: 0, received: 0, damaged: 0, remaining: l.qty } }),
+    } satisfies WorkOrderFields,
   }
 }
 
-const woSpec: QuerySpec<WorkOrder> = {
+/** Only a draft may be edited — checked before the body is parsed, exactly as the mock checked it. */
+export const woDraftRule = (w: WorkOrder): RuleProblem | undefined =>
+  w.process !== "Created" ? { status: 409, title: `Only drafts can be edited — ${w.no} is ${w.process}.` } : undefined
+
+/** Only a draft may be approved; a cancelled one stays cancelled. */
+export const woApproveRule = (w: WorkOrder): RuleProblem | undefined =>
+  w.process !== "Created" ? { status: 409, title: `Cannot approve — ${w.no} is ${w.process}.` } : undefined
+
+/**
+ * Cancelling: never twice, no batch may still draw on it — a draft batch counts, because it is going to — and the
+ * reason is mandatory (the same `cancelInput` a cancelled batch answers with).
+ */
+export function woCancelRule(w: WorkOrder, reason: string, src: Batch[] = db.batches): RuleProblem | { reason: string } {
+  if (w.process === "Cancelled") return { status: 409, title: `${w.no} is already cancelled.` }
+  const live = woBatches(w, src).filter((b) => b.process !== "Cancelled")
+  if (live.length) return { status: 409, title: `${w.no} has production batches (${live.map((b) => b.no).join(", ")}) — cancel them first.` }
+  const parsed = cancelInput.safeParse({ reason })
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  return { reason: parsed.data.reason }
+}
+
+/** Only a draft may be deleted, and no batch may quote it — not even a cancelled one, which keeps the reference. */
+export function woDeleteRule(w: WorkOrder, src: Batch[] = db.batches): RuleProblem | undefined {
+  if (w.process !== "Created") return { status: 409, title: `Only drafts can be deleted — cancel ${w.no} instead.` }
+  if (woBatches(w, src).length) return { status: 409, title: `${w.no} is referenced by production batches.` }
+  return undefined
+}
+
+/**
+ * A new work order's identity: the next id in the `wo` series (the counter lives in the state, because a deleted
+ * work order leaves no row behind) and the next PW-MMYY#### — which the audit trail takes part in, so a deleted
+ * draft's number is not reused. Claimed separately, so a create refused after this point consumes nothing.
+ */
+export function woIdentity(issueDate: string) {
+  return { id: `wo${db.seq.workOrder + 1}`, no: nextNo("PW", "workOrder", db.workOrders, issueDate) }
+}
+export const claimWorkOrderId = () => { db.seq.workOrder += 1 }
+
+/** What an edit of a work order records in the audit trail. */
+export const WORK_ORDER_DIFF_FIELDS = ["requisitionNo", "issueDate", "dueDate", "remark"]
+
+export function woDiff(a: WorkOrder, b: WorkOrder) {
+  const out = diff(a, b, WORK_ORDER_DIFF_FIELDS)
+  const sig = (x: WorkOrder) => x.lines.map((l) => `${l.name} × ${l.qty}`).join("; ")
+  if (sig(a) !== sig(b)) out.push({ field: "lines", from: sig(a), to: sig(b) })
+  return out
+}
+
+export const woSpec: QuerySpec<WorkOrder> = {
   search: (w) => `${w.no} ${w.requisitionNo ?? ""} ${w.remark ?? ""} ${w.lines.map((l) => l.name).join(" ")}`,
   dateField: "issueDate",
   facets: { process: (w) => w.process, status: (w) => w.status },
   totals: [],
 }
 
+/** The register's CSV: one row per line, so what the floor still owes is a column of its own. */
+export const woCsvColumns = [
+  { key: "issueDate", label: "Issue Date" }, { key: "no", label: "Work Order" }, { key: "requisitionNo", label: "Requisition No" }, { key: "dueDate", label: "Due" },
+  { key: "name", label: "Item" }, { key: "uom", label: "UoM" }, { key: "qty", label: "Ordered" }, { key: "issued", label: "Issued" }, { key: "received", label: "Received" },
+  { key: "damaged", label: "Damaged" }, { key: "remaining", label: "Remaining" }, { key: "status", label: "Status" },
+]
+export const woCsvRows = (list: WorkOrder[]) => list.flatMap((w) => w.lines.map((l) => ({
+  ...l, no: w.no, issueDate: w.issueDate, dueDate: w.dueDate, requisitionNo: w.requisitionNo, status: w.status,
+})))
+export const woCsvName = (date = new Date().toISOString().slice(0, 10)) => `work-orders-${date}.csv`
+
+/** The register's `?item=` filter: the work orders that ask for one SKU, taken out of the params before the query runs. */
+export const woItemFilter = (params: URLSearchParams, src: WorkOrder[]) => {
+  const item = params.get("item")
+  params.delete("item")
+  return item ? src.filter((w) => w.lines.some((l) => l.itemId === item)) : src
+}
+
 export function workOrderListRoutes() {
   const GET = withAuth(null, async (req) => {
     const sp = new URL(req.url).searchParams
     if (!sp.get("sort")) sp.set("sort", "createdAt.desc")
-    db.workOrders.forEach(refreshWorkOrder)
-    const item = sp.get("item"); sp.delete("item")
-    const r = runQuery(item ? db.workOrders.filter((w) => w.lines.some((l) => l.itemId === item)) : db.workOrders, sp, woSpec)
-    if (sp.get("format") === "csv") {
-      return csvResponse(toCSV(r.all.flatMap((w) => w.lines.map((l) => ({ ...l, no: w.no, issueDate: w.issueDate, dueDate: w.dueDate, requisitionNo: w.requisitionNo, status: w.status }))), [
-        { key: "issueDate", label: "Issue Date" }, { key: "no", label: "Work Order" }, { key: "requisitionNo", label: "Requisition No" }, { key: "dueDate", label: "Due" },
-        { key: "name", label: "Item" }, { key: "uom", label: "UoM" }, { key: "qty", label: "Ordered" }, { key: "issued", label: "Issued" }, { key: "received", label: "Received" },
-        { key: "damaged", label: "Damaged" }, { key: "remaining", label: "Remaining" }, { key: "status", label: "Status" },
-      ]), `work-orders-${new Date().toISOString().slice(0, 10)}.csv`)
-    }
+    db.workOrders.forEach((w) => refreshWorkOrder(w))
+    const r = runQuery(woItemFilter(sp, db.workOrders), sp, woSpec)
+    if (sp.get("format") === "csv") return csvResponse(toCSV(woCsvRows(r.all), woCsvColumns), woCsvName())
     await delay()
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { all, ...page } = r
@@ -668,10 +754,10 @@ export function workOrderListRoutes() {
   })
   const POST = withAuth("doc.create", async (req, _ctx, user) => {
     const r = buildWorkOrder(await req.json().catch(() => ({})))
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
-    const w: WorkOrder = { ...r.fields!, id: `wo${db.seq.workOrder + 1}`, no: nextNo("PW", "workOrder", db.workOrders, r.fields!.issueDate), process: "Created", status: "draft", issuedBy: user.name, createdAt: new Date().toISOString(), history: [] }
-    db.seq.workOrder += 1
+    const w: WorkOrder = { ...r.fields, ...woIdentity(r.fields.issueDate), process: "Created", status: "draft", issuedBy: user.name, createdAt: new Date().toISOString(), history: [] }
+    claimWorkOrderId()
     addHistory("workOrder", w, user.name, "created")
     if (r.process === "Approved") { w.process = "Approved"; addHistory("workOrder", w, user.name, "approved") }
     db.workOrders.push(refreshWorkOrder(w))
@@ -682,28 +768,26 @@ export function workOrderListRoutes() {
 
 export function workOrderDocRoutes() {
   const find = (id: string) => db.workOrders.find((w) => w.id === id || w.no === id)
-  const batchesOf = (w: WorkOrder) => db.batches.filter((b) => b.lines.some((l) => l.workOrderId === w.id))
   const GET = withAuth<Ctx>(null, async (_req, { params }) => {
     const { id } = await params
     await delay(100)
     const w = find(id)
     if (!w) return problem(404, "Work order not found")
     refreshWorkOrder(w)
-    return json({ ...w, batches: batchesOf(w).map((b) => ({ id: b.id, no: b.no, mode: b.mode, issueDate: b.issueDate, process: b.process, totalIssue: b.totalIssue, totalReceive: b.totalReceive })) })
+    return json({ ...w, batches: woBatchRows(w) })
   })
   const PUT = withAuth<Ctx>("doc.edit", async (req, { params }, user) => {
     const { id } = await params
     const w = find(id)
     if (!w) return problem(404, "Work order not found")
-    if (w.process !== "Created") return problem(409, `Only drafts can be edited — ${w.no} is ${w.process}.`)
+    const draft = woDraftRule(w)
+    if (draft) return ruleResponse(draft)
     const r = buildWorkOrder(await req.json().catch(() => ({})))
-    if (r.error) return r.error
+    if ("status" in r) return ruleResponse(r)
     if (r.process === "Approved") { const no = deny(user, "doc.approve"); if (no) return no }
     const before = structuredClone(w)
     Object.assign(w, r.fields)
-    const changes = diff(before, w, ["requisitionNo", "issueDate", "dueDate", "remark"])
-    const sig = (x: WorkOrder) => x.lines.map((l) => `${l.name} × ${l.qty}`).join("; ")
-    if (sig(before) !== sig(w)) changes.push({ field: "lines", from: sig(before), to: sig(w) })
+    const changes = woDiff(before, w)
     addHistory("workOrder", w, user.name, "edited", undefined, changes)
     if (r.process === "Approved") { w.process = "Approved"; addHistory("workOrder", w, user.name, "approved") }
     return json(refreshWorkOrder(w))
@@ -715,21 +799,19 @@ export function workOrderDocRoutes() {
     const body = (await req.json().catch(() => ({}))) as { process?: string; reason?: string }
     if (body.process === "Approved") {
       const no = deny(user, "doc.approve"); if (no) return no
-      if (w.process !== "Created") return problem(409, `Cannot approve — ${w.no} is ${w.process}.`)
+      const rule = woApproveRule(w)
+      if (rule) return ruleResponse(rule)
       w.process = "Approved"
       addHistory("workOrder", w, user.name, "approved")
       return json(refreshWorkOrder(w))
     }
     if (body.process === "Cancelled") {
       const no = deny(user, "doc.cancel"); if (no) return no
-      if (w.process === "Cancelled") return problem(409, `${w.no} is already cancelled.`)
-      const live = batchesOf(w).filter((b) => b.process !== "Cancelled")
-      if (live.length) return problem(409, `${w.no} has production batches (${live.map((b) => b.no).join(", ")}) — cancel them first.`)
-      const r = cancelInput.safeParse({ reason: body.reason ?? "" })
-      if (!r.success) return zodProblem(r.error)
+      const r = woCancelRule(w, body.reason ?? "")
+      if ("status" in r) return ruleResponse(r)
       w.process = "Cancelled"
-      w.cancelReason = r.data.reason
-      addHistory("workOrder", w, user.name, "cancelled", r.data.reason)
+      w.cancelReason = r.reason
+      addHistory("workOrder", w, user.name, "cancelled", r.reason)
       return json(refreshWorkOrder(w))
     }
     return problem(400, "process must be Approved or Cancelled")
@@ -738,8 +820,8 @@ export function workOrderDocRoutes() {
     const { id } = await params
     const i = db.workOrders.findIndex((x) => x.id === id)
     if (i < 0) return problem(404, "Work order not found")
-    if (db.workOrders[i].process !== "Created") return problem(409, `Only drafts can be deleted — cancel ${db.workOrders[i].no} instead.`)
-    if (batchesOf(db.workOrders[i]).length) return problem(409, `${db.workOrders[i].no} is referenced by production batches.`)
+    const rule = woDeleteRule(db.workOrders[i])
+    if (rule) return ruleResponse(rule)
     const [w] = db.workOrders.splice(i, 1)
     addHistory("workOrder", w, user.name, "deleted")
     return json({ ok: true })

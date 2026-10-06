@@ -99,6 +99,13 @@
       "when": 1791317629165,
       "tag": "0013_r55_production_boms",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791320174228,
+      "tag": "0014_r55_work_orders",
+      "breakpoints": true
     }
   ]
 }

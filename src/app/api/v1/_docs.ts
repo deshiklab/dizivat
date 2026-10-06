@@ -3,7 +3,7 @@ import { diff } from "@/lib/mock/audit"
 import { buildPurchaseFields, unknownBranch, unknownItems, unknownServices } from "@/lib/mock/build"
 import { delay } from "@/lib/mock/query"
 import { cancelInput, importInput, purchaseInput, realisationInput } from "@/lib/schemas"
-import type { Batch, Bom, CreditNote, DebitNote, ExportInfo, HistoryEntry, Line, OpeningEntry, Party, Purchase, Realisation, Sale } from "@/lib/types"
+import type { Batch, Bom, CreditNote, DebitNote, ExportInfo, HistoryEntry, Line, OpeningEntry, Party, Purchase, Realisation, Sale, WorkOrder } from "@/lib/types"
 import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
 import { lotShortfall, parseSale } from "./_r3"
 import { lockedConflictProblem, lockedFieldRule, settlementsOf } from "./_r4"
@@ -329,6 +329,9 @@ export const stampBatchHistory = (doc: Batch, by: string, action: HistoryEntry["
   stampTrail(doc, by, action, note, at)
 /** The same, for a price declaration (Mushak 4.3) — its own trail, its own audit event, recorded by whoever writes it. */
 export const stampBomHistory = (doc: Bom, by: string, action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) =>
+  stampTrail(doc, by, action, note, at)
+/** The same, for a production work order — its own trail, its own audit event, recorded by whoever writes it. */
+export const stampWorkOrderHistory = (doc: WorkOrder, by: string, action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) =>
   stampTrail(doc, by, action, note, at)
 
 export function docRoutes(k: Kind) {

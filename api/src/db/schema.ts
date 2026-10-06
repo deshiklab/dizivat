@@ -1066,7 +1066,82 @@ export const bomCosts = pgTable("bom_costs", {
 ])
 
 /**
- * Modules not yet migrated (production's work orders, accounting, VAT returns…) keep their exact
+ * A production work order (R5.5): what the floor has to produce, drawn on by the batches that put the goods into
+ * production. Its progress is never entered — it is what the *approved* batches say — so the columns below are
+ * recomputed whenever a batch or a work order is written, and what the floor has produced, received and still owes
+ * is a `SUM` over `work_order_lines` instead of a walk over every batch in memory:
+ *   - the goods it asks for are rows of `work_order_lines`, in the order they are printed;
+ *   - the number is unique and never reused (the audit trail takes part in it), so a deleted draft's number stays
+ *     retired — and its row is stamped with `deleted_at`, exactly as a deleted batch's is, because the mock's id
+ *     counter moved on when it was removed;
+ *   - `status` is derived: a draft is `draft`, a cancelled one `cancelled`, and an approved one `open`, `partial` or
+ *     `completed` according to what the batches have received and rejected.
+ */
+export const workOrders = pgTable("work_orders", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** PW-MMYY#### */
+  no: text("no").notNull(),
+  /** the requisition the floor raised, if the work order answers one */
+  requisitionNo: text("requisition_no"),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  dueDate: date("due_date", { mode: "string" }),
+  remark: text("remark"),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** derived from the approved batches that draw on it */
+  status: text("status", { enum: ["draft", "open", "partial", "completed", "cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the work order's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("work_orders_no_key").on(t.no),
+  index("work_orders_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("work_orders_issue_date_idx").on(t.issueDate),
+  /** what the floor still owes, and the batches' `?workOrder=` filter */
+  index("work_orders_status_idx").on(t.status),
+  check("work_orders_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("work_orders_status_check", sql`${t.status} in ('draft','open','partial','completed','cancelled')`),
+  // the two lifecycle columns agree: a draft is a draft and a cancelled work order is cancelled
+  check("work_orders_draft_check", sql`(${t.process} = 'Created') = (${t.status} = 'draft')`),
+  check("work_orders_cancelled_check", sql`(${t.process} = 'Cancelled') = (${t.status} = 'cancelled')`),
+  check("work_orders_due_check", sql`${t.dueDate} is null or ${t.dueDate} >= ${t.issueDate}`),
+])
+
+/**
+ * What a work order asks for: one row per finished good, with the quantity ordered and the progress the approved
+ * batches have made on it — what was put into production, what came back, what was rejected, and what is still owed.
+ */
+export const workOrderLines = pgTable("work_order_lines", {
+  workOrderId: text("work_order_id").notNull(),
+  /** position on the work order */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** put into production by approved batches — NULL until the first refresh, which is how the demo data set starts */
+  issued: numeric("issued", { precision: 18, scale: 3, mode: "number" }),
+  received: numeric("received", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  damaged: numeric("damaged", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** still to put into production */
+  remaining: numeric("remaining", { precision: 18, scale: 3, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.workOrderId, t.ord] }),
+  index("work_order_lines_item_idx").on(t.itemId),
+  // a finished good appears once per work order, and the batches cannot have returned more than they took
+  uniqueIndex("work_order_lines_item_key").on(t.workOrderId, t.itemId),
+  check("work_order_lines_qty_check", sql`${t.received} + ${t.damaged} <= ${t.issued}`),
+  check("work_order_lines_remaining_check", sql`${t.remaining} >= 0`),
+])
+
+/**
+ * Modules not yet migrated (accounting, the VAT returns, the registers that are derived from documents…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */
 export const compatState = pgTable("compat_state", {
