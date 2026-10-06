@@ -611,7 +611,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=â
   python3 scripts/api_native.py
 ```
 
-It runs 544 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 549 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives â€” rows in `parties`, `items` and

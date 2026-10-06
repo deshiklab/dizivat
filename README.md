@@ -563,7 +563,7 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     and without `?all=1`, `?item=` and `?exclude=`, every range, `?status=`, ten `?days=` values, both CSV exports,
     the three 422s, and the batch, stock, work-order, declaration and configuration registers beside them — with
     **0 differences**.
-  - **Tests:** `api_native.py` 544 checks (+30: one lot per batch and SKU an approved batch received, each checked
+  - **Tests:** `api_native.py` 549 checks (+35: one lot per batch and SKU an approved batch received, each checked
     against the same sums in SQL over `batch_lines` and `sale_lines`; an invoice that draws more than a lot holds is
     a 422 from the mock's own rule, one that draws it moves the lot and cancelling gives the stock back; the
     subcontracting register's default fiscal year, its rows newest first, its totals, `?status=`, `?days=` and its
