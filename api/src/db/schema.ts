@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, HistoryEntry, SdExportLink } from "@/lib/types"
+import type { AuditChange, HistoryEntry, ReturnComputation, ReturnManual, SdExportLink, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -1456,6 +1456,65 @@ export const vatAdjustments = pgTable("vat_adjustments", {
   // only a claim for SD on the inputs of exported goods carries its link
   check("vat_adjustments_sd_export_check",
     sql`(${t.sdExport} is null and ${t.kind} <> 'sdExport') or (${t.sdExport} is not null and ${t.kind} = 'sdExport')`),
+])
+
+/**
+ * R5.6: the Mushak 9.1 return of one tax period (s.61). The period *is* the id — one return per period, and the
+ * period is what every document is locked against — so there is no number series and no `process`. A return is a
+ * draft until it is submitted, and submitting it freezes the computation it was filed with (`snapshot`): the
+ * documents it was computed from keep moving, the return does not.
+ */
+export const vatReturns = pgTable("vat_returns", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** YYYY-MM */
+  period: text("period").notNull(),
+  /** an original filed after the due date is recorded as `late`; `amended` is a corrected return (s.66) */
+  type: text("type", { enum: ["original", "amended", "full", "late"] }).notNull(),
+  amendReason: text("amend_reason"),
+  /** Mushak 9.1 part 2: whether there were taxable activities in the period at all */
+  activities: boolean("activities").notNull(),
+  status: text("status", { enum: ["draft", "submitted"] }).notNull(),
+  submissionDate: date("submission_date", { mode: "string" }),
+  /** the manual notes (parts 4–5): interest, penalty, the surcharges and the refund claimed */
+  manual: jsonb("manual").$type<ReturnManual>().notNull(),
+  /** every note as it was filed — frozen at submission */
+  snapshot: jsonb("snapshot").$type<ReturnComputation>(),
+  /** acknowledgement number from the NBR portal */
+  ackNo: text("ack_no"),
+  submittedBy: text("submitted_by"),
+  submittedAt: ts("submitted_at"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the document's own trail: created / edited / submitted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  uniqueIndex("vat_returns_period_key").on(t.period),
+  index("vat_returns_status_idx").on(t.status),
+  index("vat_returns_type_idx").on(t.type),
+  index("vat_returns_ord_idx").on(t.ord),
+  check("vat_returns_status_check", sql`${t.status} in ('draft','submitted')`),
+  check("vat_returns_type_check", sql`${t.type} in ('original','amended','full','late')`),
+  // a draft is not filed, and a filed return is frozen: the snapshot, the acknowledgement and the date travel together
+  check("vat_returns_submitted_check",
+    sql`(${t.status} = 'draft' and ${t.snapshot} is null and ${t.ackNo} is null) or (${t.status} = 'submitted' and ${t.snapshot} is not null and ${t.ackNo} is not null and ${t.submissionDate} is not null)`),
+  // only an amended return says why
+  check("vat_returns_amend_reason_check", sql`(${t.type} = 'amended') = (${t.amendReason} is not null)`),
+])
+
+/**
+ * R5.6: the NBR settings — one row. The zone the economic codes are derived from, and the business profile that
+ * drives advance tax, the return's deadline and the RMG features.
+ */
+export const vatSettings = pgTable("vat_settings", {
+  id: integer("id").primaryKey().default(1),
+  zoneCode: text("zone_code").notNull(),
+  profile: jsonb("profile").$type<VatProfile>(),
+  updatedAt: ts("updated_at"),
+  updatedBy: text("updated_by"),
+}, (t) => [
+  check("vat_settings_single_row", sql`${t.id} = 1`),
 ])
 
 /**
