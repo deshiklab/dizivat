@@ -542,8 +542,36 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     into its pre-R5.5 shape, the API restarted, and the same work orders, the same progress and the same seven
     registers row for row are required back, with a second boot adopting nothing again).
     Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.5:** the two registers derived from the batches and the sales — the finished-goods lots and the
-    subcontracting register (below).
+  - **Next:** accounting (below), then the VAT side — treasury, VDS, adjustments, the 9.1 returns and the period
+    lock — then the dashboard, search, notifications, the bulk import and the services.
+
+- **R5.6 — Backend: accounting on its own tables (branch `r5-nestjs`):** the money accounts, the receipts and the
+  payments with the invoices they settle, the open invoices, a party's statement and the accounting configuration
+  leave the compat layer and move into **`money_accounts`**, **`money_docs`** + **`money_allocations`** and
+  **`accounting_config`** — **46 route modules left, 70 native**. Both money kinds share one table, `kind` telling
+  them apart as it does for the transfers, the damage entries and the notes. See
+  [docs/BACKEND.md › R5.6](docs/BACKEND.md#r56--accounting-on-its-own-tables).
+  - **A settlement writes the invoice it moves, in the same transaction.** `paid` and `due` are columns of `sales`
+    and `purchases`, so approving a receipt settles the invoice on its own row as the money document is written — and
+    cancelling one, or a transaction that rolled back, puts those counters back. That is what keeps the invoice
+    registers, the open invoices and a party's statement agreeing with the accounts.
+  - **A balance is derived, never stored**; an account with transactions cannot be deleted, only deactivated; the
+    number series are unique and never reused, and a deleted draft keeps its row stamped.
+  - **Proved both ways, byte for byte:** 676 contract checks with the nine routes served natively, 676 again with the
+    mock handlers serving them, and **146 captured answers compared across the two configurations** — every filter,
+    facet, sort, range and both CSVs of all four registers, every account, receipt, payment and statement, the 404s
+    and the 422s — with **0 differences**.
+  - **Tests:** `api_native.py` 612 checks (+63: every account's balance against the same sums in SQL; an account
+    created, duplicated, edited, deactivated and deleted; **a receipt settling an invoice — a draft moving nothing,
+    the approval writing `paid` and `due` on the `sales` row with the money document, the statement still
+    reconciling, and the cancellation giving it back**; a payment on the purchase side; the nine 422s from the mock's
+    own rules; the register's facets, `?invoice=`, CSV and delete; the configuration's one row, its 403 and its
+    future-date 422 — and the **R5.6 upgrade drill**: the database is rewritten into its pre-R5.6 shape, the API
+    restarted, and the same accounts, registers, configuration, invoices and statement are required back row for
+    row, with a receipt on the upgraded database still settling its invoice on the adopted row).
+    Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.6:** the VAT side — the treasury deposits (TR-6), VDS (Mushak 6.6), the VAT adjustments, the Mushak
+    9.1 returns with the period lock, the compliance centre and the Mushak books.
 
 - **R5.5 — Backend: the lots and the subcontracting register, served from the tables (branch `r5-nestjs`):**
   `production/lots` and `production/subcontract` leave the compat layer — **55 route modules left, 61 native**, and

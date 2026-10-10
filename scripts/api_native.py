@@ -297,6 +297,43 @@ PRE_R55_WORK_ORDERS = f"""update compat_state set data = jsonb_set(data, '{{db}}
   'workOrders', {WORK_ORDER_AGG}
 )) where key = 'main'"""
 
+# ── R5.6 upgrade drill: the accounting ───────────────────────────────────────────────────────────────────────
+# A database written before accounting had tables holds the accounts, the receipts and the payments with their
+# allocations and the configuration inside compat_state. These statements rebuild that shape from the live tables, so
+# the first boot on this code has to adopt it. Nothing here ships either: it is the inverse of the accounting half of
+# `adoptCompatRows()` in api/src/boot.ts, for the test only.
+MONEY_ALLOCATIONS_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'docId', a.invoice_id, 'docNo', a.invoice_no, 'docDate', a.invoice_date, 'docTotal', a.invoice_total,
+      'amount', a.amount)""") + """ order by a.ord), '[]'::jsonb)
+     from money_allocations a where a.doc_id = m.id)""")
+MONEY_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', m.id, 'no', m.no, 'kind', m.kind, 'date', m.date, 'partyId', m.party_id, 'partyName', m.party_name,
+    'partyBin', m.party_bin, 'method', m.method, 'accountId', m.account_id, 'accountName', m.account_name,
+    'chequeNo', m.cheque_no, 'chequeDate', m.cheque_date, 'chequeBank', m.cheque_bank, 'reference', m.reference,
+    'amount', m.amount, 'charge', m.charge, 'allocations', """ + MONEY_ALLOCATIONS_DOC + """,
+    'allocated', m.allocated, 'unallocated', m.unallocated, 'note', m.note, 'process', m.process,
+    'issuedBy', m.issued_by, 'createdAt', """ + _ISO.format("m.created_at") + """, 'updatedAt', """
+                                            + _ISO.format("m.updated_at") + """,
+    'cancelReason', m.cancel_reason, 'history', m.history)""") + ")")
+MONEY_AGG = (f"(select coalesce(jsonb_agg({MONEY_DOC} order by m.ord), '[]'::jsonb) "
+             f"from money_docs m where m.deleted_at is null)")
+ACCOUNT_DOC = ("""(""" + _NO_NULLS.format("""jsonb_build_object(
+    'id', a.id, 'kind', a.kind, 'provider', a.provider, 'accountNo', a.account_no, 'owner', a.owner,
+    'branch', a.branch, 'address', a.address, 'bankType', a.bank_type, 'walletType', a.wallet_type,
+    'authorised', a.authorised, 'serviceCharge', a.service_charge, 'openingBalance', a.opening_balance,
+    'openingDate', a.opening_date, 'active', a.active, 'createdAt', """ + _ISO.format("a.created_at") + """,
+    'updatedAt', """ + _ISO.format("a.updated_at") + """, 'history', a.history)""") + ")")
+ACCOUNT_AGG = f"(select coalesce(jsonb_agg({ACCOUNT_DOC} order by a.ord), '[]'::jsonb) from money_accounts a)"
+# the accounts, the money documents and the configuration back inside the snapshot (a deleted draft has no place
+# there: the mock removed it for good)
+PRE_R56_ACCOUNTING = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'moneyAccounts', {ACCOUNT_AGG}, 'moneyDocs', {MONEY_AGG}, 'accountingConfig', (
+    select jsonb_build_object('closedUpTo', closed_up_to, 'allowAdvance', allow_advance,
+                              'autoAllocate', auto_allocate, 'updatedAt', {_ISO.format("updated_at")},
+                              'updatedBy', updated_by)
+    from accounting_config where id = 1)
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -2508,6 +2545,275 @@ def run():
               "R5.5: …and putting the row back restores the register — the lots never moved, because they read the "
               "batch's lines, not its totals")
 
+    # ── R5.6: accounting ──────────────────────────────────────────────────────────────────────────────────────
+    # The money accounts, the receipts and the payments with the invoices they settle. The decisive check is the one
+    # that crosses families: `paid` and `due` are columns of `sales` and `purchases`, so a receipt that settles an
+    # invoice writes those rows with it — and cancelling it, or a transaction that rolled back, puts them back. What
+    # an invoice still owes is what the sales form, the statement and `settlementsOf` all read.
+    print("R5.6: accounting is rows, and a settlement reaches the invoices it settles")
+
+    ayPage = arif.get(f"{BASE}/accounting/accounts", params={"size": 100}).json()
+    ayRows = ayPage["data"]
+    check(ayPage["total"] == len(ayRows) >= 3 and set(ayPage["facets"]) == {"kind", "status"}
+          and all({"id", "kind", "provider", "accountNo", "owner", "openingBalance", "inflow", "outflow", "balance", "docs"}
+                  <= set(a) for a in ayRows)
+          and [a["provider"] for a in ayRows] == sorted((a["provider"] for a in ayRows), key=str.lower),
+          f"native (R5.6): GET /accounting/accounts answers the page with the derived balance on every row "
+          f"({ayPage['total']} accounts)")
+    check(all(a["balance"] == jr2(a["openingBalance"] + a["inflow"] - a["outflow"]) for a in ayRows)
+          and ayPage["totals"].get("balance") == jr2(sum(a["balance"] for a in ayRows)),
+          "R5.6: a balance is the opening balance plus what was received less what was paid out")
+    if DB_URL:
+        check(psql("select count(*) from money_accounts") == str(ayPage["total"]),
+              f"R5.6: …and its total is the rows of the table ({ayPage['total']})")
+        # the inflow is every approved receipt on the account, less its charge; the outflow is the payments *and*
+        # the treasury deposits, which are still compat state — so only the side that is rows is summed here
+        for ayAcc in ayRows[:4]:
+            ayGot = psql(f"""select coalesce((select sum(amount - charge) from money_docs
+                    where account_id = '{ayAcc["id"]}' and kind = 'receipt' and process = 'Approved'
+                      and deleted_at is null), 0)""")
+            check(jr2(float(ayGot)) == ayAcc["inflow"],
+                  f"R5.6: {ayAcc['provider']} · {ayAcc['accountNo']} — what it received is the same sum over "
+                  f"money_docs ({ayGot} = {ayAcc['inflow']})")
+    # an account of its own, so the checks below never disturb the seeded ones
+    ayKind = "bank"
+    ayBody = {"kind": ayKind, "provider": f"R5.6 Bank {TAG}", "accountNo": f"00{TAG}", "owner": "DiziVat Ltd",
+              "branch": "Gulshan", "bankType": "current", "serviceCharge": 0.5,
+              "openingBalance": 100000, "openingDate": "2026-01-01", "active": True}
+    ayNew = arif.post(f"{BASE}/accounting/accounts", json=ayBody)
+    ayn = ayNew.json() if ayNew.status_code == 201 else {}
+    check(ayNew.status_code == 201 and str(ayn.get("id", "")).startswith("ac") and ayn.get("balance") == 100000
+          and ayn.get("inflow") == 0 and ayn.get("outflow") == 0 and ayn.get("docs") == 0,
+          f"native (R5.6): an account is created with its opening balance and nothing through it "
+          f"({ayNew.status_code} {ayn.get('provider')})")
+    if DB_URL:
+        check(psql(f"select count(*) from money_accounts where id = '{ayn.get('id')}'"
+                   f" and opening_balance = 100000 and kind = '{ayKind}'") == "1",
+              "R5.6: …and it is a row in money_accounts")
+    ayDup = arif.post(f"{BASE}/accounting/accounts", json={**ayBody, "accountNo": f"00-{TAG}"})
+    check(ayDup.status_code == 422 and ayDup.json().get("errors", {}).get("accountNo") == ["duplicate"],
+          "R5.6: the same account number at the same provider is a 422 — the mock's own duplicate rule")
+    ayWalletNo = f"019{int(TAG, 16) % 10 ** 8:08d}"  # 11 digits: the form's own MOBILE_RE
+    ayWalletBody = {"kind": "mobile", "provider": f"R5.6 Wallet {TAG}", "accountNo": ayWalletNo,
+                    "owner": "DiziVat Ltd", "walletType": "merchant", "authorised": "Arif Hossain",
+                    "serviceCharge": 0.5, "openingBalance": 5000, "openingDate": "2026-01-01", "active": True}
+    ayWalletR = arif.post(f"{BASE}/accounting/accounts", json=ayWalletBody)
+    check(ayWalletR.status_code == 201 and ayWalletR.json().get("kind") == "mobile",
+          f"native (R5.6): a mobile wallet is another kind, which the register keeps apart by its own facet "
+          f"({ayWalletR.status_code})")
+    check(arif.post(f"{BASE}/accounting/accounts", json={**ayWalletBody, "accountNo": f"00-{TAG}"}).status_code == 422
+          and arif.post(f"{BASE}/accounting/accounts", json={**ayWalletBody, "kind": "bank"}).status_code == 422,
+          "R5.6: a wallet number that is not a mobile number, and a bank account without its type, are refused")
+    if ayWalletR.status_code == 201:
+        arif.delete(f"{BASE}/accounting/accounts/{ayWalletR.json()['id']}")
+    ayCash = {k: v for k, v in ayBody.items() if k not in ("branch", "bankType")}
+    check(arif.put(f"{BASE}/accounting/accounts/{ayn.get('id')}", json={**ayCash, "kind": "cash"}).status_code == 409
+          and arif.put(f"{BASE}/accounting/accounts/{ayn.get('id')}",
+                       json={**ayCash, "kind": "cash"}).json()["title"]
+          == "An account cannot change its kind — add a new account.",
+          "R5.6: …and an account cannot change its kind (409, from the mock's own rule — reached once the body the "
+          "new kind needs is there)")
+    check(arif.put(f"{BASE}/accounting/accounts/{ayn.get('id')}",
+                   json={**ayBody, "openingBalance": 120000}).json().get("balance") == 120000,
+          "R5.6: editing an account moves its balance, which is derived, not stored")
+    ayCsv = arif.get(f"{BASE}/accounting/accounts", params={"format": "csv"})
+    check(ayCsv.status_code == 200 and ayCsv.headers.get("content-disposition", "").startswith("attachment; filename=\"money-accounts-")
+          and ayCsv.text.splitlines()[0].lstrip("\ufeff").startswith("Kind,Bank / service,Branch"),
+          "R5.6: the CSV export writes the account columns, one row per account")
+    check(pdOp.post(f"{BASE}/accounting/accounts", json=ayBody).status_code == 403
+          and requests.get(f"{BASE}/accounting/accounts").status_code == 401,
+          "R5.6: adding an account needs master.edit, and reading them needs a session")
+
+    # a receipt: the open invoices of one customer, and one of them settled
+    def ay_parties(collection, mode="Local"):
+        r = arif.get(f"{BASE}/{collection}", params={"size": 200}).json()
+        return [p for p in (r["data"] if isinstance(r, dict) else r) if p.get("mode") == mode]
+
+    ayParty = None
+    for ayCand in ay_parties("customers")[:14]:
+        ayOpen = arif.get(f"{BASE}/accounting/open-invoices", params={"kind": "receipt", "party": ayCand["id"]}).json()
+        if ayOpen and ayOpen[0]["due"] >= 100:
+            ayParty, ayInv = ayCand, ayOpen[0]
+            break
+    check(ayParty is not None, "R5.6: a customer is left with an open invoice to settle")
+    ayBank = ayn.get("id") if ayn.get("kind") == "bank" else [a for a in ayRows if a["kind"] == "bank"][0]["id"]
+    ayDate = "2026-07-15"
+    ayCfg0 = arif.get(f"{BASE}/accounting/config").json()
+    if ayCfg0.get("closedUpTo") and ayDate <= ayCfg0["closedUpTo"]:
+        ayDate = time.strftime("%Y-%m-%d", time.localtime(time.mktime(time.strptime(ayCfg0["closedUpTo"], "%Y-%m-%d")) + 86400))
+    ayRec = {"partyId": ayParty["id"], "date": ayDate, "method": "bankTransfer", "accountId": ayBank,
+             "amount": 500, "reference": f"R5.6 {TAG}", "allocations": [{"docId": ayInv["id"], "amount": 500}],
+             "process": "Created"}
+    ayPaid0 = float(psql(f"select paid from sales where id = '{ayInv['id']}'")) if DB_URL else None
+    ayDue0 = ayInv["due"]
+    ayDraft = arif.post(f"{BASE}/accounting/receipts", json=ayRec)
+    aym = ayDraft.json() if ayDraft.status_code == 201 else {}
+    check(ayDraft.status_code == 201 and str(aym.get("no", "")).startswith("MR-") and aym.get("process") == "Created"
+          and aym.get("allocated") == 500 and aym.get("unallocated") == 0 and aym.get("partyName") == ayParty["name"],
+          f"native (R5.6): a receipt is created and numbered, against the invoice it will settle "
+          f"({ayDraft.status_code} {aym.get('no')})")
+    if DB_URL:
+        check(psql(f"select count(*) from money_docs where id = '{aym.get('id')}' and kind = 'receipt'"
+                   " and process = 'Created' and deleted_at is null") == "1"
+              and psql(f"select invoice_no || ':' || trim_scale(amount) from money_allocations"
+                       f" where doc_id = '{aym.get('id')}'") == f"{ayInv['no']}:500",
+              "R5.6: …and it is a row in money_docs with the invoice it settles beside it")
+        check(psql(f"select paid = {ayPaid0} from sales where id = '{ayInv['id']}'") == "t",
+              "R5.6: a draft settles nothing — the invoice's own row is untouched until it is approved")
+    for ayWhy, ayBad, ayWant in [
+        ("a closed book", {**ayRec, "date": ayCfg0["closedUpTo"]} if ayCfg0.get("closedUpTo") else None, None),
+        ("a date in the future", {**ayRec, "date": "2030-01-01"}, {"date": ["future"]}),
+        ("an account that is not a bank", {**ayRec, "method": "cash"}, {"accountId": ["accountMismatch"]}),
+        ("more allocated than the receipt took", {**ayRec, "amount": 10},
+         {"amount": ["overAllocated"]}),
+        ("more than the invoice has left", {**ayRec, "amount": ayDue0 + 1,
+                                            "allocations": [{"docId": ayInv["id"], "amount": ayDue0 + 1}]},
+         {"allocations.0.amount": ["exceedsDue"]}),
+        ("an invoice that is not open", {**ayRec, "allocations": [{"docId": "nosuchinvoice", "amount": 5}]},
+         {"allocations.0.docId": ["notOpen"]}),
+        ("the same invoice twice", {**ayRec, "allocations": [{"docId": ayInv["id"], "amount": 5},
+                                                             {"docId": ayInv["id"], "amount": 5}]},
+         {"allocations.1.docId": ["duplicate"]}),
+        ("no reference on a transfer", {k: v for k, v in ayRec.items() if k != "reference"},
+         {"reference": ["required"]})]:
+        if ayBad is None:
+            continue
+        ayR = arif.post(f"{BASE}/accounting/receipts", json=ayBad)
+        ayWant = ayWant or {"date": ["dateClosed"]}
+        check(ayR.status_code == 422 and all(ayR.json().get("errors", {}).get(k) == v for k, v in ayWant.items()),
+              f"R5.6: {ayWhy} is refused with the mock's own 422 ({json.dumps(ayR.json().get('errors'))[:70]})")
+
+    ayApp = arif.patch(f"{BASE}/accounting/receipts/{aym.get('id')}", json={"process": "Approved"})
+    ayAp = ayApp.json() if ayApp.status_code == 200 else {}
+    ayPaid1 = float(psql(f"select paid from sales where id = '{ayInv['id']}'")) if DB_URL else None
+    check(ayApp.status_code == 200 and ayAp.get("process") == "Approved"
+          and [h["action"] for h in ayAp.get("history", [])] == ["created", "approved"],
+          f"R5.6: approving the receipt is what settles the invoice ({ayApp.status_code})")
+    if DB_URL:
+        check(ayPaid1 == jr2(ayPaid0 + 500)
+              and psql(f"select due = net_total - paid from sales where id = '{ayInv['id']}'") == "t",
+              f"R5.6: …the settlement wrote the invoice's own row with it (paid {ayPaid0} → {ayPaid1}, and due "
+              f"follows) — the money document and the invoice register move together")
+        check(psql(f"select count(*) from money_docs where id = '{aym.get('id')}' and process = 'Approved'") == "1"
+              and psql(f"select trim_scale(allocated) from money_docs where id = '{aym.get('id')}'") == "500",
+              "R5.6: …and the approval is on the money document's row too")
+    ayOpen1 = [o for o in arif.get(f"{BASE}/accounting/open-invoices",
+                                   params={"kind": "receipt", "party": ayParty["id"]}).json()
+               if o["id"] == ayInv["id"]]
+    check(bool(ayOpen1) and ayOpen1[0]["due"] == jr2(ayDue0 - 500)
+          and ayOpen1[0]["paid"] == jr2(ayInv["paid"] + 500),
+          f"R5.6: …so what is still open is what is left ({ayDue0} → {ayOpen1[0]['due'] if ayOpen1 else '?'})")
+    ayStmt = arif.get(f"{BASE}/accounting/statement", params={"kind": "customer", "party": ayParty["id"]}).json()
+    check(ayStmt["reconciled"] and any(r.get("ref") == aym.get("no") for r in ayStmt["rows"]),
+          f"R5.6: the customer's statement carries the receipt and still reconciles ({aym.get('no')})")
+    ayCancel = arif.patch(f"{BASE}/accounting/receipts/{aym.get('id')}",
+                          json={"process": "Cancelled", "reason": f"R5.6 cancelled {TAG}"})
+    ayPaid2 = float(psql(f"select paid from sales where id = '{ayInv['id']}'")) if DB_URL else None
+    check(ayCancel.status_code == 200 and ayCancel.json().get("process") == "Cancelled"
+          and (not DB_URL or ayPaid2 == ayPaid0),
+          f"R5.6: cancelling it gives the settlement back — the invoice is as open as it was "
+          f"({ayPaid1} → {ayPaid2})")
+    check(arif.patch(f"{BASE}/accounting/receipts/{aym.get('id')}",
+                     json={"process": "Cancelled", "reason": f"R5.6 cancelled {TAG}"}).status_code == 409,
+          "R5.6: …and a cancelled receipt is not cancelled twice")
+
+    # a payment, on the other side of the ledger
+    ayVend = None
+    for ayCand in ay_parties("vendors")[:14]:
+        ayOpenV = arif.get(f"{BASE}/accounting/open-invoices", params={"kind": "payment", "party": ayCand["id"]}).json()
+        if ayOpenV and ayOpenV[0]["due"] >= 100:
+            ayVend, ayInvV = ayCand, ayOpenV[0]
+            break
+    if ayVend is None:
+        skipped("a payment against an open purchase (no supplier with one left)")
+    else:
+        ayPaidV0 = float(psql(f"select paid from purchases where id = '{ayInvV['id']}'")) if DB_URL else None
+        ayPay = {"partyId": ayVend["id"], "date": ayDate, "method": "bankTransfer", "accountId": ayBank,
+                 "amount": 250, "reference": f"R5.6 {TAG}", "allocations": [{"docId": ayInvV["id"], "amount": 250}],
+                 "process": "Approved"}
+        ayPayR = arif.post(f"{BASE}/accounting/payments", json=ayPay)
+        ayP = ayPayR.json() if ayPayR.status_code == 201 else {}
+        check(ayPayR.status_code == 201 and str(ayP.get("no", "")).startswith("PV-")
+              and (not DB_URL or float(psql(f"select paid from purchases where id = '{ayInvV['id']}'")) == jr2(ayPaidV0 + 250)),
+              f"native (R5.6): a payment approved at once settles the purchase the same way ({ayPayR.status_code} "
+              f"{ayP.get('no')})")
+        ayPayCancel = arif.patch(f"{BASE}/accounting/payments/{ayP.get('id')}", json={"process": "Cancelled", "reason": f"R5.6 cancelled {TAG}"})
+        check(ayPayCancel.status_code == 200
+              and (not DB_URL or float(psql(f"select paid from purchases where id = '{ayInvV['id']}'")) == ayPaidV0),
+              "R5.6: …and cancelling it puts the purchase's counters back")
+
+    # the register itself, and the drafts it deletes
+    ayRecPage = arif.get(f"{BASE}/accounting/receipts", params={"size": 100}).json()
+    check(ayRecPage["total"] >= 1 and set(ayRecPage["facets"]) == {"process", "method", "party", "account"}
+          and set(ayRecPage["facetLabels"]) == {"party", "account"}
+          and all(ayRecPage["facets"]["process"].get(p, 0) >= 0 for p in ("Created", "Approved", "Cancelled")),
+          f"native (R5.6): the register answers its four facets and labels them ({ayRecPage['total']} receipts)")
+    ayFiltered = arif.get(f"{BASE}/accounting/receipts", params={"invoice": ayInv["id"], "size": 100}).json()
+    check(all(any(a["docId"] == ayInv["id"] for a in m["allocations"]) for m in ayFiltered["data"])
+          and ayFiltered["total"] <= ayRecPage["total"],
+          f"R5.6: ?invoice= keeps the receipts that settle one ({ayFiltered['total']} of them)")
+    ayCsvR = arif.get(f"{BASE}/accounting/receipts", params={"format": "csv"})
+    check(ayCsvR.status_code == 200 and ayCsvR.headers.get("content-disposition", "").startswith("attachment; filename=\"receipts-")
+          and "Invoices" in ayCsvR.text.splitlines()[0].lstrip("\ufeff"),
+          "R5.6: the CSV export names the invoices each receipt settled")
+    ayGone = arif.post(f"{BASE}/accounting/receipts", json={**ayRec, "amount": 50,
+                                                            "allocations": [{"docId": ayInv["id"], "amount": 50}]})
+    ayg = ayGone.json() if ayGone.status_code == 201 else {}
+    check(ayGone.status_code == 201 and arif.delete(f"{BASE}/accounting/receipts/{ayg.get('id')}").status_code == 200
+          and arif.get(f"{BASE}/accounting/receipts/{ayg.get('id')}").status_code == 404,
+          "R5.6: deleting a draft answers {ok: true} and takes it out of the register")
+    if DB_URL:
+        check(psql(f"select count(*) from money_docs where id = '{ayg.get('id')}' and deleted_at is not null") == "1"
+              and psql(f"select count(*) from money_allocations where doc_id = '{ayg.get('id')}'") == "1",
+              "R5.6: …the row is stamped rather than removed, and keeps the invoice it settled")
+        ayAgain = arif.post(f"{BASE}/accounting/receipts", json={**ayRec, "amount": 50,
+                                                                 "allocations": [{"docId": ayInv["id"], "amount": 50}]})
+        ayag = ayAgain.json() if ayAgain.status_code == 201 else {}
+        check(ayAgain.status_code == 201 and ayag.get("id") != ayg.get("id") and ayag.get("no") != ayg.get("no"),
+              f"R5.6: …so the next receipt takes a new id and a new number ({ayg.get('id')} {ayg.get('no')} → "
+              f"{ayag.get('id')} {ayag.get('no')})")
+        arif.delete(f"{BASE}/accounting/receipts/{ayag.get('id')}")
+        ayDupNo = subprocess.run(["psql", DB_URL, "-c",
+                                  "insert into money_docs (id, no, kind, date, party_id, party_name, party_bin, method,"
+                                  " account_id, account_name, amount, charge, allocated, unallocated, process, issued_by,"
+                                  f" created_at) select 'dupm{TAG}', no, kind, date, party_id, party_name, party_bin,"
+                                  " method, account_id, account_name, amount, charge, allocated, unallocated, process,"
+                                  " issued_by, created_at from money_docs where deleted_at is null limit 1"],
+                                 capture_output=True, text=True)
+        check(ayDupNo.returncode != 0, "R5.6: the database refuses a duplicate number (unique index), not just the API")
+
+    ayCfg1 = admin.put(f"{BASE}/accounting/config", json={"closedUpTo": ayCfg0.get("closedUpTo"),
+                                                          "allowAdvance": not ayCfg0.get("allowAdvance", True),
+                                                          "autoAllocate": ayCfg0.get("autoAllocate", True)})
+    check(ayCfg1.status_code == 200 and ayCfg1.json().get("allowAdvance") != ayCfg0.get("allowAdvance", True)
+          and ayCfg1.json().get("updatedBy")
+          and (not DB_URL or psql("select count(*) from accounting_config") == "1"),
+          f"native (R5.6): the configuration is one row and an administrator's PUT replaces it "
+          f"({ayCfg1.status_code})")
+    check(pdOp.put(f"{BASE}/accounting/config", json={"allowAdvance": True, "autoAllocate": True}).status_code == 403,
+          "R5.6: closing or opening the books needs settings.manage")
+    ayCfgBad = admin.put(f"{BASE}/accounting/config", json={"closedUpTo": "2030-01-01", "allowAdvance": True, "autoAllocate": True})
+    check(ayCfgBad.status_code == 422 and ayCfgBad.json().get("errors", {}).get("closedUpTo") == ["future"],
+          "R5.6: the books cannot be closed up to a date in the future")
+    admin.put(f"{BASE}/accounting/config", json={"closedUpTo": ayCfg0.get("closedUpTo"),
+                                                 "allowAdvance": ayCfg0.get("allowAdvance", True),
+                                                 "autoAllocate": ayCfg0.get("autoAllocate", True)})
+    # an account the receipts went through cannot be deleted — only deactivated — while one nothing quotes can
+    ayRefused = arif.delete(f"{BASE}/accounting/accounts/{ayn.get('id')}")
+    check(ayRefused.status_code == 409
+          and ayRefused.json()["title"] == f"{ayn.get('provider')} · {ayn.get('accountNo')} has transactions — deactivate it instead.",
+          f"R5.6: an account that has been used refuses deletion ({ayRefused.status_code}) and says to deactivate it")
+    ayOff = arif.put(f"{BASE}/accounting/accounts/{ayn.get('id')}", json={**ayBody, "active": False})
+    check(ayOff.status_code == 200 and ayOff.json().get("active") is False
+          and arif.get(f"{BASE}/accounting/accounts", params={"status": "inactive", "size": 100}).json()["total"] >= 1,
+          "R5.6: …and deactivating it takes it out of the active facet")
+    ayFree = arif.post(f"{BASE}/accounting/accounts",
+                       json={**ayBody, "provider": f"R5.6 Unused {TAG}", "accountNo": f"99{TAG}"})
+    ayf = ayFree.json() if ayFree.status_code == 201 else {}
+    check(ayFree.status_code == 201 and arif.delete(f"{BASE}/accounting/accounts/{ayf.get('id')}").status_code == 200
+          and arif.get(f"{BASE}/accounting/accounts/{ayf.get('id')}").status_code == 404,
+          "R5.6: an account nothing quotes is deleted")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -3243,6 +3549,117 @@ def run():
               f"and writes land in the tables on the upgraded database ({wkWrite.status_code})")
         if wkWrite.json().get("id"):
             arif.delete(f"{BASE}/production/work-orders/{wkWrite.json()['id']}")
+        # … and accounting, which the next release moved out: a database written before it holds the accounts, the
+        # receipts and the payments with their allocations and the configuration inside compat_state. A draft deleted
+        # before the upgrade has no place there, so what has to survive the round trip is the id counter and the
+        # number in the audit trail, not the row.
+        print("\nR5.6: upgrading a pre-R5.6 database moves accounting into their tables")
+        def ay_counts():
+            return (psql("select count(*) from money_accounts"),
+                    psql("select count(*) from money_docs where deleted_at is null"),
+                    psql("select count(*) from money_allocations a join money_docs m on m.id = a.doc_id"
+                         " where m.deleted_at is null"),
+                    psql("select count(*) from accounting_config"))
+
+        def ay_registers():
+            return {"accounts": arif.get(f"{BASE}/accounting/accounts", params={"size": 100}).json(),
+                    "receipts": arif.get(f"{BASE}/accounting/receipts", params={"size": 100}).json(),
+                    "payments": arif.get(f"{BASE}/accounting/payments", params={"size": 100}).json(),
+                    "config": arif.get(f"{BASE}/accounting/config").json(),
+                    "sales": arif.get(f"{BASE}/sales", params={"size": 200, "category": "all"}).json(),
+                    "statement": arif.get(f"{BASE}/accounting/statement",
+                                          params={"kind": "customer", "party": ayParty["id"]}).json()}
+
+        def ay_boots():
+            """How many boots adopted the accounting collections — one `R5.6 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return fh.read().count("R5.6 upgrade:")
+
+        # its own fixtures: the main section's invoice may have been settled by the suites that ran since
+        ayDrillParty, ayDrillInv = None, None
+        for ayCand in ay_parties("customers")[:14]:
+            ayOpenD = arif.get(f"{BASE}/accounting/open-invoices", params={"kind": "receipt", "party": ayCand["id"]}).json()
+            if ayOpenD and ayOpenD[0]["due"] >= 600:
+                ayDrillParty, ayDrillInv = ayCand, ayOpenD[0]
+                break
+        check(ayDrillParty is not None, "R5.6: a customer is left with an invoice the drill can settle")
+        # a live bank account of its own: the one the checks above used was deactivated on purpose
+        ayDrillBank = [a for a in arif.get(f"{BASE}/accounting/accounts", params={"size": 100}).json()["data"]
+                       if a["kind"] == "bank" and a["active"]][0]["id"]
+        ayDrill = {**ayRec, "partyId": ayDrillParty["id"], "accountId": ayDrillBank, "amount": 500,
+                   "allocations": [{"docId": ayDrillInv["id"], "amount": 500}]} if ayDrillParty else ayRec
+        ayDrillPaid = float(psql(f"select paid from sales where id = '{ayDrillInv['id']}'")) if ayDrillParty else None
+        ayGoneR = arif.post(f"{BASE}/accounting/receipts", json={**ayDrill, "amount": 25,
+                                                                 "allocations": [{"docId": ayDrillInv["id"], "amount": 25}]})
+        ayGoneDoc = ayGoneR.json() if ayGoneR.status_code == 201 else {}
+        check(ayGoneR.status_code == 201,
+              f"R5.6: the drill can draft a receipt ({ayGoneR.status_code} "
+              f"{json.dumps(ayGoneR.json().get('errors'))[:120] if ayGoneR.status_code != 201 else ayGoneDoc.get('no')})")
+        if ayGoneDoc.get("id"):
+            arif.delete(f"{BASE}/accounting/receipts/{ayGoneDoc['id']}")
+        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
+        ayc, aybefore, ayboots = ay_counts(), ay_registers(), ay_boots()
+        psql(PRE_R56_ACCOUNTING)
+        psql("delete from money_allocations")
+        psql("delete from money_docs")
+        psql("delete from money_accounts")
+        psql("delete from accounting_config")
+        check(ay_counts() == ("0", "0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'moneyAccounts'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'moneyDocs'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'accountingConfig'") == "1",
+              f"the database is back in the pre-R5.6 shape ({ayc[0]} accounts, {ayc[1]} documents and {ayc[2]} "
+              f"allocations inside the snapshot, the four tables empty)")
+        restart()
+        check(ay_counts() == ayc,
+              f"the first boot moved every account, receipt and payment into the tables ({ayc[0]} accounts, "
+              f"{ayc[1]} documents, {ayc[2]} allocations and the configuration)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'moneyAccounts'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'moneyDocs'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'accountingConfig'") == "0",
+              "…and rewrote the snapshot without them")
+        check(ay_registers() == aybefore,
+              "…and serves the same registers, row for row — the accounts with their balances, both money registers "
+              "with their allocations, the configuration, the invoices they settled and a customer's statement")
+        check(psql(f"select count(*) from money_docs where id = '{ayGoneDoc.get('id')}'") == "0",
+              "a receipt deleted before the upgrade stays deleted — the mock kept no row for it either")
+        ayAfter = arif.post(f"{BASE}/accounting/receipts", json={**ayDrill, "amount": 25,
+                                                                "allocations": [{"docId": ayDrillInv["id"], "amount": 25}]})
+        aya = ayAfter.json() if ayAfter.status_code == 201 else {}
+        check(ayAfter.status_code == 201 and str(aya.get("id", "")) > str(ayGoneDoc.get("id", ""))
+              and aya.get("no") != ayGoneDoc.get("no"),
+              f"…but its id and its number stay retired ({ayGoneDoc.get('id')} {ayGoneDoc.get('no')} → "
+              f"{aya.get('id')} {aya.get('no')})")
+        if aya.get("id"):
+            arif.delete(f"{BASE}/accounting/receipts/{aya['id']}")
+        # the decisive one: a receipt on the upgraded database still settles its invoice
+        aySettleR = arif.post(f"{BASE}/accounting/receipts", json=ayDrill)
+        aySettle = aySettleR.json() if aySettleR.status_code == 201 else {}
+        check(aySettleR.status_code == 201
+              and psql(f"select trim_scale(allocated) from money_docs where id = '{aySettle.get('id')}'") == "500"
+              and psql(f"select count(*) from money_allocations where doc_id = '{aySettle.get('id')}'") == "1",
+              f"…and a receipt written on the upgraded database is stored with its allocation ({aySettleR.status_code})")
+        if aySettle.get("id"):
+            arif.patch(f"{BASE}/accounting/receipts/{aySettle['id']}", json={"process": "Approved"})
+            check(float(psql(f"select paid from sales where id = '{ayDrillInv['id']}'")) == jr2(ayDrillPaid + 500),
+                  f"…and approving it settles the invoice on the sales row, in the table it adopted "
+                  f"({ayDrillPaid} → {jr2(ayDrillPaid + 500)})")
+            arif.patch(f"{BASE}/accounting/receipts/{aySettle['id']}",
+                       json={"process": "Cancelled", "reason": f"R5.6 drill {TAG}"})
+            check(float(psql(f"select paid from sales where id = '{ayDrillInv['id']}'")) == ayDrillPaid,
+                  "…and cancelling it gives the settlement back")
+        ayboots_after, aynow = ay_boots(), ay_counts()
+        restart()
+        check(ay_counts() == aynow and (ayboots is None or ayboots_after == ayboots + 1)
+              and (ayboots is None or ay_boots() == ayboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        ayWrite = admin.put(f"{BASE}/accounting/config",
+                            json={"closedUpTo": ayCfg0.get("closedUpTo"), "allowAdvance": True, "autoAllocate": True})
+        check(ayWrite.status_code == 200
+              and psql("select count(*) from accounting_config where allow_advance") == "1",
+              f"and writes land in the tables on the upgraded database ({ayWrite.status_code})")
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 

@@ -44,8 +44,9 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | Price declarations (R5.5) | `production/boms`, `production/boms/{id}` | **native** — `boms` + `bom_inputs` + `bom_costs` (Mushak 4.3: the version in force is what a production batch is priced from) |
 | The production configuration (R5.5) | `production/config` | **native** — `production_config` (one row: the procedure a batch follows and the consumption it records) |
 | Work orders (R5.5) | `production/work-orders`, `production/work-orders/{id}` | **native** — `work_orders` + `work_order_lines` (the progress the approved batches have made is columns of the lines) |
+| Accounting (R5.6) | `accounting/accounts`, `accounting/accounts/{id}`, `accounting/receipts`, `accounting/receipts/{id}`, `accounting/payments`, `accounting/payments/{id}`, `accounting/open-invoices`, `accounting/statement`, `accounting/config` | **native** — `money_accounts`, `money_docs` + `money_allocations`, `accounting_config` (a settlement writes the invoice's `paid` and `due` with it) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: accounting, the VAT returns and the Mushak books, notifications, dashboard, search, import, the services… | 55 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| Everything else: the VAT returns and the Mushak books, treasury (TR-6), VDS (6.6), the VAT adjustments, notifications, dashboard, search, import, the services… | 46 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -528,10 +529,49 @@ work-order, declaration and configuration registers beside them.
   SKU's own counters), an invoice line changed the same way moves the lot it draws, and a challan's receipt changed
   in SQL moves the subcontracting register and leaves the lots alone (they read the batch's *lines*, not its totals).
   Those are the checks `api_native.py` adds.
-- **55 compat route modules are left, 61 native** — and production is out of `compat_state` entirely: the
+- **55 compat route modules were left, 61 native** — and production was out of `compat_state` entirely: the
   declarations, the configuration, the work orders and the batches are tables, and the two registers that watch them
   are derived from those tables. What is left is accounting, the VAT returns and the Mushak books, the dashboard,
   search, notifications, the bulk import and the services (R5.6).
+
+## R5.6 — accounting on its own tables
+
+`api/src/modules/accounting.ts` serves the nine accounting endpoints from **`money_accounts`**, **`money_docs`** +
+**`money_allocations`** and the one row of **`accounting_config`**: where the company's money is, what came in and what
+went out, and which invoices it settled. Both money kinds share one table (`kind` tells them apart, as it does for the
+transfers, the damage entries and the notes) because the register, the audit trail and a party's statement read them
+the same way. The rules are the mock's own (`src/app/api/v1/_r4.ts`, re-exported by `api/src/compat/entry.ts`), so the
+party and account checks, the cheque block, the allocation rules (`notOpen`, `duplicate`, `exceedsDue`,
+`overAllocated`, `advanceNotAllowed`), the closed-books check, the number series, the register's spec and its CSV
+columns, a party's statement with its ageing and the configuration's own rules cannot drift. Both sides were held
+against the same contract suite again — 676 checks with the nine routes served natively, 676 with the mock handlers
+serving them — and all 146 captured answers were identical.
+
+- **A settlement writes the invoices it moves, in the same transaction.** `paid` and `due` are columns of `sales` and
+  `purchases`, so approving a receipt settles the invoice on its own row as the money document is written — and
+  cancelling one, or a transaction that rolled back, puts those counters back. The write goes through the module that
+  owns each table (`applySaleSettlement` / `applyPurchaseSettlement`), exactly as a production batch writes the
+  counters an approval moves. That is what keeps the invoice registers, the open invoices and a party's statement
+  agreeing with the accounts — and what `settlementsOf`, the rule that refuses to cancel an invoice something has
+  settled, still reads through the mirror.
+- **A draft settles nothing.** Only the approval moves the money, so the checks read the invoice's row before and
+  after the transition rather than after the create.
+- **A balance is derived, never stored:** the opening balance plus every approved receipt less every approved payment
+  and treasury deposit, summed by the mock's own `accountRow`. Editing the opening balance moves the balance, which
+  is the point of it being derived.
+- **An account with transactions cannot be deleted** — only deactivated. One nothing quotes can be.
+- **`money_docs.no` is unique and never reused**, and a deleted draft keeps its row with `deleted_at`, so a later
+  document takes a new id *and* a new number.
+- **The in-memory copies stay**, because `settlementsOf`, the VAT returns, the VDS register, the compliance centre and
+  a party's credit all read them. Every native write goes through to the mirror, and a compat handler that writes
+  through the mock's array is written back to the rows.
+- **Upgrade:** the first boot on a database written before this slice moves the accounts, the receipts and the
+  payments with their allocations and the configuration out of `compat_state`, rewrites the snapshot without them and
+  lifts the `account`, `receipt` and `payment` counters from the highest id each table has held; restoring a pre-R5.6
+  backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI.
+- **46 compat route modules are left, 70 native.** What is left is the VAT side: the treasury deposits (TR-6), VDS
+  (6.6), the VAT adjustments, the Mushak 9.1 returns and the period lock, the compliance centre, and the Mushak books
+  — then the dashboard, search, notifications, the bulk import and the services.
 
 ## Tables
 
@@ -568,7 +608,11 @@ work-order, declaration and configuration registers beside them.
 | `production_config` (single row) | **R5.5:** how the factory produces — `procedure` (directStock / workOrder) and `consumption` (standard / actual), with who changed it last; `buildBatch` reads both |
 | `work_orders` | **R5.5:** production work orders (PW number unique) — the requisition, the issue and due dates, the process, the `status` the approved batches give it, who issued it, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired |
 | `work_order_lines` | **R5.5:** the finished goods a work order asks for — the quantity ordered and the progress the approved batches have made (issued, received, rejected, still owed), with checks that keep the two lifecycle columns and the quantities in agreement; primary key (work order, position) |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5) |
+| `money_accounts` | **R5.6:** the money accounts — bank, mobile wallet or cash box; the kind's own columns (branch and account type, wallet type and operator) guarded by checks; the balance is *derived*, not stored |
+| `money_docs` | **R5.6:** receipts (MR-) and payments (PV-) — `kind` tells them apart; the party as printed, the method, the account, the cheque block, the amount, the charge, what was allocated and what is on account, the process, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired; checks keep the cheque block with its method and the allocation within the amount |
+| `money_allocations` | **R5.6:** the invoices a receipt or payment settles — the invoice's id, number, date and total beside the amount set against it, one row per invoice; primary key (document, position) |
+| `accounting_config` (single row) | **R5.6:** how far the books are closed (`closed_up_to`), whether an advance is allowed and whether a new document pre-allocates the oldest invoices — a control on every money document written after it |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -611,7 +655,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 549 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 612 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -803,6 +847,29 @@ lot and not the branch split; a line of an invoice that draws a lot moves the lo
 same way moves the subcontracting register and leaves the lots alone** — because they read the batch's lines, not its
 totals — and putting each row back restores every number.
 
+And since R5.6 it checks accounting the same way. The accounts register answers every account with its balance —
+checked to be the opening balance plus what was received less what was paid out, and what was received checked against
+the same sum over `money_docs`; an account is created with its own balance and nothing through it, a duplicate number
+at the same provider is a 422, a mobile wallet is another kind and an account cannot change its kind (the schema
+validates before that rule, so the body the new kind needs has to be there first). The decisive checks are the ones
+that cross families. **A receipt settles an invoice: a draft leaves the invoice's `paid` untouched, approving it
+writes `paid` and `due` on the `sales` row in the same transaction as the money document — and due follows as
+`net_total − paid`** — so what is still open is what is left, a customer's statement carries the receipt and still
+reconciles, and cancelling it gives the settlement back. A payment does the same on the purchase side. A closed book,
+a future date, an account of the wrong kind, more allocated than the document took, more than the invoice has left, an
+invoice that is not open, the same invoice twice and no reference on a transfer are 422s from the mock's own rules.
+The register keeps its four facets and labels them, `?invoice=` keeps the receipts that settle one, the CSV names the
+invoices each settled, deleting a draft stamps the row and keeps its allocation, the next receipt takes a new id and a
+new number, and the database refuses a duplicate number too. The configuration is one row, an administrator's PUT
+replaces it, an approver is refused, and the books cannot be closed up to a future date. Plus the snapshot carrying
+none of the three collections, the demo accounts, receipts, payments and allocations seeded into their tables. And it
+**drills the same upgrade**: the database is rewritten into its pre-R5.6 shape (the accounts, the documents with
+their allocations and the configuration inside `compat_state`, the four tables empty), the API restarts, and the same
+accounts with their balances, both money registers, the configuration, the invoices and a customer's statement are
+required back row for row — with a receipt deleted before the upgrade staying deleted while its id and number stay
+retired, a receipt written on the upgraded database still settling its invoice on the adopted `sales` row, a second
+boot adopting nothing again, and writes landing in the tables.
+
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
 1. Starts a PostgreSQL 16 service, runs the full suite plus `api_native.py`, and checks that the migrations and the compat table are current.
@@ -880,7 +947,7 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | R5.3 | **done** — transfers and damage (`stock_documents` + `stock_document_lines`), sales (6.3, `sales` + `sale_lines` + `sale_realisations`), purchases incl. imports and services (`purchases` + `purchase_lines`), credit and debit notes (6.7/6.8, `notes` + `note_lines`) |
 | R5.4 | **done** — the derived stock: the opening entries (`opening_entries`) and the production batches (6.4, `batches` + `batch_lines` + `batch_consumption`) are rows, and since every family the branch split and an item's ledger add up is relational now, `stock` and `items/{id}/ledger` are served from those rows by the mock's own derivation. Next: the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting registers |
 | R5.5 | **done** — the rest of production: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`), the production configuration (`production_config`) and the work orders (`work_orders` + `work_order_lines`, whose progress the approved batches' rows are summed into) are rows, and the two registers derived from them — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) — are served from those rows by the mock's own derivation. Production is out of `compat_state` |
-| R5.6 | accounting (accounts, receipts/payments, allocations), VAT: 9.1 returns, period lock, treasury/TR-6, VDS/6.6, adjustments — then `compat_state` and the lock are removed and the API can scale out |
+| R5.6 | **in progress** — accounting is done: the accounts (`money_accounts`), the receipts and the payments with their allocations (`money_docs` + `money_allocations`, settling the invoice's `paid` and `due` in the same transaction) and the accounting configuration (`accounting_config`). Next: the VAT side — treasury deposits (TR-6), VDS (6.6), the VAT adjustments, the Mushak 9.1 returns and the period lock, the compliance centre and the Mushak books — then `compat_state` and the lock are removed and the API can scale out |
 
 Money columns will be `numeric(18,2)` (as `parties.credit_limit`, the `items` prices and `tariff_lines` already are),
 quantities `numeric(18,3)` (the units allow up to three decimals) and a declaration's coefficients `numeric(18,4)`
