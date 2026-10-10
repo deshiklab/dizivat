@@ -28,6 +28,7 @@ import { applySaleDelta, commitSaleDelta, saleDelta } from "./sales"
 import { applyStockDelta, commitStockDelta, stockDelta } from "./stock"
 import { applyBomDelta, applyConfigDelta, bomDelta, commitBomDelta, commitConfigDelta, configDelta } from "./production"
 import { applyWorkOrderDelta, commitWorkOrderDelta, markWorkOrders, workOrderDelta } from "./workorders"
+import { accountingConfigDelta, applyAccountingDeltas, commitAccountingConfigDelta, commitMoneyAccountDelta, commitMoneyDocDelta, markAccountingConfig, moneyAccountDelta, moneyDocDelta } from "./accounting"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
 interface Route { pattern: RegExp; names: string[]; statics: number; mod: Record<string, unknown> }
@@ -36,11 +37,12 @@ const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade",
 
 /** The JSONB document saved for the unported modules (units, parties, items, master items, the stock documents,
  *  the sales invoices, the purchases, both note families, the opening stock entries, the production batches, the
- *  price declarations with their configuration and the work orders have their own tables). */
+ *  price declarations with their configuration, the work orders, the money accounts, the receipts and the payments
+ *  and the accounting configuration have their own tables). */
 export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes,
-    openings, batches, boms, productionConfig, workOrders, ...rest } = G.__dzDb!
+    openings, batches, boms, productionConfig, workOrders, moneyAccounts, moneyDocs, accountingConfig, ...rest } = G.__dzDb!
   // R5.2/R5.3: a deleted party, sale or purchase is a `deleted_at` row, so the undo buffer keeps the rest only
   const kept = rest as { trash?: TrashEntry[] }
   kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale"
@@ -128,10 +130,12 @@ export class CompatService {
     const parts = partyDelta(), its = itemDelta(), masters = masterDelta(), stock = stockDelta(), sold = saleDelta()
     const bought = purchaseDelta(), noted = noteDelta(), opened = openingDelta(), made = batchDelta()
     const declared = bomDelta(), configured = configDelta(), ordered = workOrderDelta()
+    const accounted = { accounts: moneyAccountDelta(), docs: moneyDocDelta(), config: accountingConfigDelta() }
     if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
       && deltaEmpty(stock) && deltaEmpty(sold) && deltaEmpty(bought)
       && deltaEmpty(noted.credit) && deltaEmpty(noted.debit) && deltaEmpty(opened) && deltaEmpty(made)
-      && deltaEmpty(declared) && deltaEmpty(configured) && deltaEmpty(ordered)) return
+      && deltaEmpty(declared) && deltaEmpty(configured) && deltaEmpty(ordered)
+      && deltaEmpty(accounted.accounts) && deltaEmpty(accounted.docs) && deltaEmpty(accounted.config)) return
     let refreshed: Awaited<ReturnType<typeof applyWorkOrderDelta>> = []
     await db.transaction(async (tx) => {
       await lockState(tx) // cross-process: never overwrite a newer instance's re-seed with this process's state
@@ -148,6 +152,7 @@ export class CompatService {
       await applyBomDelta(tx, declared)
       await applyConfigDelta(tx, configured)
       refreshed = await applyWorkOrderDelta(tx, ordered)
+      await applyAccountingDeltas(tx, accounted)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
           .onConflictDoUpdate({ target: compatState.key, set: { data: JSON.parse(json) as unknown, updatedAt: new Date() } })
@@ -157,6 +162,8 @@ export class CompatService {
     commitPartyDelta(parts); commitItemDelta(its); commitMasterDelta(masters); commitStockDelta(stock)
     commitSaleDelta(sold); commitPurchaseDelta(bought); commitNoteDelta(noted); commitOpeningDelta(opened)
     commitBatchDelta(made); commitBomDelta(declared); commitConfigDelta(configured); commitWorkOrderDelta(ordered)
+    commitMoneyAccountDelta(accounted.accounts); commitMoneyDocDelta(accounted.docs); commitAccountingConfigDelta(accounted.config)
+    if (accounted.config.insert.length || accounted.config.update.length) markAccountingConfig()
     // the batches a compat handler wrote moved these work orders' progress: their rows are the new baseline too
     if (refreshed.length) markWorkOrders(refreshed)
     lastSaved = hash

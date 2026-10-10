@@ -199,6 +199,24 @@ export async function applySaleDelta(tx: Tx, d: SaleDelta) {
   }
 }
 
+/**
+ * R5.6: what a receipt moves on an invoice — `paid` and `due`, columns of this table. A settlement writes them with
+ * the money document, in its own transaction, so the invoice registers never disagree with the accounts.
+ */
+export async function applySaleSettlement(tx: Tx, rows: { id: string; paid: number; due: number }[]) {
+  for (const r of rows) await tx.update(sales).set({ paid: r.paid, due: r.due }).where(eq(sales.id, r.id))
+}
+/** The other direction: a transaction that rolled back must not leave the in-memory copies ahead of the rows. */
+export async function revertSaleSettlement(rows: { id: string; paid: number; due: number }[]) {
+  if (!rows.length) return
+  const fresh = await db.select({ id: sales.id, paid: sales.paid, due: sales.due })
+    .from(sales).where(inArray(sales.id, rows.map((r) => r.id)))
+  for (const r of fresh) {
+    const inv = mirror.findSale(r.id)
+    if (inv) { inv.paid = r.paid; inv.due = r.due }
+  }
+}
+
 /** Replaces an invoice's lines and proceeds entries with the ones it carries now, and reads all three back. */
 async function replaceChildren(tx: Tx, sale: Sale, row: SaleDb): Promise<Sale> {
   await tx.delete(saleLines).where(eq(saleLines.saleId, sale.id))

@@ -8,7 +8,10 @@
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
-import type { AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind, Unit, WorkOrder } from "@/lib/types"
+import type {
+  AccountingConfig, AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind,
+  TreasuryDeposit, Unit, VdsEntry, WorkOrder,
+} from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
 /** The undo buffer: deleted documents (compat state), deleted parties (R5.2) and deleted sales and purchases
@@ -28,6 +31,8 @@ interface Globals {
     transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; purchases: Purchase[]
     creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
     boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
+    moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
+    accountingConfig: AccountingConfig
     trash: TrashEntry[]
   }
   __dzUsers?: UserStore
@@ -59,6 +64,8 @@ export function restoreGlobals(s: {
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
   creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
   boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
+  moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
+  accountingConfig: AccountingConfig
   events: AuditEvent[]
 }) {
   // documents only: an older snapshot's deleted parties, sales and purchases are rebuilt from their `deleted_at` rows
@@ -69,6 +76,8 @@ export function restoreGlobals(s: {
     transfers: s.transfers, damages: s.damages, sales: s.sales, purchases: s.purchases,
     creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings, batches: s.batches,
     boms: s.boms, productionConfig: s.productionConfig, workOrders: s.workOrders,
+    moneyAccounts: s.moneyAccounts, moneyDocs: s.moneyDocs, treasury: s.treasury, vds: s.vds,
+    accountingConfig: s.accountingConfig,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
@@ -272,6 +281,46 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
+  /** R5.6: the money accounts — a receipt or payment names one, and the treasury deposits leave from one */
+  moneyAccounts: (): MoneyAccount[] => G.__dzDb!.moneyAccounts,
+  putMoneyAccounts(list: MoneyAccount[]) { const a = mirror.moneyAccounts(); a.splice(0, a.length, ...list) },
+  findMoneyAccount: (id: string) => mirror.moneyAccounts().find((a) => a.id === id),
+  putMoneyAccount(a: MoneyAccount) {
+    const list = mirror.moneyAccounts()
+    const cur = list.find((x) => x.id === a.id)
+    if (cur) replaceObject(cur, a)
+    else list.push(a)
+    return cur ?? a
+  },
+  removeMoneyAccount(id: string) {
+    const list = mirror.moneyAccounts()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.6: the receipts and the payments — what a party has paid, and what an invoice still owes */
+  moneyDocs: (): MoneyDoc[] => G.__dzDb!.moneyDocs,
+  putMoneyDocs(list: MoneyDoc[]) { const a = mirror.moneyDocs(); a.splice(0, a.length, ...list) },
+  findMoneyDoc: (idOrNo: string) => mirror.moneyDocs().find((m) => m.id === idOrNo || m.no === idOrNo),
+  putMoneyDoc(m: MoneyDoc) {
+    const list = mirror.moneyDocs()
+    const cur = list.find((x) => x.id === m.id)
+    if (cur) replaceObject(cur, m)
+    else list.push(m)
+    return cur ?? m
+  },
+  removeMoneyDoc(id: string) {
+    const list = mirror.moneyDocs()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.6: the treasury deposits (TR-6) and the VDS entries — a payment's statement and the 9.1 return read them */
+  treasury: (): TreasuryDeposit[] => G.__dzDb!.treasury,
+  putTreasury(list: TreasuryDeposit[]) { const a = mirror.treasury(); a.splice(0, a.length, ...list) },
+  vds: (): VdsEntry[] => G.__dzDb!.vds,
+  putVds(list: VdsEntry[]) { const a = mirror.vds(); a.splice(0, a.length, ...list) },
+  /** R5.6: the accounting configuration — one object, replaced in place so a receipt reads the closed books */
+  accountingConfig: (): AccountingConfig => G.__dzDb!.accountingConfig,
+  putAccountingConfig(c: AccountingConfig) { replaceObject(G.__dzDb!.accountingConfig, c) },
   /** R5.5: the production configuration — one object, replaced in place so `buildBatch` reads the new procedure */
   productionConfig: (): ProductionConfig => G.__dzDb!.productionConfig,
   putProductionConfig(c: ProductionConfig) { replaceObject(G.__dzDb!.productionConfig, c) },

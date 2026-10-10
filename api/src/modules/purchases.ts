@@ -197,6 +197,24 @@ export async function applyPurchaseDelta(tx: Tx, d: PurchaseDelta) {
   }
 }
 
+/**
+ * R5.6: what a payment moves on an invoice — `paid` and `due`, columns of this table. A settlement writes them with
+ * the money document, in its own transaction, so the invoice registers never disagree with the accounts.
+ */
+export async function applyPurchaseSettlement(tx: Tx, rows: { id: string; paid: number; due: number }[]) {
+  for (const r of rows) await tx.update(purchases).set({ paid: r.paid, due: r.due }).where(eq(purchases.id, r.id))
+}
+/** The other direction: a transaction that rolled back must not leave the in-memory copies ahead of the rows. */
+export async function revertPurchaseSettlement(rows: { id: string; paid: number; due: number }[]) {
+  if (!rows.length) return
+  const fresh = await db.select({ id: purchases.id, paid: purchases.paid, due: purchases.due })
+    .from(purchases).where(inArray(purchases.id, rows.map((r) => r.id)))
+  for (const r of fresh) {
+    const inv = mirror.findPurchase(r.id)
+    if (inv) { inv.paid = r.paid; inv.due = r.due }
+  }
+}
+
 /** Replaces a document's lines with the ones it carries now, and reads both back. */
 async function replaceChildren(tx: Tx, p: Purchase, row: PurchaseDb): Promise<Purchase> {
   await tx.delete(purchaseLines).where(eq(purchaseLines.purchaseId, p.id))

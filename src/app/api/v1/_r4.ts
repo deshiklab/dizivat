@@ -225,7 +225,7 @@ export function accountRow(a: MoneyAccount, src: AccountingSource = db): MoneyAc
   const dates = [...docs.map((m) => m.date), ...dep.map((t) => t.challanDate)].sort()
   return { ...a, inflow, outflow, balance: round2(a.openingBalance + inflow - outflow), lastDate: dates.at(-1), docs: docs.length + dep.length }
 }
-const accountSpec: QuerySpec<MoneyAccountRow> = {
+export const accountSpec: QuerySpec<MoneyAccountRow> = {
   search: (a) => `${a.provider} ${a.accountNo} ${a.owner} ${a.branch ?? ""} ${a.authorised ?? ""}`,
   facets: { kind: (a) => a.kind, status: (a) => (a.active ? "active" : "inactive") },
   totals: ["balance", "inflow", "outflow", "openingBalance"],
@@ -265,6 +265,13 @@ export function parseAccount(body: unknown, self?: MoneyAccount, src: Accounting
 export function accountDeleteRule(a: MoneyAccount, src: AccountingSource = db): RuleProblem | undefined {
   const used = src.moneyDocs.some((m) => m.accountId === a.id) || src.treasury.some((t) => t.accountId === a.id)
   return used ? { status: 409, title: `${accountRef(a)} has transactions — deactivate it instead.` } : undefined
+}
+/** The account's own trail — its history entry and the audit event, stamped by whoever writes it. */
+export const stampAccountHistory = (a: { history?: HistoryEntry[]; updatedAt?: string }, by: string,
+                                    action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) => {
+  a.history = [...(a.history ?? []), { at, by, action, note }]
+  a.updatedAt = at
+  return at
 }
 /** A new account's id: the next in the `ac` series, claimed separately so a create refused afterwards consumes nothing. */
 export const accountIdentity = () => ({ id: `ac${db.seq.account + 1}` })
@@ -422,13 +429,30 @@ export function moneyCancelRule(d: MoneyDoc, src: AccountingSource = db): RulePr
     ? { status: 409, title: `The books are closed up to ${src.accountingConfig.closedUpTo} — ${d.no} cannot be cancelled.` }
     : undefined
 }
+/** The document's own trail — its history entry and the audit event, stamped by whoever writes it. */
+export const stampMoneyHistory = (m: { history?: HistoryEntry[]; updatedAt?: string }, by: string,
+                                  action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) => {
+  m.history = [...(m.history ?? []), { at, by, action, note }]
+  m.updatedAt = at
+  return at
+}
+/** What an edit of a receipt or payment records in the audit trail. */
+export const MONEY_DIFF_FIELDS = ["date", "method", "accountName", "chequeNo", "chequeDate", "reference", "amount", "charge", "allocated", "note"]
+/** The register's CSV: one row per document, with the invoices it settles named on it. */
+export const moneyCsvColumns = (kind: MoneyKind) => [
+  { key: "date", label: "Date" }, { key: "no", label: kind === "receipt" ? "Receipt No" : "Voucher No" }, { key: "partyName", label: kind === "receipt" ? "Customer" : "Supplier" },
+  { key: "partyBin", label: "BIN" }, { key: "method", label: "Method" }, { key: "accountName", label: "Account" }, { key: "chequeNo", label: "Cheque No" }, { key: "reference", label: "Reference" },
+  { key: "amount", label: "Amount" }, { key: "charge", label: "Charge" }, { key: "allocated", label: "Allocated" }, { key: "unallocated", label: "On account" },
+  { key: "invoices", label: "Invoices", get: (m: MoneyDoc) => m.allocations.map((a) => `${a.docNo}:${a.amount}`).join("; ") }, { key: "process", label: "Process" },
+]
+export const moneyCsvName = (kind: MoneyKind, date = new Date().toISOString().slice(0, 10)) => `${kind === "receipt" ? "receipts" : "payments"}-${date}.csv`
 /** A new receipt's or payment's identity: the next id of its series and the next MR-/PV-MMYY####. */
 export const moneyIdentity = (kind: MoneyKind, date: string) => ({
   id: `${kind === "receipt" ? "mr" : "pv"}${db.seq[kind] + 1}`,
   no: nextNo(kind === "receipt" ? "MR" : "PV", kind, db.moneyDocs, date),
 })
 export const claimMoneyId = (kind: MoneyKind) => { db.seq[kind] += 1 }
-const moneySpec: QuerySpec<MoneyDoc> = {
+export const moneySpec: QuerySpec<MoneyDoc> = {
   search: (m) => `${m.no} ${m.partyName} ${m.partyBin} ${m.chequeNo ?? ""} ${m.reference ?? ""} ${m.allocations.map((a) => a.docNo).join(" ")}`,
   dateField: "date",
   facets: { process: (m) => m.process, method: (m) => m.method, party: (m) => m.partyId, account: (m) => m.accountId },

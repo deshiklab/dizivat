@@ -6,6 +6,8 @@ export { routeModules } from "./routes.gen"
 export { db, stockBranches, usedBranchIds, withStock } from "@/lib/mock/db"
 export { badUnit, unitUsage } from "@/lib/mock/units"
 export { auditStore, dhakaDay, diff } from "@/lib/mock/audit"
+export { cancelInput } from "@/lib/schemas"
+export { zodErrors } from "@/app/api/v1/_lib"
 export { tariff, TARIFF_FY } from "@/lib/mock/tariff"
 export { userStore, DEMO_PASSWORD } from "@/lib/mock/users"
 export { company } from "@/lib/mock/company"
@@ -95,6 +97,18 @@ export {
 // the progress the approved batches have made on it, the batches that block a cancellation or a deletion, the diff an
 // edit records, and the register's spec, its `?item=` filter and its CSV columns. The work orders live in
 // `work_orders` and their goods in `work_order_lines`; a batch reads the quantity one has left through the mirror.
+// R5.6: the accounting rules, shared the same way — the money accounts (what a balance is derived from), the
+// receipts and the payments with their allocations (what an invoice still owes), the party statement with its ageing,
+// and the configuration that closes the books. They read the parties, the invoices and the treasury and VDS entries,
+// which the native module hands them from the tables they live in.
+export {
+  ACCOUNT_CSV_COLUMNS, ACCOUNT_CSV_NAME, ACCOUNT_DIFF_FIELDS, accountDeleteRule, accountIdentity, accountSpec,
+  accountRef, accountRow, accountingConfigDiff, AccountingSource, ACCOUNTING_CONFIG_DIFF_FIELDS, buildAccountingConfig,
+  buildMoney, claimAccountId, claimMoneyId, closed, DEFAULT_ACCOUNTING_CONFIG, moneyApproveRule, moneyCancelRule,
+  MONEY_DIFF_FIELDS, moneyCsvColumns, moneyCsvName, moneyFacetLabels, moneyIdentity, moneyInvoiceFilter, moneySpec,
+  openInvoiceParams, openInvoices, parseAccount, stampMoneyHistory,
+  partyOf, settle, statement, statementCsvColumns, statementCsvName, statementParams, stampAccountHistory,
+} from "@/app/api/v1/_r4"
 export {
   approvedBatchLines, buildWorkOrder, claimWorkOrderId, refreshWorkOrder, woApproveRule, woBatchRow, woBatchRows,
   woBatches, woCancelRule, woCsvColumns, woCsvName, woCsvRows, woDeleteRule, woDiff, woDraftRule, woIdentity,

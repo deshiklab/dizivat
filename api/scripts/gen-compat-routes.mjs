@@ -39,6 +39,10 @@ export const NATIVE = [
   // R5.5: the two derived registers of production — the finished-goods lots and the subcontracting register add up
   // the batches and the invoices, so both are read back from the database as well
   "production/lots", "production/subcontract",
+  // R5.6: accounting — the money accounts (`money_accounts`), the receipts and the payments with the invoices they
+  // settle (`money_docs` + `money_allocations`) and the configuration that closes the books (`accounting_config`)
+  "accounting/accounts", "accounting/accounts/[id]", "accounting/receipts", "accounting/receipts/[id]",
+  "accounting/payments", "accounting/payments/[id]", "accounting/open-invoices", "accounting/statement", "accounting/config",
 ]
 
 const found = []

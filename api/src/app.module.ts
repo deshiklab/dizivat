@@ -3,6 +3,7 @@ import { APP_GUARD } from "@nestjs/core"
 import { sql } from "drizzle-orm"
 import { ACCESS_LOGGER, AuthGuard, SessionService } from "./common/auth"
 import { db } from "./db/client"
+import { AccountingConfigController, AccountingConfigService, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ReceiptsController, StatementController } from "./modules/accounting"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
 import { BatchesController, BatchesService } from "./modules/batches"
@@ -31,6 +32,7 @@ const NATIVE_CONTROLLERS = [
   OpeningsController,
   BatchesController,
   BomsController, ProductionConfigController, WorkOrdersController,
+  MoneyAccountsController, ReceiptsController, PaymentsController, OpenInvoicesController, StatementController, AccountingConfigController,
   StockController, ItemLedgerController, LotsController, SubcontractController,
   SalesController,
 ]
@@ -40,12 +42,14 @@ const NATIVE_CONTROLLERS = [
   providers: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
-    WorkOrdersService, DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService,
+    DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
-    WorkOrdersService, DerivedService, CompatService, BackupsService,
+    WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService, DerivedService,
+    CompatService, BackupsService,
   ],
 })
 class CoreModule {}
