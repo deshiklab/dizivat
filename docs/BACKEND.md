@@ -46,7 +46,8 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | Work orders (R5.5) | `production/work-orders`, `production/work-orders/{id}` | **native** — `work_orders` + `work_order_lines` (the progress the approved batches have made is columns of the lines) |
 | Accounting (R5.6) | `accounting/accounts`, `accounting/accounts/{id}`, `accounting/receipts`, `accounting/receipts/{id}`, `accounting/payments`, `accounting/payments/{id}`, `accounting/open-invoices`, `accounting/statement`, `accounting/config` | **native** — `money_accounts`, `money_docs` + `money_allocations`, `accounting_config` (a settlement writes the invoice's `paid` and `due` with it) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
-| Everything else: the VAT returns and the Mushak books, treasury (TR-6), VDS (6.6), the VAT adjustments, notifications, dashboard, search, import, the services… | 46 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| The NBR VAT documents (R5.6) | `vat/treasury`, `vat/treasury/{id}`, `vat/vds`, `vat/vds/{id}`, `vat/vds/eligible`, `vat/adjustments`, `vat/adjustments/{id}` | **native** — `treasury_deposits` (TR-6), `vds_entries` (Mushak 6.6), `vat_adjustments` (the 9.1 notes no book can derive); an approved certificate settles what it withholds, on the invoice's row |
+| Everything else: the VAT returns and the Mushak books, the compliance centre, the Mushak forms, notifications, dashboard, search, import, the services… | 39 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -573,6 +574,45 @@ serving them — and all 146 captured answers were identical.
   (6.6), the VAT adjustments, the Mushak 9.1 returns and the period lock, the compliance centre, and the Mushak books
   — then the dashboard, search, notifications, the bulk import and the services.
 
+## R5.6 — the NBR VAT documents on their own tables
+
+`api/src/modules/vat.ts` serves the treasury deposits (TR-6), the VDS certificates (Mushak 6.6) and the manual VAT
+adjustments (Mushak 9.1 notes 27 / 32 / 38 / 39 / 40, including R6.3's SD on the inputs of exported goods) from
+**`treasury_deposits`**, **`vds_entries`** and **`vat_adjustments`**. The three share one service and one controller
+base, because they share the draft → approved → cancelled state machine the mock's `lifecycle()` already gave them;
+what differs is the config each hands it. The rules are the mock's own (`src/app/api/v1/_r4.ts`, re-exported by
+`api/src/compat/entry.ts`) — what a body may hold, the economic code a head takes, the challan that must not be used
+twice, the invoice a certificate may be written against and how much VAT it still has to withhold, the challan a
+purchase certificate quotes, the six-month window an SD-on-exports claim has to land in, the period lock, the balance
+a deposit needs, the VDS entries that keep a challan from being cancelled, and each register's spec, CSV columns,
+name, facet labels and diff — so the two runtimes cannot drift. Both sides were held against the same contract suite
+again — 676 checks with the seven routes served natively, 676 with the mock handlers serving them — and all 106
+captured answers were identical.
+
+- **An approved certificate settles what it withholds, in the same transaction.** `paid` and `due` are columns of
+  `sales` and `purchases`, so the invoice is written with the certificate, and cancelling it gives the settlement
+  back — through the same `writeSettlement` / `revertSettlement` pair the receipts and the payments use. What a
+  certificate settled is a column of its own row (`settled`), so the certificate still says what it did after the
+  invoice has moved on.
+- **The economic code is not stored by hand:** it comes from the head and the company's zone (`economicCode`), the
+  way the mock filled it in, and a claim for SD on exported inputs keeps the purchase line, the export sale and the
+  quantity it covers with it (`sd_export`, JSONB) — which is why an approval re-checks the six-month window: another
+  claim may have used the quantity since the draft was saved.
+- **The period lock is the Mushak 9.1's**, read from the returns the compat layer still holds, so a native document
+  and a compat one are refused for exactly the same periods.
+- **Each number (TC-, VDS-, VA-MMYY####) is unique and never reused**, and a deleted draft keeps its row with
+  `deleted_at`, so a later document takes a new id *and* a new number.
+- **The in-memory copies stay**, because the Mushak 9.1 return, the compliance centre, a payment's statement and the
+  SD register still read them. Every native write goes through to the mirror, and a compat handler that writes
+  through the mock's array is written back to the rows.
+- **Upgrade:** the first boot on a database written before this slice moves the three collections out of
+  `compat_state`, rewrites the snapshot without them and lifts the `treasury`, `vds` and `adjustment` counters from
+  the highest id each table has held; restoring a pre-R5.6 backup into a fresh database adopts them the same way,
+  and `api_native.py` drills it in CI.
+- **39 compat route modules are left, 77 native.** What is left of the VAT side is the Mushak 9.1 returns with the
+  period lock, the compliance centre and the Mushak books — then the dashboard, search, notifications, the bulk
+  import and the services.
+
 ## Tables
 
 | Table | Purpose |
@@ -611,8 +651,11 @@ serving them — and all 146 captured answers were identical.
 | `money_accounts` | **R5.6:** the money accounts — bank, mobile wallet or cash box; the kind's own columns (branch and account type, wallet type and operator) guarded by checks; the balance is *derived*, not stored |
 | `money_docs` | **R5.6:** receipts (MR-) and payments (PV-) — `kind` tells them apart; the party as printed, the method, the account, the cheque block, the amount, the charge, what was allocated and what is on account, the process, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired; checks keep the cheque block with its method and the allocation within the amount |
 | `money_allocations` | **R5.6:** the invoices a receipt or payment settles — the invoice's id, number, date and total beside the amount set against it, one row per invoice; primary key (document, position) |
+| `treasury_deposits` | **R5.6:** a treasury challan (TR-6) — the head and its economic code, the tax period, the challan number (unique) and date, the bank, the company account the money left, the amount and the depositor; `deleted_at` keeps a deleted draft's id and number retired |
+| `vds_entries` | **R5.6:** a VDS certificate (Mushak 6.6) — the invoice it was written against, the party as printed, the value and VAT subject to VDS, the amount withheld and what it settled (`settled`), and the treasury challan a purchase certificate was deposited with; the challan block belongs to `purchase` |
+| `vat_adjustments` | **R5.6:** a manual VAT adjustment — the kind and the 9.1 note it lands in (27 / 32 / 38 / 39 / 40), the period, the amount and, for SD on the inputs of exported goods, the purchase line, the export sale and the quantity it covers (JSONB) |
 | `accounting_config` (single row) | **R5.6:** how far the books are closed (`closed_up_to`), whether an advance is allowed and whether a new document pre-allocates the oldest invoices — a control on every money document written after it |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6) |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -847,7 +890,7 @@ lot and not the branch split; a line of an invoice that draws a lot moves the lo
 same way moves the subcontracting register and leaves the lots alone** — because they read the batch's lines, not its
 totals — and putting each row back restores every number.
 
-And since R5.6 it checks accounting the same way. The accounts register answers every account with its balance —
+And since R5.6 it checks the accounting and the NBR VAT documents the same way. The accounts register answers every account with its balance —
 checked to be the opening balance plus what was received less what was paid out, and what was received checked against
 the same sum over `money_docs`; an account is created with its own balance and nothing through it, a duplicate number
 at the same provider is a 422, a mobile wallet is another kind and an account cannot change its kind (the schema
@@ -947,7 +990,7 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | R5.3 | **done** — transfers and damage (`stock_documents` + `stock_document_lines`), sales (6.3, `sales` + `sale_lines` + `sale_realisations`), purchases incl. imports and services (`purchases` + `purchase_lines`), credit and debit notes (6.7/6.8, `notes` + `note_lines`) |
 | R5.4 | **done** — the derived stock: the opening entries (`opening_entries`) and the production batches (6.4, `batches` + `batch_lines` + `batch_consumption`) are rows, and since every family the branch split and an item's ledger add up is relational now, `stock` and `items/{id}/ledger` are served from those rows by the mock's own derivation. Next: the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting registers |
 | R5.5 | **done** — the rest of production: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`), the production configuration (`production_config`) and the work orders (`work_orders` + `work_order_lines`, whose progress the approved batches' rows are summed into) are rows, and the two registers derived from them — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) — are served from those rows by the mock's own derivation. Production is out of `compat_state` |
-| R5.6 | **in progress** — accounting is done: the accounts (`money_accounts`), the receipts and the payments with their allocations (`money_docs` + `money_allocations`, settling the invoice's `paid` and `due` in the same transaction) and the accounting configuration (`accounting_config`). Next: the VAT side — treasury deposits (TR-6), VDS (6.6), the VAT adjustments, the Mushak 9.1 returns and the period lock, the compliance centre and the Mushak books — then `compat_state` and the lock are removed and the API can scale out |
+| R5.6 | **in progress** — accounting is done: the accounts (`money_accounts`), the receipts and the payments with their allocations (`money_docs` + `money_allocations`, settling the invoice's `paid` and `due` in the same transaction) and the accounting configuration (`accounting_config`); so are the treasury deposits (`treasury_deposits`), the VDS certificates (`vds_entries`, whose approval settles what it withholds on the invoice's row) and the VAT adjustments (`vat_adjustments`). Next: the Mushak 9.1 returns and the period lock, the compliance centre and the Mushak books — then `compat_state` and the lock are removed and the API can scale out |
 
 Money columns will be `numeric(18,2)` (as `parties.credit_limit`, the `items` prices and `tariff_lines` already are),
 quantities `numeric(18,3)` (the units allow up to three decimals) and a declaration's coefficients `numeric(18,4)`

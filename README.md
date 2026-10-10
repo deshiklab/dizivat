@@ -570,8 +570,38 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     restarted, and the same accounts, registers, configuration, invoices and statement are required back row for
     row, with a receipt on the upgraded database still settling its invoice on the adopted row).
     Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.6:** the VAT side — the treasury deposits (TR-6), VDS (Mushak 6.6), the VAT adjustments, the Mushak
-    9.1 returns with the period lock, the compliance centre and the Mushak books.
+  - **Next in R5.6:** the Mushak 9.1 returns with the period lock, the compliance centre and the Mushak books — the
+    treasury deposits, the VDS certificates and the VAT adjustments are the bullet below.
+
+- **R5.6 — Backend: the NBR VAT documents on their own tables (branch `r5-nestjs`):** the treasury deposits (TR-6
+  challans), the VDS certificates (Mushak 6.6) and the manual VAT adjustments (the Mushak 9.1 notes 27 / 32 / 38 /
+  39 / 40, including SD on the inputs of exported goods) leave the compat layer and move into
+  **`treasury_deposits`**, **`vds_entries`** and **`vat_adjustments`** — **39 route modules left, 77 native**. See
+  [docs/BACKEND.md › R5.6](docs/BACKEND.md#r56--the-nbr-vat-documents-on-their-own-tables).
+  - **One state machine, three tables:** the three families share the draft → approved → cancelled lifecycle the mock
+    gave them, and every rule behind it is the mock's own — the head and the economic code it fills in, a challan
+    number used twice, the VAT a certificate may still withhold from an invoice, the challan a purchase certificate
+    quotes, the six-month window an SD-on-exports claim has to land in, the period lock, the balance a deposit needs,
+    the VDS entries that keep a challan from being cancelled — so both runtimes answer alike, register for register.
+  - **An approval writes what it moves:** an approved certificate settles what it withholds on the invoice's own row,
+    in the same transaction as the certificate, and cancelling it gives the settlement back — the same way a
+    receipt's does. What it settled stays on the certificate.
+  - **Proved both ways, byte for byte:** 676 contract checks with the seven routes served natively, 676 again with the
+    mock handlers serving them, and **106 captured answers compared across the two configurations** — the three
+    registers with their filters, facets, sorts, ranges and CSVs, the eligible-invoice and SD registers, every
+    document by id, every create, edit, approve, cancel and delete with their 404s, 409s and 422s — **0 differences**.
+  - **Tests:** `api_native.py` 667 checks (+55: a draft is a row and its approval is a row; the balance a deposit
+    needs and the period lock it is refused in; a challan number used twice; a certificate limited to the VAT an
+    invoice still has to withhold, and the certificate that keeps a challan from being cancelled; a certificate's
+    approval settling the purchase on its own row and its cancellation giving it back; a note-27 adjustment and its
+    register; a deleted draft stamped so the next document takes a new id *and* a new number; the database refusing a
+    duplicate challan or certificate number; the officer and anonymous 403s; every register's facets, `?period=` and
+    CSV — and the **R5.6 VAT upgrade drill**: the database is rewritten into its pre-R5.6 shape (17 deposits, 63
+    certificates and 7 adjustments inside the snapshot, the three tables empty), the API restarted, and the same
+    registers are required back row for row, with a deposit deleted before the upgrade still deleted while its id and
+    its number stay retired, a certificate written afterwards settling its purchase on the adopted row, and a second
+    boot adopting nothing again). Contract unchanged: 676 checks / 226 endpoints.
+  - **Next in R5.6:** the Mushak 9.1 returns with the period lock, the compliance centre and the Mushak books.
 
 - **R5.5 — Backend: the lots and the subcontracting register, served from the tables (branch `r5-nestjs`):**
   `production/lots` and `production/subcontract` leave the compat layer — **55 route modules left, 61 native**, and

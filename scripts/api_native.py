@@ -334,6 +334,46 @@ PRE_R56_ACCOUNTING = f"""update compat_state set data = jsonb_set(data, '{{db}}'
     from accounting_config where id = 1)
 )) where key = 'main'"""
 
+# ── R5.6 upgrade drill: the NBR VAT documents ─────────────────────────────────────────────────────────────────
+# A database written before these had tables holds the treasury deposits, the VDS certificates and the VAT
+# adjustments inside compat_state. These statements rebuild that shape from the live tables — the stored row as the
+# compat world had it: camelCase fields, optional ones absent rather than null, timestamps in the ISO-8601 the
+# snapshot carries — so the first boot on this code has to adopt them. Nothing here ships: it is the inverse of the
+# VAT half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+TREASURY_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', t.id, 'no', t.no, 'head', t.head, 'code', t.code, 'taxPeriod', t.tax_period, 'challanNo', t.challan_no,
+    'challanDate', to_char(t.challan_date, 'YYYY-MM-DD'), 'mode', t.mode, 'bank', t.bank, 'bankBranch', t.bank_branch,
+    'district', t.district, 'bankAddress', t.bank_address, 'accountId', t.account_id, 'amount', t.amount,
+    'depositor', t.depositor, 'designation', t.designation, 'address', t.address, 'description', t.description,
+    'process', t.process, 'createdAt', """ + _ISO.format("t.created_at") + """, 'updatedAt', """
+                                                        + _ISO.format("t.updated_at") + """,
+    'cancelReason', t.cancel_reason, 'history', t.history)""") + ")")
+TREASURY_AGG = (f"(select coalesce(jsonb_agg({TREASURY_DOC} order by t.ord), '[]'::jsonb) "
+                f"from treasury_deposits t where t.deleted_at is null)")
+VDS_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', v.id, 'no', v.no, 'mode', v.mode, 'docId', v.doc_id, 'docNo', v.doc_no, 'challanNo', v.challan_no,
+    'docDate', to_char(v.doc_date, 'YYYY-MM-DD'), 'partyId', v.party_id, 'partyName', v.party_name,
+    'partyBin', v.party_bin, 'partyAddress', v.party_address, 'docValue', v.doc_value, 'docVat', v.doc_vat,
+    'amount', v.amount, 'certificateNo', v.certificate_no,
+    'certificateDate', to_char(v.certificate_date, 'YYYY-MM-DD'), 'taxPeriod', v.tax_period,
+    'treasuryId', v.treasury_id, 'treasuryChallan', v.treasury_challan, 'remark', v.remark, 'settled', v.settled,
+    'process', v.process, 'issuedBy', v.issued_by, 'createdAt', """ + _ISO.format("v.created_at") + """,
+    'updatedAt', """ + _ISO.format("v.updated_at") + """, 'cancelReason', v.cancel_reason, 'history', v.history)""") + ")")
+VDS_AGG = f"(select coalesce(jsonb_agg({VDS_DOC} order by v.ord), '[]'::jsonb) from vds_entries v where v.deleted_at is null)"
+ADJUSTMENT_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', a.id, 'no', a.no, 'kind', a.kind, 'note', a.note,
+    'issueDate', to_char(a.issue_date, 'YYYY-MM-DD'), 'taxPeriod', a.tax_period, 'amount', a.amount,
+    'description', a.description, 'reference', a.reference, 'sdExport', a.sd_export, 'process', a.process,
+    'issuedBy', a.issued_by, 'createdAt', """ + _ISO.format("a.created_at") + """, 'updatedAt', """
+                                          + _ISO.format("a.updated_at") + """,
+    'cancelReason', a.cancel_reason, 'history', a.history)""") + ")")
+ADJUSTMENT_AGG = (f"(select coalesce(jsonb_agg({ADJUSTMENT_DOC} order by a.ord), '[]'::jsonb) "
+                  f"from vat_adjustments a where a.deleted_at is null)")
+# the three collections back inside the snapshot (a deleted draft has no place there: the mock removed it for good)
+PRE_R56_VAT = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'treasury', {TREASURY_AGG}, 'vds', {VDS_AGG}, 'adjustments', {ADJUSTMENT_AGG}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -2814,6 +2854,210 @@ def run():
           and arif.get(f"{BASE}/accounting/accounts/{ayf.get('id')}").status_code == 404,
           "R5.6: an account nothing quotes is deleted")
 
+
+    # ── R5.6: the NBR VAT documents that are not invoices ────────────────────────────────────────────────────
+    print("R5.6: treasury deposits, VDS certificates and VAT adjustments are rows")
+    admin = session("admin")
+    # the demo company's clock says 2026-09-25, so 2026-09 is the current tax period: the last one whose Mushak 9.1
+    # return has not been submitted, and the only one a new document may be dated into
+    vdPeriod, vdDate = "2026-09", "2026-09-20"
+
+    vdTreasury = arif.get(f"{BASE}/vat/treasury", params={"size": 100}).json()
+    vdVds = arif.get(f"{BASE}/vat/vds", params={"size": 100}).json()
+    vdAdj = arif.get(f"{BASE}/vat/adjustments", params={"size": 100}).json()
+    check(vdTreasury["total"] >= 10 and set(vdTreasury["facets"]) == {"process", "head", "period", "mode"}
+          and all(vdTreasury["facets"]["head"].get(h, 0) >= 0 for h in ("vat", "vds", "sd")),
+          f"native (R5.6): the treasury register answers with its facets ({vdTreasury['total']} deposits)")
+    check(vdVds["total"] >= 50 and set(vdVds["facets"]) == {"process", "mode", "party", "period"}
+          and set(vdVds["facetLabels"]) == {"party"}
+          and all(vdVds["facets"]["mode"].get(m, 0) >= 0 for m in ("purchase", "sales")),
+          f"native (R5.6): the VDS register answers with its facets and names the parties ({vdVds['total']} entries)")
+    check(vdAdj["total"] >= 5 and set(vdAdj["facets"]) == {"process", "kind", "period"},
+          f"native (R5.6): the adjustment register answers with its facets ({vdAdj['total']} adjustments)")
+    if DB_URL:
+        check(psql("select count(*) from treasury_deposits where deleted_at is null") == str(vdTreasury["total"])
+              and psql("select count(*) from vds_entries where deleted_at is null") == str(vdVds["total"])
+              and psql("select count(*) from vat_adjustments where deleted_at is null") == str(vdAdj["total"]),
+              "R5.6: …and every one of them is a row in its own table")
+        check(psql("select count(*) from compat_state where data->'db' ? 'treasury'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'vds'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'adjustments'") == "0",
+              "R5.6: …and no longer inside the compat snapshot")
+    check(arif.get(f"{BASE}/vat/treasury", params={"format": "csv"}).text.splitlines()[0].lstrip("﻿").startswith("Challan date")
+          and arif.get(f"{BASE}/vat/vds", params={"format": "csv"}).headers.get("content-disposition", "").startswith('attachment; filename="vds-')
+          and "9.1 note" in arif.get(f"{BASE}/vat/adjustments", params={"format": "csv"}).text.splitlines()[0],
+          "R5.6: the three registers print their own CSV")
+    check(arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "sales"}).status_code == 200
+          and arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "purchase"}).status_code == 200,
+          "R5.6: the invoices a certificate may still be written against are read from the tables")
+
+    # a treasury deposit: created, approved, and refused when the account it leaves from cannot cover it
+    vdBank = min([a for a in arif.get(f"{BASE}/accounting/accounts", params={"size": 100}).json()["data"]
+                  if a["kind"] == "bank" and a["active"]], key=lambda a: a["balance"])
+    vdTBody = {"head": "vat", "taxPeriod": vdPeriod, "challanNo": f"R56-{TAG}-1", "challanDate": vdDate,
+               "mode": "online", "bank": "Sonali Bank", "bankBranch": "Motijheel", "district": "Dhaka",
+               "amount": 12500, "depositor": "Kanchanjhara Apparel", "address": "Gulshan",
+               "description": f"R5.6 deposit {TAG}", "process": "Created"}
+    vdT0 = arif.post(f"{BASE}/vat/treasury", json=vdTBody)
+    vdT = vdT0.json() if vdT0.status_code == 201 else {}
+    check(vdT0.status_code == 201 and vdT.get("no", "").startswith("TC-")
+          and vdT.get("process") == "Created" and vdT.get("history", [{}])[0].get("action") == "created",
+          f"native (R5.6): a treasury deposit is created and numbered ({vdT0.status_code} {vdT.get('no')})")
+    if DB_URL:
+        check(psql(f"select count(*) from treasury_deposits where id = '{vdT.get('id')}' and deleted_at is null") == "1"
+              and psql(f"select trim_scale(amount) from treasury_deposits where id = '{vdT.get('id')}'") == "12500",
+              "R5.6: …and it is a row in treasury_deposits, with the economic code its head takes")
+        check(psql(f"select code from treasury_deposits where id = '{vdT.get('id')}'")
+              == psql(f"select code from treasury_deposits where head = 'vat' and id <> '{vdT.get('id')}' limit 1"),
+              "R5.6: …the code is the head's, in the company's zone")
+    check(arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-1"}).status_code == 422
+          and arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-2", "challanDate": "2099-01-01"}).status_code == 422
+          and arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-2", "taxPeriod": "2099-01"}).status_code == 422,
+          "R5.6: a challan number twice, a challan in the future and a period outside the returns are refused")
+    check(arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-2", "taxPeriod": "2026-08"}).json()
+          .get("errors", {}).get("taxPeriod") == ["periodLocked"],
+          "R5.6: a deposit in a period whose Mushak 9.1 was submitted is refused with the mock's own 422")
+    vdPoor = arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-3", "amount": 50000000,
+                                                    "accountId": vdBank["id"], "process": "Approved"})
+    check(vdPoor.status_code == 409 and vdPoor.json().get("title", "").startswith("Not enough balance in"),
+          f"R5.6: approving one an account cannot cover is refused ({vdPoor.status_code})")
+    check(arif.patch(f"{BASE}/vat/treasury/{vdT.get('id')}", json={"process": "Approved"}).status_code == 200
+          and arif.get(f"{BASE}/vat/treasury/{vdT.get('id')}").json().get("process") == "Approved",
+          f"R5.6: a deposit is approved ({vdT.get('no')})")
+    if DB_URL:
+        check(psql(f"select count(*) from audit_events where entity = 'treasury' and entity_id = '{vdT.get('id')}'") == "2",
+              "R5.6: …and its creation and its approval are events in audit_events")
+    check(arif.put(f"{BASE}/vat/treasury/{vdT.get('id')}", json={**vdTBody, "amount": 9000}).status_code == 409
+          and arif.delete(f"{BASE}/vat/treasury/{vdT.get('id')}").status_code == 409,
+          "R5.6: an approved deposit can neither be edited nor deleted")
+    vdCancel = arif.patch(f"{BASE}/vat/treasury/{vdT.get('id')}", json={"process": "Cancelled", "reason": f"R5.6 {TAG}"})
+    check(vdCancel.status_code == 200 and vdCancel.json().get("process") == "Cancelled"
+          and vdCancel.json().get("cancelReason") == f"R5.6 {TAG}"
+          and arif.patch(f"{BASE}/vat/treasury/{vdT.get('id')}", json={"process": "Cancelled", "reason": f"R5.6 {TAG}"}).status_code == 409,
+          "R5.6: cancelling needs a reason, is recorded on the row, and does not happen twice")
+    if DB_URL:
+        check(psql(f"select cancel_reason from treasury_deposits where id = '{vdT.get('id')}'") == f"R5.6 {TAG}"
+              and psql(f"select count(*) from treasury_deposits where id = '{vdT.get('id')}' and deleted_at is null") == "1",
+              "R5.6: …the cancelled row is the one the register reads")
+
+    # a VDS certificate: written against an approved invoice, and settling part of what that invoice is due
+    vdPool = [e for e in arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "purchase"}).json() if e["remaining"] >= 100]
+    vdPick = vdPool[0] if vdPool else None
+    check(vdPick is not None, "R5.6: a purchase is left with VAT to withhold")
+    if vdPick:
+        vdBody = {"mode": "purchase", "docId": vdPick["id"], "amount": 100, "certificateNo": f"R56-{TAG}",
+                  "certificateDate": vdDate, "remark": f"R5.6 {TAG}", "process": "Created"}
+        vdV0 = arif.post(f"{BASE}/vat/vds", json=vdBody)
+        vdV = vdV0.json() if vdV0.status_code == 201 else {}
+        check(vdV0.status_code == 201 and vdV.get("docNo") == vdPick["no"] and vdV.get("docVat") == vdPick["vat"]
+              and vdV.get("partyName") and vdV.get("taxPeriod") == vdPeriod,
+              f"native (R5.6): a certificate is written against the invoice ({vdV0.status_code} {vdV.get('no')} on {vdV.get('docNo')})")
+        check(arif.post(f"{BASE}/vat/vds", json={**vdBody, "amount": vdPick["remaining"] + 5000}).json()
+              .get("errors", {}).get("amount") == ["exceedsVds"],
+              "R5.6: more than the VAT the invoice has left to withhold is refused")
+        check(arif.post(f"{BASE}/vat/vds", json={**vdBody, "certificateDate": "2000-01-01"}).json()
+              .get("errors", {}).get("certificateDate") == ["beforeInvoice"],
+              "R5.6: a certificate dated before its own invoice is refused")
+        check(arif.post(f"{BASE}/vat/vds", json={**vdBody, "treasuryId": "tc9999"}).json()
+              .get("errors", {}).get("treasuryId") == ["unknown"],
+              "R5.6: a challan that is not a VDS challan is refused")
+        vdPaid0 = float(psql(f"select paid from purchases where id = '{vdPick['id']}'")) if DB_URL else None
+        check(arif.patch(f"{BASE}/vat/vds/{vdV.get('id')}", json={"process": "Approved"}).status_code == 200,
+              f"R5.6: approving the certificate settles part of the invoice ({vdV.get('no')})")
+        if DB_URL:
+            check(psql(f"select trim_scale(settled) from vds_entries where id = '{vdV.get('id')}'") == "100"
+                  and float(psql(f"select paid from purchases where id = '{vdPick['id']}'")) == jr2(vdPaid0 + 100)
+                  and float(psql(f"select due from purchases where id = '{vdPick['id']}'"))
+                  == jr2(float(psql(f"select net_total from purchases where id = '{vdPick['id']}'")) - jr2(vdPaid0 + 100)),
+                  f"R5.6: …and the settlement is written on the purchase row with it (paid {vdPaid0} → {jr2(vdPaid0 + 100)})")
+            check(psql(f"select count(*) from audit_events where entity = 'vds' and entity_id = '{vdV.get('id')}'") == "2",
+                  "R5.6: …and the certificate's creation and approval are events in audit_events")
+        check(arif.patch(f"{BASE}/vat/vds/{vdV.get('id')}", json={"process": "Cancelled", "reason": f"R5.6 {TAG}"}).status_code == 200,
+              "R5.6: cancelling the certificate gives the settlement back")
+        # its own case: a challan in a period that is not locked, under the VDS head, quoted by a live certificate
+        vdQuoted0 = arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "head": "vds", "challanNo": f"R56-{TAG}-q",
+                                                           "process": "Approved"})
+        vdQuoted = vdQuoted0.json() if vdQuoted0.status_code == 201 else {}
+        vdQuote = arif.post(f"{BASE}/vat/vds", json={"mode": "purchase", "docId": vdPick["id"] if vdPick else "",
+                                                     "amount": 50, "certificateNo": f"R56-{TAG}-q",
+                                                     "certificateDate": vdDate, "treasuryId": vdQuoted.get("id"),
+                                                     "process": "Created"}) if vdQuoted.get("id") and vdPick else None
+        vdBlocked = (arif.patch(f"{BASE}/vat/treasury/{vdQuoted.get('id')}",
+                                json={"process": "Cancelled", "reason": f"R5.6 {TAG}"})
+                     if vdQuote is not None and vdQuote.status_code == 201 else None)
+        check(vdBlocked is not None and vdBlocked.status_code == 409
+              and "quote this challan" in vdBlocked.json().get("title", ""),
+              f"R5.6: a challan a VDS certificate still quotes cannot be cancelled "
+              f"({vdBlocked.status_code if vdBlocked else 'no case'})")
+        if vdQuote is not None and vdQuote.status_code == 201:
+            arif.delete(f"{BASE}/vat/vds/{vdQuote.json()['id']}")
+            check(arif.patch(f"{BASE}/vat/treasury/{vdQuoted.get('id')}",
+                             json={"process": "Cancelled", "reason": f"R5.6 {TAG}"}).status_code == 200,
+                  "R5.6: …once the certificate is gone, the challan can be")
+
+        if DB_URL:
+            check(float(psql(f"select paid from purchases where id = '{vdPick['id']}'")) == vdPaid0
+                  and psql(f"select trim_scale(coalesce(settled, 0)) from vds_entries where id = '{vdV.get('id')}'") == "0",
+              "R5.6: …the purchase's own row is exactly as open as it was")
+
+    # a VAT adjustment: the 9.1 note no book can derive
+    vdABody = {"kind": "otherIncrease", "issueDate": "2026-09-18", "taxPeriod": vdPeriod, "amount": 5000,
+               "description": f"R5.6 adjustment {TAG}", "reference": f"R56-{TAG}", "process": "Created"}
+    vdA0 = arif.post(f"{BASE}/vat/adjustments", json=vdABody)
+    vdA = vdA0.json() if vdA0.status_code == 201 else {}
+    check(vdA0.status_code == 201 and vdA.get("note") == 27 and vdA.get("no", "").startswith("VA-"),
+          f"native (R5.6): an adjustment is created and lands in its 9.1 note ({vdA0.status_code} {vdA.get('no')} → note {vdA.get('note')})")
+    check(arif.post(f"{BASE}/vat/adjustments", json={**vdABody, "issueDate": "2099-01-01"}).json()
+          .get("errors", {}).get("issueDate") == ["future"]
+          and arif.post(f"{BASE}/vat/adjustments", json={**vdABody, "kind": "sdExport"}).json()
+          .get("errors", {}).get("purchaseId") == ["required"],
+          "R5.6: a date in the future is refused, and a claim for SD on exported inputs needs its purchase line")
+    if DB_URL:
+        check(psql(f"select note from vat_adjustments where id = '{vdA.get('id')}'") == "27"
+              and psql(f"select count(*) from vat_adjustments where id = '{vdA.get('id')}' and deleted_at is null") == "1",
+              "R5.6: …and it is a row in vat_adjustments")
+    check(arif.patch(f"{BASE}/vat/adjustments/{vdA.get('id')}", json={"process": "Approved"}).status_code == 200
+          and arif.get(f"{BASE}/vat/adjustments/{vdA.get('id')}").json().get("process") == "Approved",
+          "R5.6: an adjustment is approved — nothing moves but its own state")
+    check(arif.patch(f"{BASE}/vat/adjustments/{vdA.get('id')}", json={"process": "Cancelled", "reason": f"R5.6 {TAG}"}).status_code == 200,
+          "R5.6: …and cancelled with a reason")
+
+    # drafts: deleted, stamped, and never replaced
+    vdGone = arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-9"})
+    vdg = vdGone.json() if vdGone.status_code == 201 else {}
+    check(vdGone.status_code == 201 and arif.delete(f"{BASE}/vat/treasury/{vdg.get('id')}").status_code == 200
+          and arif.get(f"{BASE}/vat/treasury/{vdg.get('id')}").status_code == 404,
+          f"R5.6: deleting a draft answers {{ok: true}} and takes it out of the register ({vdg.get('no')})")
+    if DB_URL:
+        check(psql(f"select count(*) from treasury_deposits where id = '{vdg.get('id')}' and deleted_at is not null") == "1",
+              "R5.6: …the row is stamped rather than removed, so its id and its number stay retired")
+        vdAgain = arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-9"})
+        vda = vdAgain.json() if vdAgain.status_code == 201 else {}
+        check(vdAgain.status_code == 201 and vda.get("id") != vdg.get("id") and vda.get("no") != vdg.get("no"),
+              f"R5.6: …so the next deposit takes a new id and a new number ({vdg.get('id')} {vdg.get('no')} → {vda.get('id')} {vda.get('no')})")
+        arif.delete(f"{BASE}/vat/treasury/{vda.get('id')}")
+        vdDupNo = subprocess.run(["psql", DB_URL, "-c",
+                                  "insert into treasury_deposits (id, no, head, code, tax_period, challan_no,"
+                                  " challan_date, mode, bank, bank_branch, district, amount, depositor, address,"
+                                  " description, process, created_at) select 'dupT" + TAG + "', no, head, code,"
+                                  " tax_period, challan_no, challan_date, mode, bank, bank_branch, district, amount,"
+                                  " depositor, address, description, process, created_at from treasury_deposits"
+                                  " where deleted_at is null limit 1"], capture_output=True, text=True)
+        check(vdDupNo.returncode != 0, "R5.6: the database refuses a duplicate challan number (unique index), not just the API")
+        vdDupVds = subprocess.run(["psql", DB_URL, "-c",
+                                   "insert into vds_entries (id, no, mode, doc_id, doc_no, challan_no, doc_date,"
+                                   " party_id, party_name, party_bin, party_address, doc_value, doc_vat, amount,"
+                                   " certificate_date, tax_period, process, issued_by, created_at) select 'dupV" + TAG + "',"
+                                   " no, mode, doc_id, doc_no, challan_no, doc_date, party_id, party_name, party_bin,"
+                                   " party_address, doc_value, doc_vat, amount, certificate_date, tax_period, process,"
+                                   " issued_by, created_at from vds_entries where deleted_at is null limit 1"],
+                                  capture_output=True, text=True)
+        check(vdDupVds.returncode != 0, "R5.6: …and a duplicate certificate number, the same way")
+    check(session("kamal").patch(f"{BASE}/vat/treasury/{vdT.get('id')}", json={"process": "Approved"}).status_code == 403
+          and session("kamal").get(f"{BASE}/vat/treasury", params={"size": 2}).status_code == 200,
+          "R5.6: approving needs doc.approve, and the register needs a session")
+    check(requests.get(f"{BASE}/vat/treasury").status_code == 401, "R5.6: …and a session is what the register answers to")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -3660,6 +3904,112 @@ def run():
         check(ayWrite.status_code == 200
               and psql("select count(*) from accounting_config where allow_advance") == "1",
               f"and writes land in the tables on the upgraded database ({ayWrite.status_code})")
+
+        # … and the NBR VAT documents, which the same release moved out: a database written before it holds the
+        # treasury deposits, the VDS certificates and the VAT adjustments inside compat_state. A draft deleted before
+        # the upgrade has no place there either, so what has to survive the round trip is the id counter and the
+        # number in the audit trail, not the row.
+        print("\nR5.6: upgrading a pre-R5.6 database moves the VAT documents into their tables")
+
+        def vd_counts():
+            return (psql("select count(*) from treasury_deposits where deleted_at is null"),
+                    psql("select count(*) from vds_entries where deleted_at is null"),
+                    psql("select count(*) from vat_adjustments where deleted_at is null"))
+
+        def vd_registers():
+            return {"treasury": arif.get(f"{BASE}/vat/treasury", params={"size": 200}).json(),
+                    "vds": arif.get(f"{BASE}/vat/vds", params={"size": 200}).json(),
+                    "adjustments": arif.get(f"{BASE}/vat/adjustments", params={"size": 200}).json(),
+                    "eligible": arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "purchase"}).json(),
+                    "sd": arif.get(f"{BASE}/vat/sd-eligible").json()}
+
+        def vd_boots():
+            """How many boots adopted a VAT collection — one `R5.6 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return fh.read().count("R5.6 upgrade:")
+
+        # its own fixtures: the main section's invoice may have had its VAT withheld already
+        vdDrillPool = [e for e in arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "purchase"}).json()
+                       if e["remaining"] >= 100]
+        vdDrillPick = vdDrillPool[0] if vdDrillPool else None
+        check(vdDrillPick is not None, "R5.6: a purchase is left with VAT the drill can withhold")
+        vdDrillBody = ({"mode": "purchase", "docId": vdDrillPick["id"] if vdDrillPick else "", "amount": 100,
+                        "certificateNo": f"R56-drill-{TAG}", "certificateDate": vdDate, "process": "Created"}
+                       if vdDrillPick else {})
+        # a deposit created and deleted before the rewind: what must survive is the id it claimed
+        vdGoneD = arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-drill"})
+        vdGoneDoc = vdGoneD.json() if vdGoneD.status_code == 201 else {}
+        check(vdGoneD.status_code == 201,
+              f"R5.6: the drill can draft a deposit ({vdGoneD.status_code} "
+              f"{json.dumps(vdGoneD.json().get('errors'))[:120] if vdGoneD.status_code != 201 else vdGoneDoc.get('no')})")
+        if vdGoneDoc.get("id"):
+            arif.delete(f"{BASE}/vat/treasury/{vdGoneDoc['id']}")
+        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
+        vdc, vdbefore, vdboots = vd_counts(), vd_registers(), vd_boots()
+        psql(PRE_R56_VAT)
+        psql("delete from vat_adjustments")
+        psql("delete from vds_entries")
+        psql("delete from treasury_deposits")
+        check(vd_counts() == ("0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'treasury'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'vds'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'adjustments'") == "1",
+              f"the database is back in the pre-R5.6 shape ({vdc[0]} deposits, {vdc[1]} certificates and "
+              f"{vdc[2]} adjustments inside the snapshot, the three tables empty)")
+        restart()
+        check(vd_counts() == vdc,
+              f"the first boot moved every deposit, certificate and adjustment into the tables ({vdc[0]} deposits, "
+              f"{vdc[1]} certificates, {vdc[2]} adjustments)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'treasury'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'vds'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'adjustments'") == "0",
+              "…and rewrote the snapshot without them")
+        check(vd_registers() == vdbefore,
+              "…and serves the same registers, row for row — the three of them, the invoices a certificate may still "
+              "be written against, and the SD-on-exports register that reads the adjustments")
+        check(psql(f"select count(*) from treasury_deposits where id = '{vdGoneDoc.get('id')}'") == "0",
+              "a deposit deleted before the upgrade stays deleted — the mock kept no row for it either")
+        vdAfter = arif.post(f"{BASE}/vat/treasury", json={**vdTBody, "challanNo": f"R56-{TAG}-drill"})
+        vdaf = vdAfter.json() if vdAfter.status_code == 201 else {}
+        check(vdAfter.status_code == 201 and str(vdaf.get("id", "")) > str(vdGoneDoc.get("id", ""))
+              and vdaf.get("no") != vdGoneDoc.get("no"),
+              f"…but its id and its number stay retired ({vdGoneDoc.get('id')} {vdGoneDoc.get('no')} → "
+              f"{vdaf.get('id')} {vdaf.get('no')})")
+        if vdaf.get("id"):
+            arif.delete(f"{BASE}/vat/treasury/{vdaf['id']}")
+        # the decisive one: a certificate approved on the upgraded database still settles its purchase
+        if vdDrillPick:
+            vdDrillPaid = float(psql(f"select paid from purchases where id = '{vdDrillPick['id']}'"))
+            vdSettleR = arif.post(f"{BASE}/vat/vds", json=vdDrillBody)
+            vdSettle = vdSettleR.json() if vdSettleR.status_code == 201 else {}
+            check(vdSettleR.status_code == 201
+                  and psql(f"select trim_scale(amount) from vds_entries where id = '{vdSettle.get('id')}'") == "100",
+                  f"…and a certificate written on the upgraded database is stored with the VAT it withholds "
+                  f"({vdSettleR.status_code})")
+            if vdSettle.get("id"):
+                arif.patch(f"{BASE}/vat/vds/{vdSettle['id']}", json={"process": "Approved"})
+                check(float(psql(f"select paid from purchases where id = '{vdDrillPick['id']}'")) == jr2(vdDrillPaid + 100)
+                      and psql(f"select trim_scale(settled) from vds_entries where id = '{vdSettle['id']}'") == "100",
+                      f"…and approving it settles the purchase on the row, in the table it adopted "
+                      f"({vdDrillPaid} → {jr2(vdDrillPaid + 100)})")
+                arif.patch(f"{BASE}/vat/vds/{vdSettle['id']}", json={"process": "Cancelled", "reason": f"R5.6 drill {TAG}"})
+                check(float(psql(f"select paid from purchases where id = '{vdDrillPick['id']}'")) == vdDrillPaid,
+                      "…and cancelling it gives the settlement back")
+        vdboots_after, vdnow = vd_boots(), vd_counts()
+        restart()
+        check(vd_counts() == vdnow and (vdboots is None or vdboots_after == vdboots + 1)
+              and (vdboots is None or vd_boots() == vdboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        vdWrite = arif.post(f"{BASE}/vat/adjustments", json={**vdABody, "reference": f"R56-{TAG}-drill"})
+        vdw = vdWrite.json() if vdWrite.status_code == 201 else {}
+        check(vdWrite.status_code == 201
+              and psql(f"select count(*) from vat_adjustments where id = '{vdw.get('id')}' and deleted_at is null") == "1",
+              f"and writes land in the tables on the upgraded database ({vdWrite.status_code})")
+        if vdw.get("id"):
+            arif.delete(f"{BASE}/vat/adjustments/{vdw['id']}")
+
     else:
         skipped("restart checks (API_RESTART_CMD not set)")
 
