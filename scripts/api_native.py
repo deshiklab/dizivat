@@ -7,7 +7,7 @@ Runs through the Next.js frontend (BASE_URL, default http://localhost:3000), whi
   SESSION_SECRET   enables the forged-token check (must equal the API's secret)
 Run on a freshly seeded database (`node api/dist/main.js --reset`); it creates its own users and records.
 """
-import base64, hashlib, hmac, json, math, os, subprocess, sys, time, uuid
+import base64, datetime, hashlib, hmac, json, math, os, subprocess, sys, time, uuid
 import requests
 
 BASE = os.environ.get("BASE_URL", "http://localhost:3000") + "/api/v1"
@@ -2473,6 +2473,12 @@ def run():
         scRec0 = float(psql(f"select total_receive from batches where id = '{scOne['id']}'"))
         scAt0 = psql(f"select coalesce({_ISO.format('received_at')}, '') from batches where id = '{scOne['id']}'")
         scLots0 = arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+        # clearing the receipt also clears the date the "days" are counted to, and the register then counts to the
+        # company's today — which a receipt may be *later* than (it stamps the real clock, TODAY is a demo date), so
+        # the days can go down as well as up; what has to hold is the rule: the days are between the issue date and
+        # the receipt, or between the issue date and today when there is none
+        scToday = arif.get(f"{BASE}/production/subcontract").json()["to"]
+        scWantDays = max(0, (datetime.date.fromisoformat(scToday) - datetime.date.fromisoformat(scOne["issueDate"])).days)
         psql(f"update batches set total_receive = {scNewRec}, received_at = null where id = '{scOne['id']}'")
         scMoved = [r for r in arif.get(f"{BASE}/production/subcontract",
                                        params={"from": "2025-01-01", "to": tdate}).json()["rows"] if r["id"] == scOne["id"]][0]
@@ -2484,12 +2490,15 @@ def run():
         if len(scLots0) != len(scLots1):
             scLotDiff.append((len(scLots0), len(scLots1)))
         check(scMoved["received"] == scNewRec and scMoved["pending"] == scNewPend
-              and scMoved["status"] != "returned" and scMoved["days"] >= scOne["days"]
+              and scMoved["status"] != "returned" and scMoved["days"] == scWantDays
+              and scMoved["issued"] == scOne["issued"] and scMoved["damaged"] == scOne["damaged"]
+              and scMoved["materialValue"] == scOne["materialValue"] and scMoved["value"] == scOne["value"]
               and scLotOf(scLots1) == scLotOf(scLots0) and not scLotDiff,
               f"R5.5: a challan's receipt changed in SQL alone moves the register at once ({scOne['received']} → "
               f"{scMoved['received']} returned, {scOne['pending']} → {scMoved['pending']} pending, "
-              f"{scOne['status']} → {scMoved['status']}, {scOne['days']} → {scMoved['days']} days) and leaves the "
-              f"lots alone ({json.dumps(scLotDiff)[:300] if scLotDiff else 'no lot moved'})")
+              f"{scOne['status']} → {scMoved['status']}, {scOne['days']} → {scMoved['days']} days counted to "
+              f"{scToday}) and leaves the lots alone "
+              f"({json.dumps(scLotDiff)[:300] if scLotDiff else 'no lot moved'})")
         psql(f"update batches set total_receive = {scRec0}, received_at = "
              + (f"'{scAt0}'" if scAt0 else "null") + f" where id = '{scOne['id']}'")
         scBack = [r for r in arif.get(f"{BASE}/production/subcontract",
@@ -2507,7 +2516,6 @@ def run():
 
     # R6.2: VAT officer — time-boxed, read-only, every read logged
     print("R6.2: VAT officer + backups")
-    import datetime
     admin = session("admin")
     dhaka = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=6)).date()
     oname = f"nbr{TAG}"
