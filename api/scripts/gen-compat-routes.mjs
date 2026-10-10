@@ -43,6 +43,10 @@ export const NATIVE = [
   // settle (`money_docs` + `money_allocations`) and the configuration that closes the books (`accounting_config`)
   "accounting/accounts", "accounting/accounts/[id]", "accounting/receipts", "accounting/receipts/[id]",
   "accounting/payments", "accounting/payments/[id]", "accounting/open-invoices", "accounting/statement", "accounting/config",
+  // R5.6: the NBR VAT documents that are not invoices — the treasury deposits (`treasury_deposits`), the VDS
+  // certificates (`vds_entries`) and the manual VAT adjustments (`vat_adjustments`)
+  "vat/treasury", "vat/treasury/[id]", "vat/vds", "vat/vds/[id]", "vat/vds/eligible",
+  "vat/adjustments", "vat/adjustments/[id]",
 ]
 
 const found = []

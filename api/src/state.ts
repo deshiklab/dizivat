@@ -10,7 +10,7 @@ import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
   AccountingConfig, AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind,
-  TreasuryDeposit, Unit, VdsEntry, WorkOrder,
+  TreasuryDeposit, Unit, VatAdjustment, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
@@ -32,6 +32,7 @@ interface Globals {
     creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
     boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
     moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
+    adjustments: VatAdjustment[]
     accountingConfig: AccountingConfig
     trash: TrashEntry[]
   }
@@ -65,6 +66,7 @@ export function restoreGlobals(s: {
   creditNotes: CreditNote[]; debitNotes: DebitNote[]; openings: OpeningEntry[]; batches: Batch[]
   boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
   moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
+  adjustments: VatAdjustment[]
   accountingConfig: AccountingConfig
   events: AuditEvent[]
 }) {
@@ -77,6 +79,7 @@ export function restoreGlobals(s: {
     creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings, batches: s.batches,
     boms: s.boms, productionConfig: s.productionConfig, workOrders: s.workOrders,
     moneyAccounts: s.moneyAccounts, moneyDocs: s.moneyDocs, treasury: s.treasury, vds: s.vds,
+    adjustments: s.adjustments,
     accountingConfig: s.accountingConfig,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
   }
@@ -313,11 +316,54 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
-  /** R5.6: the treasury deposits (TR-6) and the VDS entries — a payment's statement and the 9.1 return read them */
+  /** R5.6: the treasury deposits (TR-6) — what Mushak 9.1 counts as tax already paid, and what a VDS quotes */
   treasury: (): TreasuryDeposit[] => G.__dzDb!.treasury,
   putTreasury(list: TreasuryDeposit[]) { const a = mirror.treasury(); a.splice(0, a.length, ...list) },
+  findTreasury: (idOrNo: string) => mirror.treasury().find((t) => t.id === idOrNo || t.no === idOrNo),
+  putTreasuryDoc(t: TreasuryDeposit) {
+    const list = mirror.treasury()
+    const cur = list.find((x) => x.id === t.id)
+    if (cur) replaceObject(cur, t)
+    else list.push(t)
+    return cur ?? t
+  },
+  removeTreasury(id: string) {
+    const list = mirror.treasury()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.6: the VDS entries (Mushak 6.6) — an approved certificate settles part of an invoice */
   vds: (): VdsEntry[] => G.__dzDb!.vds,
   putVds(list: VdsEntry[]) { const a = mirror.vds(); a.splice(0, a.length, ...list) },
+  findVds: (idOrNo: string) => mirror.vds().find((v) => v.id === idOrNo || v.no === idOrNo),
+  putVdsDoc(v: VdsEntry) {
+    const list = mirror.vds()
+    const cur = list.find((x) => x.id === v.id)
+    if (cur) replaceObject(cur, v)
+    else list.push(v)
+    return cur ?? v
+  },
+  removeVds(id: string) {
+    const list = mirror.vds()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.6: the VAT adjustments — the 9.1 notes no book can derive, including SD on the inputs of exported goods */
+  adjustments: (): VatAdjustment[] => G.__dzDb!.adjustments,
+  putAdjustments(list: VatAdjustment[]) { const a = mirror.adjustments(); a.splice(0, a.length, ...list) },
+  findAdjustment: (idOrNo: string) => mirror.adjustments().find((a) => a.id === idOrNo || a.no === idOrNo),
+  putAdjustment(a: VatAdjustment) {
+    const list = mirror.adjustments()
+    const cur = list.find((x) => x.id === a.id)
+    if (cur) replaceObject(cur, a)
+    else list.push(a)
+    return cur ?? a
+  },
+  removeAdjustment(id: string) {
+    const list = mirror.adjustments()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
   /** R5.6: the accounting configuration — one object, replaced in place so a receipt reads the closed books */
   accountingConfig: (): AccountingConfig => G.__dzDb!.accountingConfig,
   putAccountingConfig(c: AccountingConfig) { replaceObject(G.__dzDb!.accountingConfig, c) },

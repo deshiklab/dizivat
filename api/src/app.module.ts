@@ -20,6 +20,7 @@ import { PurchasesController, PurchasesService } from "./modules/purchases"
 import { SalesController, SalesService } from "./modules/sales"
 import { WorkOrdersController, WorkOrdersService } from "./modules/workorders"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
+import { AdjustmentsController, AdjustmentsService, TreasuryController, TreasuryService, VdsController, VdsEligibleController, VdsService } from "./modules/vat"
 import { SEED_VERSION } from "./boot"
 
 export const VERSION = "0.15.0"
@@ -35,6 +36,9 @@ const NATIVE_CONTROLLERS = [
   MoneyAccountsController, ReceiptsController, PaymentsController, OpenInvoicesController, StatementController, AccountingConfigController,
   StockController, ItemLedgerController, LotsController, SubcontractController,
   SalesController,
+  // `vat/vds/eligible` is registered before `vat/vds/:id`: Express matches a dynamic segment first otherwise, and
+  // "eligible" would be read as a certificate number
+  TreasuryController, VdsEligibleController, VdsController, AdjustmentsController,
 ]
 
 @Global()
@@ -43,13 +47,13 @@ const NATIVE_CONTROLLERS = [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService,
-    DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    TreasuryService, VdsService, AdjustmentsService, DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
-    WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService, DerivedService,
-    CompatService, BackupsService,
+    WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService,
+    TreasuryService, VdsService, AdjustmentsService, DerivedService, CompatService, BackupsService,
   ],
 })
 class CoreModule {}

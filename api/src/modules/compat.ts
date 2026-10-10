@@ -1,5 +1,5 @@
 /**
- * Compat layer (R5.1): the ~70 mock route modules not yet ported run unchanged inside NestJS.
+ * Compat layer (R5.1): the 39 mock route modules not yet ported run unchanged inside NestJS.
  * Auth comes from the sessions table (via the session-user shim), and after every request the shared state is
  * saved to PostgreSQL (`compat_state` JSONB + forwarded audit events) in one transaction — so documents survive
  * restarts and redeploys. Registered last: native controllers always win.
@@ -29,6 +29,7 @@ import { applyStockDelta, commitStockDelta, stockDelta } from "./stock"
 import { applyBomDelta, applyConfigDelta, bomDelta, commitBomDelta, commitConfigDelta, configDelta } from "./production"
 import { applyWorkOrderDelta, commitWorkOrderDelta, markWorkOrders, workOrderDelta } from "./workorders"
 import { accountingConfigDelta, applyAccountingDeltas, commitAccountingConfigDelta, commitMoneyAccountDelta, commitMoneyDocDelta, markAccountingConfig, moneyAccountDelta, moneyDocDelta } from "./accounting"
+import { applyVatDocDeltas, commitVatDocDelta, vatDocDelta } from "./vat"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
 interface Route { pattern: RegExp; names: string[]; statics: number; mod: Record<string, unknown> }
@@ -37,12 +38,14 @@ const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade",
 
 /** The JSONB document saved for the unported modules (units, parties, items, master items, the stock documents,
  *  the sales invoices, the purchases, both note families, the opening stock entries, the production batches, the
- *  price declarations with their configuration, the work orders, the money accounts, the receipts and the payments
- *  and the accounting configuration have their own tables). */
+ *  price declarations with their configuration, the work orders, the money accounts, the receipts and the payments,
+ *  the accounting configuration, the treasury deposits, the VDS entries and the VAT adjustments have their own
+ *  tables). */
 export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes,
-    openings, batches, boms, productionConfig, workOrders, moneyAccounts, moneyDocs, accountingConfig, ...rest } = G.__dzDb!
+    openings, batches, boms, productionConfig, workOrders, moneyAccounts, moneyDocs, accountingConfig,
+    treasury, vds, adjustments, ...rest } = G.__dzDb!
   // R5.2/R5.3: a deleted party, sale or purchase is a `deleted_at` row, so the undo buffer keeps the rest only
   const kept = rest as { trash?: TrashEntry[] }
   kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale"
@@ -122,8 +125,8 @@ export class CompatService {
    *  any row of a ported collection a compat handler touched (R5.2: the bulk import creates customers, vendors and
    *  SKUs, and approving a document moves an item's counters; R5.3: a restored backup puts stock documents back and
    *  a bank file posts proceeds onto an export invoice, a restored backup puts purchases back; R5.5: a restored
-   *  backup puts price declarations and the production configuration back — all still through the in-memory
-   *  world). */
+   *  backup puts price declarations and the production configuration back; R5.6: a restored backup puts the treasury
+   *  deposits, the VDS entries and the VAT adjustments back — all still through the in-memory world). */
   async persist() {
     const json = compatSnapshot()
     const hash = createHash("sha1").update(json).digest("hex")
@@ -131,11 +134,13 @@ export class CompatService {
     const bought = purchaseDelta(), noted = noteDelta(), opened = openingDelta(), made = batchDelta()
     const declared = bomDelta(), configured = configDelta(), ordered = workOrderDelta()
     const accounted = { accounts: moneyAccountDelta(), docs: moneyDocDelta(), config: accountingConfigDelta() }
+    const vatted = vatDocDelta()
     if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
       && deltaEmpty(stock) && deltaEmpty(sold) && deltaEmpty(bought)
       && deltaEmpty(noted.credit) && deltaEmpty(noted.debit) && deltaEmpty(opened) && deltaEmpty(made)
       && deltaEmpty(declared) && deltaEmpty(configured) && deltaEmpty(ordered)
-      && deltaEmpty(accounted.accounts) && deltaEmpty(accounted.docs) && deltaEmpty(accounted.config)) return
+      && deltaEmpty(accounted.accounts) && deltaEmpty(accounted.docs) && deltaEmpty(accounted.config)
+      && deltaEmpty(vatted.treasury) && deltaEmpty(vatted.vds) && deltaEmpty(vatted.adjustment)) return
     let refreshed: Awaited<ReturnType<typeof applyWorkOrderDelta>> = []
     await db.transaction(async (tx) => {
       await lockState(tx) // cross-process: never overwrite a newer instance's re-seed with this process's state
@@ -153,6 +158,7 @@ export class CompatService {
       await applyConfigDelta(tx, configured)
       refreshed = await applyWorkOrderDelta(tx, ordered)
       await applyAccountingDeltas(tx, accounted)
+      await applyVatDocDeltas(tx, vatted)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
           .onConflictDoUpdate({ target: compatState.key, set: { data: JSON.parse(json) as unknown, updatedAt: new Date() } })
@@ -163,6 +169,7 @@ export class CompatService {
     commitSaleDelta(sold); commitPurchaseDelta(bought); commitNoteDelta(noted); commitOpeningDelta(opened)
     commitBatchDelta(made); commitBomDelta(declared); commitConfigDelta(configured); commitWorkOrderDelta(ordered)
     commitMoneyAccountDelta(accounted.accounts); commitMoneyDocDelta(accounted.docs); commitAccountingConfigDelta(accounted.config)
+    commitVatDocDelta(vatted)
     if (accounted.config.insert.length || accounted.config.update.length) markAccountingConfig()
     // the batches a compat handler wrote moved these work orders' progress: their rows are the new baseline too
     if (refreshed.length) markWorkOrders(refreshed)

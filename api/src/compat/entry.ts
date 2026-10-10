@@ -133,5 +133,23 @@ export {
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
 // duty per line) variants, priced by the same functions the mock and the static demo run.
 export { buildPurchaseFields } from "@/lib/mock/build"
+// R5.6: the NBR VAT documents' rules, shared the same way — the treasury deposits (TR-6), the VDS certificates
+// (Mushak 6.6) and the manual VAT adjustments. What a body may hold, the economic code a head takes, the challan that
+// must not be used twice, the invoices a certificate may still be written against and how much VAT each has left to
+// withhold, the treasury challan a purchase certificate quotes, the six-month window an SD-on-exports claim lands in,
+// the period lock, the balance a deposit needs, the VDS entries that keep a challan from being cancelled, the invoice
+// a certificate settles, and each register's spec, CSV columns, name, facet labels and diff. The documents themselves
+// live in `treasury_deposits`, `vds_entries` and `vat_adjustments`; the Mushak 9.1 return, the compliance centre and
+// a party's statement still read them through the mirror this module writes.
+export {
+  ADJUSTMENT_CSV_COLUMNS, ADJUSTMENT_DIFF_FIELDS, adjustmentApproveRule, adjustmentBuild, adjustmentIdentity,
+  adjustmentLockRule, adjustmentSpec, claimAdjustmentId, stampAdjustmentHistory,
+  claimTreasuryId, claimVdsId, stampTreasuryHistory, stampVdsHistory,
+  TREASURY_CSV_COLUMNS, TREASURY_DIFF_FIELDS, treasuryApproveRule, treasuryBuild, treasuryCancelRule, treasuryIdentity,
+  treasuryLockRule, treasurySpec,
+  VDS_CSV_COLUMNS, VDS_DIFF_FIELDS, vdsApproveRule, vdsBuild, vdsEligible, vdsFacetLabels, vdsIdentity, vdsLockRule,
+  vdsSettle, vdsSpec,
+  type VatSource,
+} from "@/app/api/v1/_r4"
 export { periodLocked } from "@/app/api/v1/_r4"
 export { branchLabels, postStock, stockShortfall } from "@/lib/mock/db"

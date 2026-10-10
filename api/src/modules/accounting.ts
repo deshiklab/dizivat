@@ -251,14 +251,14 @@ const splitSettled = (moved: (Sale | Purchase)[]) => ({
 })
 
 /** Writes the invoices a settlement moved, in the document's own transaction. */
-async function writeSettlement(tx: Tx, moved: (Sale | Purchase)[]) {
+export async function writeSettlement(tx: Tx, moved: (Sale | Purchase)[]) {
   const { sales: s, purchases: p } = splitSettled(moved)
   await applySaleSettlement(tx, s)
   await applyPurchaseSettlement(tx, p)
 }
 
 /** A transaction that rolled back: put the invoices' counters back the way the rows have them. */
-async function revertSettlement(moved: (Sale | Purchase)[]) {
+export async function revertSettlement(moved: (Sale | Purchase)[]) {
   const { sales: s, purchases: p } = splitSettled(moved)
   await revertSaleSettlement(s)
   await revertPurchaseSettlement(p)

@@ -10,11 +10,11 @@ import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
 import type {
   AccountingConfig, AuditEvent, Batch, Bom, CreditNote, Damage, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale,
-  StockDoc, Transfer, TreasuryDeposit, Unit, VdsEntry, WorkOrder
+  StockDoc, Transfer, TreasuryDeposit, Unit, VatAdjustment, VdsEntry, WorkOrder
 } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, compatState, items, masterItems, meta, noteLines, notes, openingEntries, parties, productionConfig, purchaseLines, purchases, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs } from "./db/schema"
+import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, compatState, items, masterItems, meta, noteLines, notes, openingEntries, parties, productionConfig, purchaseLines, purchases, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, vatAdjustments, vdsEntries } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -34,6 +34,10 @@ import {
   accountingConfigValues, applyAccountingDeltas, assembleMoneyDocs, markAccountingConfig, markMoneyAccounts, markMoneyDocs, moneyAccountValues, moneyAllocationValues, moneyDocValues,
   toAccountingConfig, toMoneyAccount,
 } from "./modules/accounting"
+import {
+  adjustmentValues, applyVatDocDeltas, markAdjustments, markTreasury, markVds, toAdjustment, toTreasury, toVds,
+  treasuryValues, vdsValues,
+} from "./modules/vat"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
@@ -120,13 +124,18 @@ async function seed(log: (m: string) => void) {
   // configuration that closes the books
   const demoAccounts: MoneyAccount[] = m.db.moneyAccounts
   const demoMoney: MoneyDoc[] = m.db.moneyDocs
+  // R5.6: the NBR VAT documents — the treasury deposits, the VDS certificates and the manual VAT adjustments
+  const demoDeposits: TreasuryDeposit[] = m.db.treasury
+  const demoCertificates: VdsEntry[] = m.db.vds
+  const demoAdjustments: VatAdjustment[] = m.db.adjustments
   const seededAt = new Date().toISOString()
   await db.transaction(async (tx) => {
     await lockState(tx, { checkEpoch: false }) // waits for any other instance's in-flight write (deploy overlap)
     // the append-only guard on audit_events lets this transaction (and only it) clear the table
     await tx.execute(sql`set local dizivat.reseed = 'on'`)
     for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "sales", "sale_lines", "sale_realisations", "purchases", "purchase_lines", "notes", "note_lines", "opening_entries", "batches", "batch_lines", "batch_consumption", "boms", "bom_inputs", "bom_costs", "production_config", "work_orders", "work_order_lines",
-      "money_accounts", "money_docs", "money_allocations", "accounting_config", "tariff_lines", "audit_events", "compat_state", "meta"])
+      "money_accounts", "money_docs", "money_allocations", "accounting_config", "treasury_deposits", "vds_entries", "vat_adjustments", "tariff_lines",
+      "audit_events", "compat_state", "meta"])
       await tx.execute(sql.raw(`delete from ${t}`))
     await tx.insert(users).values(m.userStore.users.map((u, i) => ({
       id: u.id, username: u.username, name: u.name, designation: u.designation, initials: u.initials, email: u.email, role: u.role,
@@ -165,6 +174,9 @@ async function seed(log: (m: string) => void) {
     const demoMoneyAllocationRows = demoMoney.flatMap(moneyAllocationValues)
     for (let i = 0; i < demoMoneyAllocationRows.length; i += 500) await tx.insert(moneyAllocations).values(demoMoneyAllocationRows.slice(i, i + 500))
     await tx.insert(accountingConfig).values(accountingConfigValues(m.db.accountingConfig))
+    for (let i = 0; i < demoDeposits.length; i += 500) await tx.insert(treasuryDeposits).values(demoDeposits.slice(i, i + 500).map(treasuryValues))
+    for (let i = 0; i < demoCertificates.length; i += 500) await tx.insert(vdsEntries).values(demoCertificates.slice(i, i + 500).map(vdsValues))
+    for (let i = 0; i < demoAdjustments.length; i += 500) await tx.insert(vatAdjustments).values(demoAdjustments.slice(i, i + 500).map(adjustmentValues))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -203,10 +215,13 @@ async function seed(log: (m: string) => void) {
   markMoneyAccounts(m.db.moneyAccounts)
   markMoneyDocs(m.db.moneyDocs)
   markAccountingConfig()
+  markTreasury(m.db.treasury)
+  markVds(m.db.vds)
+  markAdjustments(m.db.adjustments)
   G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
   markPersisted(events)
   markSaved(snapshot)
-  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${demoOpeningRows.length} opening entries, ${demoBatchRows.length} production batches, ${demoBomRows.length} price declarations, ${demoWorkOrderRows.length} work orders, ${demoMoney.length} receipts and payments, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${demoOpeningRows.length} opening entries, ${demoBatchRows.length} production batches, ${demoBomRows.length} price declarations, ${demoWorkOrderRows.length} work orders, ${demoMoney.length} receipts and payments, ${demoDeposits.length} treasury deposits, ${demoCertificates.length} VDS entries, ${demoAdjustments.length} VAT adjustments, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 async function restore(state: { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log: (m: string) => void) {
@@ -260,6 +275,12 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   const liveMoney = await assembleMoneyDocs(moneyDbRows.filter((r) => !r.deletedAt))
   const [accountingConfigRow] = await db.select().from(accountingConfig).where(eq(accountingConfig.id, 1))
   const accountingCfg: AccountingConfig = accountingConfigRow ? toAccountingConfig(accountingConfigRow) : { allowAdvance: true, autoAllocate: true }
+  const liveDeposits: TreasuryDeposit[] = (await db.select().from(treasuryDeposits).orderBy(asc(treasuryDeposits.ord)))
+    .filter((r) => !r.deletedAt).map(toTreasury)
+  const liveCertificates: VdsEntry[] = (await db.select().from(vdsEntries).orderBy(asc(vdsEntries.ord)))
+    .filter((r) => !r.deletedAt).map(toVds)
+  const liveAdjustments: VatAdjustment[] = (await db.select().from(vatAdjustments).orderBy(asc(vatAdjustments.ord)))
+    .filter((r) => !r.deletedAt).map(toAdjustment)
   // a note deleted before this release left no trace but its number in the audit trail; the stamped rows now hold
   // the ids, so the counter the mock keeps in `db.seq` is never lower than the highest id the table has seen
   const seq = (state.db as { seq?: Record<string, number> }).seq ?? {}
@@ -286,6 +307,13 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     const mine = moneyDbRows.filter((r) => r.kind === kind)
     seq[kind] = Math.max(seq[kind] ?? 0, mine.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
   }
+  // … and the VAT documents' the same way: a deleted draft's row holds its id, so no series ever repeats
+  seq.treasury = Math.max(seq.treasury ?? liveDeposits.length,
+    (await db.select().from(treasuryDeposits)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
+  seq.vds = Math.max(seq.vds ?? liveCertificates.length,
+    (await db.select().from(vdsEntries)).reduce((m, r) => Math.max(m, Number(r.id.slice(3)) || 0), 0))
+  seq.adjustment = Math.max(seq.adjustment ?? liveAdjustments.length,
+    (await db.select().from(vatAdjustments)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
   const [ep] = await db.select().from(meta).where(eq(meta.key, "seeded_at"))
   setEpoch(ep?.value)
   const raw = await db.execute(sql`select * from audit_events order by id`)
@@ -296,7 +324,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     sales: liveSales, saleTrash, purchases: livePurchases, purchaseTrash, creditNotes, debitNotes,
     openings: liveOpenings, batches: liveBatches, boms: liveBoms, productionConfig: config,
     workOrders: liveWorkOrders, moneyAccounts: liveAccounts, moneyDocs: liveMoney,
-    treasury: (state.db as { treasury?: TreasuryDeposit[] }).treasury ?? [], vds: (state.db as { vds?: VdsEntry[] }).vds ?? [],
+    treasury: liveDeposits, vds: liveCertificates, adjustments: liveAdjustments,
     accountingConfig: accountingCfg, events,
   })
   loadCompat()
@@ -318,6 +346,9 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   markMoneyAccounts(mirror.moneyAccounts())
   markMoneyDocs(mirror.moneyDocs())
   markAccountingConfig()
+  markTreasury(mirror.treasury())
+  markVds(mirror.vds())
+  markAdjustments(mirror.adjustments())
   markPersisted(events)
   const json = compatSnapshot()
   // an adopted snapshot still carries the adopted collections — replace it with the one this version writes. Under
@@ -333,13 +364,13 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     })
   }
   markSaved(json)
-  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 /** The collections R5.2, R5.3, R5.4 and R5.5 moved out of `compat_state` into their own tables. */
 const ADOPTED = ["customers", "vendors", "items", "masterItems", "transfers", "damages", "sales", "purchases",
   "creditNotes", "debitNotes", "openings", "batches", "boms", "productionConfig", "workOrders",
-  "moneyAccounts", "moneyDocs", "accountingConfig"] as const
+  "moneyAccounts", "moneyDocs", "accountingConfig", "treasury", "vds", "adjustments"] as const
 
 /**
  * Upgrade: a database written before these tables holds the collections inside `compat_state` (and deleted
@@ -356,6 +387,7 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
     damages?: StockDoc[]; sales?: Sale[]; purchases?: Purchase[]; creditNotes?: CreditNote[]; debitNotes?: DebitNote[]
     openings?: OpeningEntry[]; batches?: Batch[]; boms?: Bom[]; productionConfig?: ProductionConfig
     workOrders?: WorkOrder[]; moneyAccounts?: MoneyAccount[]; moneyDocs?: MoneyDoc[]; accountingConfig?: AccountingConfig
+    treasury?: TreasuryDeposit[]; vds?: VdsEntry[]; adjustments?: VatAdjustment[]
     trash?: TrashEntry[]
   }
   if (!ADOPTED.some((k) => Array.isArray(s[k]))) return false
@@ -406,6 +438,12 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
   const moneyRows = (s.moneyDocs ?? []).map(moneyDocValues)
   const moneyAllocationRows = (s.moneyDocs ?? []).flatMap(moneyAllocationValues)
   const accountingConfigRow = s.accountingConfig
+  const depositDocs: TreasuryDeposit[] = s.treasury ?? []
+  const certificateDocs: VdsEntry[] = s.vds ?? []
+  const adjustmentDocs: VatAdjustment[] = s.adjustments ?? []
+  const depositRows = depositDocs.map(treasuryValues)
+  const certificateRows = certificateDocs.map(vdsValues)
+  const adjustmentRows = adjustmentDocs.map(adjustmentValues)
   const [{ n: haveParties }] = await db.select({ n: sql<number>`count(*)::int` }).from(parties)
   const [{ n: haveItems }] = await db.select({ n: sql<number>`count(*)::int` }).from(items)
   const [{ n: haveMasters }] = await db.select({ n: sql<number>`count(*)::int` }).from(masterItems)
@@ -421,13 +459,18 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
   const [{ n: haveAccounts }] = await db.select({ n: sql<number>`count(*)::int` }).from(moneyAccounts)
   const [{ n: haveMoney }] = await db.select({ n: sql<number>`count(*)::int` }).from(moneyDocs)
   const [{ n: haveAccountingConfig }] = await db.select({ n: sql<number>`count(*)::int` }).from(accountingConfig)
+  const [{ n: haveDeposits }] = await db.select({ n: sql<number>`count(*)::int` }).from(treasuryDeposits)
+  const [{ n: haveCertificates }] = await db.select({ n: sql<number>`count(*)::int` }).from(vdsEntries)
+  const [{ n: haveAdjustments }] = await db.select({ n: sql<number>`count(*)::int` }).from(vatAdjustments)
   const moved: string[] = [], movedDocs: string[] = [], movedR54: string[] = [], movedR55: string[] = [], movedR56: string[] = []
   if ((!haveParties && partyRows.length) || (!haveItems && itemRows.length) || (!haveMasters && masterRows.length)
     || (!haveStock && stockRows.length) || (!haveSales && saleRows.length) || (!havePurchases && purchaseRows.length)
     || (!haveNotes && noteRows.length) || (!haveOpenings && openingRows.length)
     || (!haveBatches && batchRows.length) || (!haveBoms && bomRows.length) || (!haveConfig && configRow)
     || (!haveWorkOrders && workOrderRows.length) || (!haveAccounts && accountRows.length)
-    || (!haveMoney && moneyRows.length) || (!haveAccountingConfig && accountingConfigRow)) {
+    || (!haveMoney && moneyRows.length) || (!haveAccountingConfig && accountingConfigRow)
+    || (!haveDeposits && depositRows.length) || (!haveCertificates && certificateRows.length)
+    || (!haveAdjustments && adjustmentRows.length)) {
     await db.transaction(async (tx) => {
       await lockState(tx) // waits out any other instance's in-flight write; the epoch is not set yet
       if (!haveParties && partyRows.length) {
@@ -501,6 +544,18 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
       if (!haveAccountingConfig && accountingConfigRow) {
         await tx.insert(accountingConfig).values(accountingConfigValues(accountingConfigRow))
         movedR56.push("the accounting configuration")
+      }
+      if (!haveDeposits && depositRows.length) {
+        for (let i = 0; i < depositRows.length; i += 500) await tx.insert(treasuryDeposits).values(depositRows.slice(i, i + 500))
+        movedR56.push(`${depositRows.length} treasury deposits`)
+      }
+      if (!haveCertificates && certificateRows.length) {
+        for (let i = 0; i < certificateRows.length; i += 500) await tx.insert(vdsEntries).values(certificateRows.slice(i, i + 500))
+        movedR56.push(`${certificateRows.length} VDS entries`)
+      }
+      if (!haveAdjustments && adjustmentRows.length) {
+        for (let i = 0; i < adjustmentRows.length; i += 500) await tx.insert(vatAdjustments).values(adjustmentRows.slice(i, i + 500))
+        movedR56.push(`${adjustmentRows.length} VAT adjustments`)
       }
     })
     if (moved.length) log(`R5.2 upgrade: ${moved.join(", ")} moved out of compat_state into their own tables`)
