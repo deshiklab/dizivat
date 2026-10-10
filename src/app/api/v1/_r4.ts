@@ -16,8 +16,8 @@ import {
 } from "@/lib/r4"
 import { accountInput, accountingConfigInput, adjustmentInput, cancelInput, moneyInput, returnInput, treasuryInput, vatSettingsInput, vdsInput } from "@/lib/schemas"
 import type {
-  AccountingConfig, Allocation, AuditChange, AuditEntity, HistoryEntry, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, OpenInvoice, Party, PartyStatement, Process,
-  Purchase, ReturnView, Sale, StatementRow, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturn, VatReturnRow, VatSettings,
+  AccountingConfig, Allocation, AuditChange, AuditEntity, CreditNote, DebitNote, HistoryEntry, LateFiling, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, OpenInvoice, Party, PartyStatement, Process,
+  Purchase, ReturnAmendment, ReturnComputation, ReturnView, Sale, StatementRow, SubFormRow, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturn, VatReturnRow, VatSettings,
   VdsEligible, VdsEntry,
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
@@ -53,6 +53,19 @@ export interface VatSource extends AccountingSource {
   vatSettings: VatSettings
 }
 export const vatSource = (): VatSource => db
+/**
+ * R5.6: what the Mushak 9.1 rules read, as data — everything the VAT documents already asked for (the parties, the
+ * invoices, the accounts, the deposits, the certificates and the adjustments) plus the two note families a return
+ * nets off and the R6.6 applications a period may carry. The Next.js handlers pass their in-memory copies; the API
+ * passes what it read from the tables.
+ */
+export interface ReturnSource extends VatSource {
+  creditNotes: CreditNote[]; debitNotes: DebitNote[]
+  lateFilings: LateFiling[]; returnAmendments: ReturnAmendment[]
+}
+export const returnSource = (): ReturnSource => db
+/** What a draft return may be given — the type, the activities, the date it will be filed on and the manual notes. */
+export type ReturnFields = Pick<VatReturn, "type" | "activities" | "submissionDate" | "manual"> & { amendReason?: string }
 const invalid = (errors: Record<string, string[]>) => problem(422, "Validation failed", errors)
 const has = (e: Record<string, string[]>) => Object.keys(e).length > 0
 const ISO = /^\d{4}-\d{2}-\d{2}$/
@@ -927,66 +940,143 @@ export const adjustmentRoutes = lifecycle<VatAdjustment, AdjustmentFields>({
 
 /* ── Mushak 9.1 returns ────────────────────────────────────────────────── */
 
-const findReturn = (period: string) => db.returns.find((r) => r.period === period)
-function returnRow(r: VatReturn): VatReturnRow {
-  const c = r.snapshot ?? computeReturn(db, r.period, r.manual)
-  const due = returnDue(r.period, db.vatSettings)
+/**
+ * R5.6: one return per tax period, so the period *is* its id — there is no number series and no `process`. A return
+ * is a draft until it is submitted, and submitting one freezes the computation it was filed with (`snapshot`),
+ * which is why the period lock reads these and nothing else.
+ */
+export const findReturn = (period: string, src: ReturnSource = db) => src.returns.find((r) => r.period === period)
+/** The row the register prints: the totals the period computes to, its due date and whether it was filed late. */
+export function returnRow(r: VatReturn, src: ReturnSource = db): VatReturnRow {
+  const c = r.snapshot ?? computeReturn(src, r.period, r.manual)
+  const due = returnDue(r.period, src.vatSettings)
   return { ...r, snapshot: undefined, due, netPayable: c.payableVat, deposited: c.depositedVat, closing: c.closingVat, late: !!r.submissionDate && r.submissionDate > due }
 }
-export function taxPeriods(): TaxPeriod[] {
+/** Every tax period the company files for, with the state its return is in. */
+export function taxPeriods(src: ReturnSource = db): TaxPeriod[] {
   return periodsBetween(FIRST_RETURN, CURRENT).map((p) => {
-    const r = findReturn(p)
-    const due = returnDue(p, db.vatSettings)
+    const r = findReturn(p, src)
+    const due = returnDue(p, src.vatSettings)
     // R6.6: an approved / deemed Mushak 9.3 extension keeps an unfiled period "open" up to the allowed date
-    const extendedTo = extensionFor(p, db.lateFilings, db.vatSettings, TODAY)
+    const extendedTo = extensionFor(p, src.lateFilings, src.vatSettings, TODAY)
     const status = r?.status === "submitted" ? "submitted" : r ? "draft" : TODAY > (extendedTo ?? due) ? "overdue" : "open"
     return { period: p, due, status, returnId: r?.id, submittedAt: r?.submissionDate, locked: r?.status === "submitted", ...(extendedTo ? { extendedTo } : {}) }
   })
 }
-function returnView(period: string): ReturnView | null {
-  const r = findReturn(period)
-  if (!r) {
-    if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return null
-    const computation = computeReturn(db, period)
-    return { id: period, period, type: "original", activities: true, status: "draft", manual: EMPTY_MANUAL, createdAt: "", due: returnDue(period, db.vatSettings), netPayable: computation.payableVat, deposited: computation.depositedVat, closing: computation.closingVat, late: false, computation, live: true, notStarted: true, applications: applicationsOf(period) }
-  }
-  const computation = r.snapshot ?? computeReturn(db, period, r.manual)
-  return { ...returnRow(r), computation, live: !r.snapshot, applications: applicationsOf(period) }
-}
 /** R6.6: the period's Mushak 9.3 (latest that is not refused) and 9.4 applications. */
-function applicationsOf(period: string): NonNullable<ReturnView["applications"]> {
-  const ret = findReturn(period)
-  const lf = [...(db.lateFilings ?? [])].reverse().find((x) => x.period === period && x.status !== "rejected")
-  const lr = lf ? lateFilingRow(lf, ret, db.vatSettings, TODAY) : undefined
+export function applicationsOf(period: string, src: ReturnSource = db): NonNullable<ReturnView["applications"]> {
+  const ret = findReturn(period, src)
+  const lf = [...(src.lateFilings ?? [])].reverse().find((x) => x.period === period && x.status !== "rejected")
+  const lr = lf ? lateFilingRow(lf, ret, src.vatSettings, TODAY) : undefined
   return {
     ...(lr ? { late: { id: lr.id, no: lr.no, state: lr.state, effectiveDate: lr.effectiveDate } } : {}),
-    amendments: ret ? (db.returnAmendments ?? []).filter((a) => a.period === period).map((a) => { const x = amendmentRow(a, ret, db.returnAmendments, db.vatSettings, TODAY); return { id: x.id, no: x.no, state: x.state, direction: x.effect.direction } }) : [],
+    amendments: ret ? (src.returnAmendments ?? []).filter((a) => a.period === period).map((a) => { const x = amendmentRow(a, ret, src.returnAmendments, src.vatSettings, TODAY); return { id: x.id, no: x.no, state: x.state, direction: x.effect.direction } }) : [],
   }
 }
-function refundProblem(period: string, manual: VatReturn["manual"]) {
+/** One return with its computation: a period nothing has been filed for answers a live draft of one. */
+export function returnView(period: string, src: ReturnSource = db): ReturnView | null {
+  const r = findReturn(period, src)
+  if (!r) {
+    if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return null
+    const computation = computeReturn(src, period)
+    return { id: period, period, type: "original", activities: true, status: "draft", manual: EMPTY_MANUAL, createdAt: "", due: returnDue(period, src.vatSettings), netPayable: computation.payableVat, deposited: computation.depositedVat, closing: computation.closingVat, late: false, computation, live: true, notStarted: true, applications: applicationsOf(period, src) }
+  }
+  const computation = r.snapshot ?? computeReturn(src, period, r.manual)
+  return { ...returnRow(r, src), computation, live: !r.snapshot, applications: applicationsOf(period, src) }
+}
+/** The register: what it searches, the two facets it counts and the totals it prints. */
+export const returnSpec: QuerySpec<VatReturnRow> = {
+  search: (x) => `${x.period} ${periodLabel(x.period)} ${x.ackNo ?? ""}`,
+  facets: { status: (x) => x.status, type: (x) => x.type },
+  totals: ["netPayable", "deposited"],
+}
+/** …and the columns it prints (the note numbers are the Mushak 9.1's own). */
+export const RETURN_CSV_COLUMNS: { key: string; label: string; get?: (x: VatReturnRow) => unknown }[] = [
+  { key: "period", label: "Tax period", get: (x) => periodLabel(x.period) }, { key: "type", label: "Return type" }, { key: "status", label: "Status" },
+  { key: "submissionDate", label: "Submission date" }, { key: "due", label: "Due date" }, { key: "netPayable", label: "Net payable VAT (50)" },
+  { key: "deposited", label: "VAT deposited (58)" }, { key: "closing", label: "Closing balance (65)" }, { key: "ackNo", label: "Acknowledgement" },
+]
+export const returnCsvName = (date = new Date().toISOString().slice(0, 10)) => `vat-returns-${date}`
+/** What an edit records in the audit trail. */
+export const RETURN_DIFF_FIELDS = ["type", "activities", "submissionDate", "manual.interestVat", "manual.interestSd",
+  "manual.penaltyLate", "manual.penaltyOther", "manual.refund", "manual.refundVat"]
+
+/** Starting a return: a period the company files for, in order, and not started twice. */
+export function returnCreateRule(period: string | undefined, src: ReturnSource = db): RuleProblem | { period: string } {
+  if (!period || !PERIOD_RE.test(period)) return invalidRule({ period: ["required"] })
+  if (period < FIRST_RETURN || period > CURRENT) return invalidRule({ period: ["outOfRange"] })
+  if (findReturn(period, src)) return { status: 409, title: `A return for ${periodLabel(period)} already exists.` }
+  const prev = prevPeriod(period)
+  if (prev >= FIRST_RETURN && findReturn(prev, src)?.status !== "submitted") return { status: 409, title: `Submit the ${periodLabel(prev)} return first — returns are filed in order.` }
+  return { period }
+}
+/** Editing a draft: the submission date has to fall after the period ends, and a refund cannot exceed the balance. */
+export function returnEditRule(period: string, body: unknown, src: ReturnSource = db):
+  RuleProblem | { fields: ReturnFields; changes: ReturnType<typeof diff> } {
+  const r = findReturn(period, src)
+  if (!r) return { status: 404, title: `No return started for ${periodLabel(period)}` }
+  if (r.status !== "draft") return { status: 409, title: `The ${periodLabel(period)} return has been submitted — file an amended return in the NBR portal.` }
+  const parsed = returnInput.safeParse(body)
+  if (!parsed.success) return { status: 422, title: "Validation failed", errors: zodErrors(parsed.error) }
+  const d = parsed.data
+  if (d.submissionDate && d.submissionDate <= periodEnd(period)) return invalidRule({ submissionDate: ["beforePeriodEnd"] })
+  const rp = refundProblem(period, d.manual, src); if (rp) return rp
+  const before = structuredClone(r)
+  const fields: ReturnFields = { type: d.type, amendReason: d.type === "amended" ? d.amendReason : undefined, activities: d.activities, submissionDate: d.submissionDate || undefined, manual: d.manual }
+  return { fields, changes: diff(before, { ...r, ...fields }, RETURN_DIFF_FIELDS) }
+}
+/**
+ * Submitting: the period has to be over, the previous return filed, the date real and not in the future, a refund
+ * within the closing balance, and note 58 has to cover note 50 — the treasury deposits of the period pay what the
+ * return says is due, so a shortfall is a 409 that names the amount and the economic code. What the caller has to
+ * store with the submission is returned: the computation it freezes, the type (an original filed late is a "late"
+ * return) and the acknowledgement number.
+ */
+export function returnSubmitRule(body: { action?: string }, period: string, src: ReturnSource = db):
+  RuleProblem | { computation: ReturnComputation; type: VatReturn["type"]; ackNo: string } {
+  const r = findReturn(period, src)
+  if (!r) return { status: 404, title: `No return started for ${periodLabel(period)}` }
+  if (body.action !== "submit") return { status: 400, title: "action must be submit" }
+  if (r.status === "submitted") return { status: 409, title: `The ${periodLabel(period)} return was already submitted.` }
+  if (TODAY <= periodEnd(period)) return { status: 409, title: `The tax period ${periodLabel(period)} ends on ${periodEnd(period)} — the return can be submitted from the next day.` }
+  const prev = prevPeriod(period)
+  if (prev >= FIRST_RETURN && findReturn(prev, src)?.status !== "submitted") return { status: 409, title: `Submit the ${periodLabel(prev)} return first.` }
+  if (!r.submissionDate) return invalidRule({ submissionDate: ["required"] })
+  if (r.submissionDate > TODAY) return invalidRule({ submissionDate: ["future"] })
+  const rp = refundProblem(period, r.manual, src); if (rp) return rp
+  const c = computeReturn(src, period, r.manual)
+  const zone = src.vatSettings.zoneCode
+  if (c.shortVat > 0 || c.shortSd > 0) {
+    const parts = [c.shortVat > 0 ? `৳${c.shortVat.toLocaleString("en-IN")} VAT under ${economicCode("vat", zone)}` : "", c.shortSd > 0 ? `৳${c.shortSd.toLocaleString("en-IN")} SD under ${economicCode("sd", zone)}` : ""].filter(Boolean)
+    return { status: 409, title: `Deposit ${parts.join(" and ")} (TR-6) before submitting — note 58 must cover note 50.` }
+  }
+  const type: VatReturn["type"] = r.type === "original" && r.submissionDate > returnDue(period, src.vatSettings) ? "late" : r.type
+  const ackNo = `NBR-91-${period.replace("-", "")}-${String(900_000 + src.returns.length * 1_117).padStart(7, "0")}`
+  return { computation: c, type, ackNo }
+}
+/** Deleting: a submitted return cannot be — an amended one has to be filed in the NBR portal instead. */
+export function returnDeleteRule(period: string, src: ReturnSource = db): RuleProblem | null {
+  const r = findReturn(period, src)
+  if (!r) return { status: 404, title: `No return started for ${periodLabel(period)}` }
+  if (r.status !== "draft") return { status: 409, title: "Submitted returns cannot be deleted." }
+  return null
+}
+/** A refund cannot be larger than the balance the period is closing with. */
+export function refundProblem(period: string, manual: VatReturn["manual"], src: ReturnSource = db): RuleProblem | null {
   if (!manual.refund) return null
-  const avail = computeReturn(db, period, { ...manual, refund: false, refundVat: 0, refundSd: 0 })
+  const avail = computeReturn(src, period, { ...manual, refund: false, refundVat: 0, refundSd: 0 })
   const errors: Record<string, string[]> = {}
   if (manual.refundVat > Math.max(0, avail.closingVat) + 0.004) errors["manual.refundVat"] = ["refundExceeds"]
   if (manual.refundSd > Math.max(0, avail.closingSd) + 0.004) errors["manual.refundSd"] = ["refundExceeds"]
-  return has(errors) ? invalid(errors) : null
+  return has(errors) ? invalidRule(errors) : null
 }
+
 export const returnListRoutes = {
   GET: withAuth(null, async (req) => {
     const sp = new URL(req.url).searchParams
     if (!sp.get("sort")) sp.set("sort", "period.desc")
-    const r = runQuery(db.returns.map(returnRow), sp, {
-      search: (x) => `${x.period} ${periodLabel(x.period)} ${x.ackNo ?? ""}`,
-      facets: { status: (x) => x.status, type: (x) => x.type },
-      totals: ["netPayable", "deposited"],
-    })
-    if (sp.get("format") === "csv") {
-      return csvResponse(toCSV(r.all, [
-        { key: "period", label: "Tax period", get: (x) => periodLabel(x.period) }, { key: "type", label: "Return type" }, { key: "status", label: "Status" },
-        { key: "submissionDate", label: "Submission date" }, { key: "due", label: "Due date" }, { key: "netPayable", label: "Net payable VAT (50)" },
-        { key: "deposited", label: "VAT deposited (58)" }, { key: "closing", label: "Closing balance (65)" }, { key: "ackNo", label: "Acknowledgement" },
-      ]), `vat-returns-${new Date().toISOString().slice(0, 10)}.csv`)
-    }
+    const r = runQuery(db.returns.map((x) => returnRow(x)), sp, returnSpec)
+    if (sp.get("format") === "csv") return csvResponse(toCSV(r.all, RETURN_CSV_COLUMNS), `${returnCsvName()}.csv`)
     await delay()
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { all, ...page } = r
@@ -994,15 +1084,12 @@ export const returnListRoutes = {
   }),
   POST: withAuth("doc.create", async (req, _ctx, user) => {
     const { period } = (await req.json().catch(() => ({}))) as { period?: string }
-    if (!period || !PERIOD_RE.test(period)) return invalid({ period: ["required"] })
-    if (period < FIRST_RETURN || period > CURRENT) return invalid({ period: ["outOfRange"] })
-    if (findReturn(period)) return problem(409, `A return for ${periodLabel(period)} already exists.`)
-    const prev = prevPeriod(period)
-    if (prev >= FIRST_RETURN && findReturn(prev)?.status !== "submitted") return problem(409, `Submit the ${periodLabel(prev)} return first — returns are filed in order.`)
-    const r: VatReturn = { id: period, period, type: "original", activities: true, status: "draft", manual: { ...EMPTY_MANUAL }, createdAt: new Date().toISOString(), history: [] }
+    const rule = returnCreateRule(period)
+    if ("status" in rule) return ruleResponse(rule)
+    const r: VatReturn = { id: rule.period, period: rule.period, type: "original", activities: true, status: "draft", manual: { ...EMPTY_MANUAL }, createdAt: new Date().toISOString(), history: [] }
     db.returns.push(r)
-    history("vatReturn", r as unknown as LifeDoc, user.name, "created", undefined, undefined, `9.1 · ${periodLabel(period)}`, period)
-    return json(returnView(period), { status: 201 })
+    history("vatReturn", r as unknown as LifeDoc, user.name, "created", undefined, undefined, `9.1 · ${periodLabel(rule.period)}`, rule.period)
+    return json(returnView(rule.period), { status: 201 })
   }),
 }
 type PCtx = { params: Promise<{ period: string }> }
@@ -1015,113 +1102,120 @@ export const returnDocRoutes = {
   }),
   PUT: withAuth<PCtx>("doc.edit", async (req, { params }, user) => {
     const { period } = await params
-    const r = findReturn(period)
-    if (!r) return problem(404, `No return started for ${periodLabel(period)}`)
-    if (r.status !== "draft") return problem(409, `The ${periodLabel(period)} return has been submitted — file an amended return in the NBR portal.`)
-    const parsed = returnInput.safeParse(await req.json().catch(() => ({})))
-    if (!parsed.success) return zodProblem(parsed.error)
-    const d = parsed.data
-    if (d.submissionDate && d.submissionDate <= periodEnd(period)) return invalid({ submissionDate: ["beforePeriodEnd"] })
-    const rp = refundProblem(period, d.manual); if (rp) return rp
-    const before = structuredClone(r)
-    Object.assign(r, { type: d.type, amendReason: d.type === "amended" ? d.amendReason : undefined, activities: d.activities, submissionDate: d.submissionDate || undefined, manual: d.manual })
-    const changes = diff(before, r, ["type", "activities", "submissionDate", "manual.interestVat", "manual.interestSd", "manual.penaltyLate", "manual.penaltyOther", "manual.refund", "manual.refundVat"])
-    history("vatReturn", r as unknown as LifeDoc, user.name, "edited", undefined, changes, `9.1 · ${periodLabel(period)}`, period)
+    const rule = returnEditRule(period, await req.json().catch(() => ({})))
+    if ("status" in rule) return ruleResponse(rule)
+    const r = findReturn(period)!
+    Object.assign(r, rule.fields)
+    history("vatReturn", r as unknown as LifeDoc, user.name, "edited", undefined, rule.changes, `9.1 · ${periodLabel(period)}`, period)
     return json(returnView(period))
   }),
   PATCH: withAuth<PCtx>("doc.approve", async (req, { params }, user) => {
     const { period } = await params
-    const r = findReturn(period)
-    if (!r) return problem(404, `No return started for ${periodLabel(period)}`)
     const body = (await req.json().catch(() => ({}))) as { action?: string }
-    if (body.action !== "submit") return problem(400, "action must be submit")
-    if (r.status === "submitted") return problem(409, `The ${periodLabel(period)} return was already submitted.`)
-    if (TODAY <= periodEnd(period)) return problem(409, `The tax period ${periodLabel(period)} ends on ${periodEnd(period)} — the return can be submitted from the next day.`)
-    const prev = prevPeriod(period)
-    if (prev >= FIRST_RETURN && findReturn(prev)?.status !== "submitted") return problem(409, `Submit the ${periodLabel(prev)} return first.`)
-    if (!r.submissionDate) return invalid({ submissionDate: ["required"] })
-    if (r.submissionDate > TODAY) return invalid({ submissionDate: ["future"] })
-    const rp = refundProblem(period, r.manual); if (rp) return rp
-    const c = computeReturn(db, period, r.manual)
-    const zone = db.vatSettings.zoneCode
-    if (c.shortVat > 0 || c.shortSd > 0) {
-      const parts = [c.shortVat > 0 ? `৳${c.shortVat.toLocaleString("en-IN")} VAT under ${economicCode("vat", zone)}` : "", c.shortSd > 0 ? `৳${c.shortSd.toLocaleString("en-IN")} SD under ${economicCode("sd", zone)}` : ""].filter(Boolean)
-      return problem(409, `Deposit ${parts.join(" and ")} (TR-6) before submitting — note 58 must cover note 50.`)
-    }
-    if (r.type === "original" && r.submissionDate > returnDue(period, db.vatSettings)) r.type = "late"
+    const rule = returnSubmitRule(body, period)
+    if ("status" in rule) return ruleResponse(rule)
+    const r = findReturn(period)!
+    r.type = rule.type
     r.status = "submitted"
-    r.snapshot = c
+    r.snapshot = rule.computation
     r.submittedBy = user.name
     r.submittedAt = new Date().toISOString()
-    r.ackNo = `NBR-91-${period.replace("-", "")}-${String(900_000 + db.returns.length * 1_117).padStart(7, "0")}`
+    r.ackNo = rule.ackNo
     history("vatReturn", r as unknown as LifeDoc, user.name, "submitted", `Acknowledgement ${r.ackNo}`, undefined, `9.1 · ${periodLabel(period)}`, period)
     return json(returnView(period))
   }),
   DELETE: withAuth<PCtx>("doc.delete", async (_req, { params }, user) => {
     const { period } = await params
+    const rule = returnDeleteRule(period)
+    if (rule) return ruleResponse(rule)
     const i = db.returns.findIndex((r) => r.period === period)
-    if (i < 0) return problem(404, `No return started for ${periodLabel(period)}`)
-    if (db.returns[i].status !== "draft") return problem(409, "Submitted returns cannot be deleted.")
     const [r] = db.returns.splice(i, 1)
     history("vatReturn", r as unknown as LifeDoc, user.name, "deleted", undefined, undefined, `9.1 · ${periodLabel(period)}`, period)
     return json({ ok: true })
   }),
 }
 type NCtx = { params: Promise<{ period: string; note: string }> }
-/** GET /vat/returns/{period}/notes/{note} — the sub-form: documents behind a note (legacy sub-form crashed with HTTP 500, D-04). */
+/** The documents behind a note (the legacy sub-form crashed with HTTP 500, D-04). */
+export interface SubFormAnswer { period: string; note: number; rows: SubFormRow[]; total: { value: number; sd: number; vat: number } }
+export const SUBFORM_CSV_COLUMNS = (note: number) => [
+  { key: "date", label: "Date" }, { key: "ref", label: "Document" }, { key: "party", label: "Party" }, { key: "bin", label: "BIN" },
+  { key: "value", label: "Value" }, { key: "sd", label: "SD" }, { key: "vat", label: note >= 58 ? "Amount" : "VAT" }, { key: "note", label: "Reference" },
+]
+export function subFormAnswer(period: string, note: number, src: ReturnSource = db): RuleProblem | SubFormAnswer {
+  const def = noteDef(note)
+  if (!def) return { status: 404 as const, title: `Note ${note} does not exist on Mushak 9.1` }
+  if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return { status: 404 as const, title: "Tax period not found" }
+  const rows = subForm(src, period, note)
+  return { period, note, rows, total: { value: round2(rows.reduce((s, r) => s + r.value, 0)), sd: round2(rows.reduce((s, r) => s + (r.sd ?? 0), 0)), vat: round2(rows.reduce((s, r) => s + r.vat, 0)) } }
+}
+/** GET /vat/returns/{period}/notes/{note} — the sub-form: documents behind a note. */
 export const subFormRoute = withAuth<NCtx>(null, async (req, { params }) => {
   const { period, note } = await params
-  const n = Number(note)
-  const def = noteDef(n)
-  if (!def) return problem(404, `Note ${note} does not exist on Mushak 9.1`)
-  if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return problem(404, "Tax period not found")
-  const rows = subForm(db, period, n)
-  if (new URL(req.url).searchParams.get("format") === "csv") {
-    return csvResponse(toCSV(rows, [
-      { key: "date", label: "Date" }, { key: "ref", label: "Document" }, { key: "party", label: "Party" }, { key: "bin", label: "BIN" },
-      { key: "value", label: "Value" }, { key: "sd", label: "SD" }, { key: "vat", label: n >= 58 ? "Amount" : "VAT" }, { key: "note", label: "Reference" },
-    ]), `mushak-9.1-${period}-note-${n}.csv`)
-  }
+  const answer = subFormAnswer(period, Number(note))
+  if ("status" in answer) return ruleResponse(answer)
+  if (new URL(req.url).searchParams.get("format") === "csv")
+    return csvResponse(toCSV(answer.rows, SUBFORM_CSV_COLUMNS(answer.note)), `mushak-9.1-${period}-note-${note}.csv`)
   await delay(80)
-  return json({ period, note: n, rows, total: { value: round2(rows.reduce((s, r) => s + r.value, 0)), sd: round2(rows.reduce((s, r) => s + (r.sd ?? 0), 0)), vat: round2(rows.reduce((s, r) => s + r.vat, 0)) } })
+  return json(answer)
 })
 
 export const periodsRoute = withAuth(null, async () => json(taxPeriods()))
 
-/** Compliance centre summary for one tax period. */
-export const complianceRoute = withAuth(null, async (req) => {
-  const sp = new URL(req.url).searchParams
-  const period = sp.get("period") || CURRENT
-  if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return invalid({ period: ["outOfRange"] })
-  const view = returnView(period)!
+/** Compliance centre summary for one tax period — the return, the deposits and the VDS it still owes. */
+export interface ComplianceAnswer {
+  period: string; due: string; daysLeft: number; status: VatReturn["status"]; notStarted: boolean; locked: boolean
+  submissionDate?: string; ackNo?: string
+  computation: Pick<ReturnComputation, "outputVat" | "inputVat" | "increasing" | "decreasing" | "netVat" | "payableVat" | "payableSd" | "depositedVat" | "shortVat" | "shortSd" | "closingVat" | "openingVat" | "drafts">
+  deposits: { count: number; amount: number; pending: number }
+  vds: { toIssue: number; toIssueAmount: number; issueBy: string; awaited: number; awaitedAmount: number }
+  periods: TaxPeriod[]
+}
+export function complianceAnswer(period: string, src: ReturnSource = db): RuleProblem | ComplianceAnswer {
+  if (!PERIOD_RE.test(period) || period < FIRST_RETURN || period > CURRENT) return invalidRule({ period: ["outOfRange"] })
+  const view = returnView(period, src)!
   const c = view.computation
   const inP = (d: string) => periodOf(d) === period
-  const vdsToIssue = vdsEligible("purchase").filter((e) => inP(e.date) && e.remaining > 0.004)
-  const vdsAwaited = vdsEligible("sales").filter((e) => inP(e.date) && e.remaining > 0.004 && db.customers.find((x) => x.id === e.partyId)?.vdsWithholder)
-  const deposits = db.treasury.filter((t) => t.taxPeriod === period && t.process !== "Cancelled")
-  await delay(150)
-  return json({
-    period, due: returnDue(period, db.vatSettings), daysLeft: daysBetween(TODAY, returnDue(period, db.vatSettings)), status: view.status, notStarted: !findReturn(period), locked: view.status === "submitted",
+  const vdsToIssue = vdsEligible("purchase", undefined, src).filter((e) => inP(e.date) && e.remaining > 0.004)
+  const vdsAwaited = vdsEligible("sales", undefined, src).filter((e) => inP(e.date) && e.remaining > 0.004 && src.customers.find((x) => x.id === e.partyId)?.vdsWithholder)
+  const deposits = src.treasury.filter((t) => t.taxPeriod === period && t.process !== "Cancelled")
+  return {
+    period, due: returnDue(period, src.vatSettings), daysLeft: daysBetween(TODAY, returnDue(period, src.vatSettings)), status: view.status, notStarted: !findReturn(period, src), locked: view.status === "submitted",
     submissionDate: view.submissionDate, ackNo: view.ackNo,
     computation: { outputVat: c.outputVat, inputVat: c.inputVat, increasing: c.increasing, decreasing: c.decreasing, netVat: c.netVat, payableVat: c.payableVat, payableSd: c.payableSd, depositedVat: c.depositedVat, shortVat: c.shortVat, shortSd: c.shortSd, closingVat: c.closingVat, openingVat: c.openingVat, drafts: c.drafts },
     deposits: { count: deposits.length, amount: round2(deposits.filter((t) => t.process === "Approved").reduce((s, t) => s + t.amount, 0)), pending: deposits.filter((t) => t.process === "Created").length },
-    vds: { toIssue: vdsToIssue.length, toIssueAmount: round2(vdsToIssue.reduce((s, e) => s + e.remaining, 0)), issueBy: vdsCertificateDue(period, db.vatSettings, view.submissionDate), awaited: vdsAwaited.length, awaitedAmount: round2(vdsAwaited.reduce((s, e) => s + e.remaining, 0)) },
-    periods: taxPeriods(),
-  })
+    vds: { toIssue: vdsToIssue.length, toIssueAmount: round2(vdsToIssue.reduce((s, e) => s + e.remaining, 0)), issueBy: vdsCertificateDue(period, src.vatSettings, view.submissionDate), awaited: vdsAwaited.length, awaitedAmount: round2(vdsAwaited.reduce((s, e) => s + e.remaining, 0)) },
+    periods: taxPeriods(src),
+  }
+}
+export const complianceRoute = withAuth(null, async (req) => {
+  const sp = new URL(req.url).searchParams
+  const answer = complianceAnswer(sp.get("period") || CURRENT)
+  if ("title" in answer) return ruleResponse(answer) // the answer carries a `status` of its own: the return's
+  await delay(150)
+  return json(answer)
 })
 
 /* ── VAT settings ──────────────────────────────────────────────────────── */
 
 const PROFILE_FIELDS = ["segment", "exportOriented", "importerType", "filerCategory", "bondLicenseNo", "bondLicenseExpiry", "associationNo", "holidays"]
 
+/** The one row the NBR settings are: the zone the economic codes come from and the company's own profile. */
+export function vatSettingsRule(body: unknown, by: string, src: ReturnSource = db): RuleProblem | { fields: VatSettings } {
+  const parsed = vatSettingsInput.safeParse(body)
+  if (!parsed.success) return { status: 422, title: "Validation failed", errors: zodErrors(parsed.error) }
+  return { fields: { zoneCode: parsed.data.zoneCode, profile: parsed.data.profile ?? src.vatSettings.profile, updatedAt: new Date().toISOString(), updatedBy: by } }
+}
+/** …and what an edit of it records in the audit trail. */
+export const VAT_SETTINGS_DIFF_FIELDS = ["zoneCode", ...PROFILE_FIELDS.map((f) => `profile.${f}`)]
+
 export const vatSettingsRoutes = {
   GET: withAuth(null, async () => json(db.vatSettings)),
   PUT: withAuth("settings.manage", async (req, _ctx, user) => {
-    const parsed = vatSettingsInput.safeParse(await req.json().catch(() => ({})))
-    if (!parsed.success) return zodProblem(parsed.error)
+    const rule = vatSettingsRule(await req.json().catch(() => ({})), user.name)
+    if ("status" in rule) return ruleResponse(rule)
     const before = { ...db.vatSettings }
-    db.vatSettings = { zoneCode: parsed.data.zoneCode, profile: parsed.data.profile ?? db.vatSettings.profile, updatedAt: new Date().toISOString(), updatedBy: user.name }
-    recordAudit({ actor: user.name, entity: "vatSettings", ref: "VAT settings", action: "updated", changes: diff(before, db.vatSettings, ["zoneCode", ...PROFILE_FIELDS.map((f) => `profile.${f}`)]) })
+    db.vatSettings = rule.fields
+    recordAudit({ actor: user.name, entity: "vatSettings", ref: "VAT settings", action: "updated", changes: diff(before, db.vatSettings, VAT_SETTINGS_DIFF_FIELDS) })
     return json(db.vatSettings)
   }),
 }

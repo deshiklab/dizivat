@@ -13,7 +13,7 @@ export const problem = (status: number, title: string, errors?: Record<string, s
  * so the mock and the API's native modules cannot drift: the mock turns it into a Web Response, Nest into an
  * RFC 9457 problem.
  */
-export type RuleProblem = { status: 400 | 409 | 422; title: string; errors?: Record<string, string[]> }
+export type RuleProblem = { status: 400 | 404 | 409 | 422; title: string; errors?: Record<string, string[]> }
 /** The mock's side of a RuleProblem. */
 export const ruleResponse = (p: RuleProblem) => problem(p.status, p.title, p.errors)
 /** A 422 "Validation failed" as data. */
