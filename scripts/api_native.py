@@ -2940,10 +2940,19 @@ def run():
               and psql(f"select count(*) from treasury_deposits where id = '{vdT.get('id')}' and deleted_at is null") == "1",
               "R5.6: …the cancelled row is the one the register reads")
 
-    # a VDS certificate: written against an approved invoice, and settling part of what that invoice is due
-    vdPool = [e for e in arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "purchase"}).json() if e["remaining"] >= 100]
+    # a VDS certificate: written against an approved invoice, and settling part of what that invoice is due.
+    # The demo's own invoices may have had their VAT withheld already — CI runs the whole browser suite before
+    # this one — so these checks buy their own: a service purchase carries the VAT and moves no stock.
+    vdPur = arif.post(f"{BASE}/purchases", json={**pur_body, "issueDate": vdDate, "challanDate": vdDate,
+                                                 "challanNo": f"VDS{TAG}", "process": "Approved",
+                                                 "category": "service",
+                                                 "lines": [{"itemId": sv["id"], "qty": 1, "price": 5000,
+                                                            "sdRate": 0, "vatRate": 10, "vds": True}]})
+    vdPool = [e for e in arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "purchase"}).json()
+              if e["id"] == vdPur.json().get("id") and e["remaining"] >= 100]
     vdPick = vdPool[0] if vdPool else None
-    check(vdPick is not None, "R5.6: a purchase is left with VAT to withhold")
+    check(vdPick is not None,
+          f"R5.6: a purchase is left with VAT to withhold ({vdPur.status_code} {vdPur.json().get('invoiceNo')})")
     if vdPick:
         vdBody = {"mode": "purchase", "docId": vdPick["id"], "amount": 100, "certificateNo": f"R56-{TAG}",
                   "certificateDate": vdDate, "remark": f"R5.6 {TAG}", "process": "Created"}
@@ -2988,7 +2997,7 @@ def run():
         check(vdBlocked is not None and vdBlocked.status_code == 409
               and "quote this challan" in vdBlocked.json().get("title", ""),
               f"R5.6: a challan a VDS certificate still quotes cannot be cancelled "
-              f"({vdBlocked.status_code if vdBlocked else 'no case'})")
+              f"({vdQuoted.get('no')} → {vdBlocked.status_code if vdBlocked is not None else 'no case'})")
         if vdQuote is not None and vdQuote.status_code == 201:
             arif.delete(f"{BASE}/vat/vds/{vdQuote.json()['id']}")
             check(arif.patch(f"{BASE}/vat/treasury/{vdQuoted.get('id')}",
@@ -3930,11 +3939,19 @@ def run():
             with open(API_LOG, encoding="utf-8", errors="replace") as fh:
                 return fh.read().count("R5.6 upgrade:")
 
-        # its own fixtures: the main section's invoice may have had its VAT withheld already
+        # its own fixtures: the main section's invoice has had a certificate written against it by now, and the
+        # demo's may have been withheld by the suites that ran before this one
+        vdDrillPur = arif.post(f"{BASE}/purchases", json={**pur_body, "issueDate": vdDate, "challanDate": vdDate,
+                                                          "challanNo": f"VDS{TAG}-drill",
+                                                          "process": "Approved", "category": "service",
+                                                          "lines": [{"itemId": sv["id"], "qty": 1, "price": 5000,
+                                                                     "sdRate": 0, "vatRate": 10, "vds": True}]})
         vdDrillPool = [e for e in arif.get(f"{BASE}/vat/vds/eligible", params={"mode": "purchase"}).json()
-                       if e["remaining"] >= 100]
+                       if e["id"] == vdDrillPur.json().get("id") and e["remaining"] >= 100]
         vdDrillPick = vdDrillPool[0] if vdDrillPool else None
-        check(vdDrillPick is not None, "R5.6: a purchase is left with VAT the drill can withhold")
+        check(vdDrillPick is not None,
+              f"R5.6: a purchase is left with VAT the drill can withhold ({vdDrillPur.status_code} "
+              f"{vdDrillPur.json().get('invoiceNo')})")
         vdDrillBody = ({"mode": "purchase", "docId": vdDrillPick["id"] if vdDrillPick else "", "amount": 100,
                         "certificateNo": f"R56-drill-{TAG}", "certificateDate": vdDate, "process": "Created"}
                        if vdDrillPick else {})
