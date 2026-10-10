@@ -16,15 +16,29 @@ import {
 } from "@/lib/r4"
 import { accountInput, accountingConfigInput, adjustmentInput, cancelInput, moneyInput, returnInput, treasuryInput, vatSettingsInput, vdsInput } from "@/lib/schemas"
 import type {
-  Allocation, AuditChange, AuditEntity, HistoryEntry, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, OpenInvoice, Party, PartyStatement, Process,
+  AccountingConfig, Allocation, AuditChange, AuditEntity, HistoryEntry, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, OpenInvoice, Party, PartyStatement, Process,
   Purchase, ReturnView, Sale, StatementRow, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturn, VatReturnRow, VdsEligible, VdsEntry,
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
 import { sdEligible, sdExportLink } from "@/lib/sd-export"
-import { deny, json, problem, withAuth, zodProblem, type RuleProblem } from "./_lib"
+import { deny, invalidRule, json, problem, ruleResponse, withAuth, zodErrors, zodProblem, type RuleProblem } from "./_lib"
 
 type Ctx = { params: Promise<{ id: string }> }
+/**
+ * What the accounting rules read (R5.6: as data, so the API's native module answers from the rows). The Next.js
+ * handlers pass their in-memory copies, the API passes what it read from the tables — the customers and vendors from
+ * `parties`, the invoices from `sales` and `purchases`, and the rest from their own accounting tables.
+ */
+export interface AccountingSource {
+  customers: Party[]; vendors: Party[]
+  sales: Sale[]; purchases: Purchase[]
+  moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]
+  treasury: TreasuryDeposit[]; vds: VdsEntry[]
+  accountingConfig: AccountingConfig
+}
+/** `db` is the whole world, which is what the mock handlers pass by default. */
+export const accountingSource = (): AccountingSource => db
 const invalid = (errors: Record<string, string[]>) => problem(422, "Validation failed", errors)
 const has = (e: Record<string, string[]>) => Object.keys(e).length > 0
 const ISO = /^\d{4}-\d{2}-\d{2}$/
@@ -56,7 +70,7 @@ export function lockedConflict(date: string, no: string) {
   const title = lockedConflictRule(date, no)
   return title ? problem(409, title) : null
 }
-const closed = (date: string) => !!db.accountingConfig.closedUpTo && date <= db.accountingConfig.closedUpTo
+export const closed = (date: string, src: AccountingSource = db) => !!src.accountingConfig.closedUpTo && date <= src.accountingConfig.closedUpTo
 
 /** Receipts, payments and VDS that settle an invoice — it cannot be cancelled while they stand. */
 export function settlementsOf(kind: "sale" | "purchase", id: string) {
@@ -203,9 +217,9 @@ function lifecycle<T extends LifeDoc, F extends object>(c: Life<T, F>) {
 
 /* ── Money accounts ────────────────────────────────────────────────────── */
 
-export function accountRow(a: MoneyAccount): MoneyAccountRow {
-  const docs = db.moneyDocs.filter((m) => m.accountId === a.id && m.process === "Approved")
-  const dep = db.treasury.filter((t) => t.accountId === a.id && t.process === "Approved")
+export function accountRow(a: MoneyAccount, src: AccountingSource = db): MoneyAccountRow {
+  const docs = src.moneyDocs.filter((m) => m.accountId === a.id && m.process === "Approved")
+  const dep = src.treasury.filter((t) => t.accountId === a.id && t.process === "Approved")
   const inflow = round2(docs.filter((m) => m.kind === "receipt").reduce((s, m) => s + m.amount - m.charge, 0))
   const outflow = round2(docs.filter((m) => m.kind === "payment").reduce((s, m) => s + m.amount, 0) + dep.reduce((s, t) => s + t.amount, 0))
   const dates = [...docs.map((m) => m.date), ...dep.map((t) => t.challanDate)].sort()
@@ -216,17 +230,29 @@ const accountSpec: QuerySpec<MoneyAccountRow> = {
   facets: { kind: (a) => a.kind, status: (a) => (a.active ? "active" : "inactive") },
   totals: ["balance", "inflow", "outflow", "openingBalance"],
 }
-type AccountFields = Omit<MoneyAccount, "id" | "createdAt" | "updatedAt" | "history">
-function parseAccount(body: unknown, self?: MoneyAccount): { error: Response } | { fields: AccountFields } {
+export type AccountFields = Omit<MoneyAccount, "id" | "createdAt" | "updatedAt" | "history">
+/** What an account's register prints, and what an edit records in the audit trail. */
+export const ACCOUNT_CSV_COLUMNS = [
+  { key: "kind", label: "Kind" }, { key: "provider", label: "Bank / service" }, { key: "branch", label: "Branch" }, { key: "accountNo", label: "Account / wallet no" },
+  { key: "owner", label: "Account owner" }, { key: "bankType", label: "Account type", get: (a: MoneyAccountRow) => a.bankType ?? a.walletType ?? "" }, { key: "serviceCharge", label: "Service charge %" },
+  { key: "openingBalance", label: "Opening balance" }, { key: "inflow", label: "Received" }, { key: "outflow", label: "Paid out" }, { key: "balance", label: "Balance" },
+  { key: "active", label: "Status", get: (a: MoneyAccountRow) => (a.active ? "Active" : "Inactive") },
+]
+export const ACCOUNT_CSV_NAME = (date = new Date().toISOString().slice(0, 10)) => `money-accounts-${date}.csv`
+export const ACCOUNT_DIFF_FIELDS = ["provider", "accountNo", "owner", "branch", "bankType", "walletType", "authorised", "serviceCharge", "openingBalance", "openingDate", "active"]
+/** An account as the audit trail names it. */
+export const accountRef = (a: MoneyAccount) => `${a.provider} · ${a.accountNo}`
+
+export function parseAccount(body: unknown, self?: MoneyAccount, src: AccountingSource = db): RuleProblem | { fields: AccountFields } {
   const parsed = accountInput.safeParse(body)
-  if (!parsed.success) return { error: zodProblem(parsed.error) }
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
   const a = parsed.data
-  if (self && self.kind !== a.kind) return { error: problem(409, "An account cannot change its kind — add a new account.") }
-  const dup = db.moneyAccounts.find((x) => x.id !== self?.id && x.kind === a.kind && a.accountNo && x.accountNo.replace(/\D/g, "") === a.accountNo.replace(/\D/g, "") && x.provider === a.provider)
-  if (dup) return { error: invalid({ accountNo: ["duplicate"] }) }
+  if (self && self.kind !== a.kind) return { status: 409, title: "An account cannot change its kind — add a new account." }
+  const dup = src.moneyAccounts.find((x) => x.id !== self?.id && x.kind === a.kind && a.accountNo && x.accountNo.replace(/\D/g, "") === a.accountNo.replace(/\D/g, "") && x.provider === a.provider)
+  if (dup) return invalidRule({ accountNo: ["duplicate"] })
   if (self && !a.active && self.active) {
-    const drafts = db.moneyDocs.filter((m) => m.accountId === self.id && m.process === "Created")
-    if (drafts.length) return { error: problem(409, `Drafts still use this account (${drafts.map((m) => m.no).join(", ")}) — approve or delete them first.`) }
+    const drafts = src.moneyDocs.filter((m) => m.accountId === self.id && m.process === "Created")
+    if (drafts.length) return { status: 409, title: `Drafts still use this account (${drafts.map((m) => m.no).join(", ")}) — approve or delete them first.` }
   }
   const fields: AccountFields = {
     kind: a.kind, provider: a.provider, accountNo: a.accountNo, owner: a.owner, serviceCharge: a.serviceCharge, openingBalance: a.openingBalance, openingDate: a.openingDate, active: a.active,
@@ -235,19 +261,20 @@ function parseAccount(body: unknown, self?: MoneyAccount): { error: Response } |
   }
   return { fields }
 }
+/** Only an account with no transactions may be deleted — one with transactions is deactivated instead. */
+export function accountDeleteRule(a: MoneyAccount, src: AccountingSource = db): RuleProblem | undefined {
+  const used = src.moneyDocs.some((m) => m.accountId === a.id) || src.treasury.some((t) => t.accountId === a.id)
+  return used ? { status: 409, title: `${accountRef(a)} has transactions — deactivate it instead.` } : undefined
+}
+/** A new account's id: the next in the `ac` series, claimed separately so a create refused afterwards consumes nothing. */
+export const accountIdentity = () => ({ id: `ac${db.seq.account + 1}` })
+export const claimAccountId = () => { db.seq.account += 1 }
 export const accountRoutes = {
   GET: withAuth(null, async (req) => {
     const sp = new URL(req.url).searchParams
     if (!sp.get("sort")) sp.set("sort", "provider.asc")
-    const r = runQuery(db.moneyAccounts.map(accountRow), sp, accountSpec)
-    if (sp.get("format") === "csv") {
-      return csvResponse(toCSV(r.all, [
-        { key: "kind", label: "Kind" }, { key: "provider", label: "Bank / service" }, { key: "branch", label: "Branch" }, { key: "accountNo", label: "Account / wallet no" },
-        { key: "owner", label: "Account owner" }, { key: "bankType", label: "Account type", get: (a) => a.bankType ?? a.walletType ?? "" }, { key: "serviceCharge", label: "Service charge %" },
-        { key: "openingBalance", label: "Opening balance" }, { key: "inflow", label: "Received" }, { key: "outflow", label: "Paid out" }, { key: "balance", label: "Balance" },
-        { key: "active", label: "Status", get: (a) => (a.active ? "Active" : "Inactive") },
-      ]), `money-accounts-${new Date().toISOString().slice(0, 10)}.csv`)
-    }
+    const r = runQuery(db.moneyAccounts.map((a) => accountRow(a)), sp, accountSpec)
+    if (sp.get("format") === "csv") return csvResponse(toCSV(r.all, ACCOUNT_CSV_COLUMNS), ACCOUNT_CSV_NAME())
     await delay()
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { all, ...page } = r
@@ -255,11 +282,11 @@ export const accountRoutes = {
   }),
   POST: withAuth("master.edit", async (req, _ctx, user) => {
     const r = parseAccount(await req.json().catch(() => ({})))
-    if ("error" in r) return r.error
-    const a: MoneyAccount = { ...r.fields, id: `ac${db.seq.account + 1}`, createdAt: new Date().toISOString(), history: [] }
-    db.seq.account += 1
+    if ("status" in r) return ruleResponse(r)
+    const a: MoneyAccount = { ...r.fields, ...accountIdentity(), createdAt: new Date().toISOString(), history: [] }
+    claimAccountId()
     db.moneyAccounts.push(a)
-    history("account", a as unknown as LifeDoc, user.name, "created", undefined, undefined, `${a.provider} · ${a.accountNo}`)
+    history("account", a as unknown as LifeDoc, user.name, "created", undefined, undefined, accountRef(a))
     return json(accountRow(a), { status: 201 })
   }),
 }
@@ -274,14 +301,14 @@ export const accountDocRoutes = {
     const a = db.moneyAccounts.find((x) => x.id === id)
     if (!a) return problem(404, "Account not found")
     const r = parseAccount(await req.json().catch(() => ({})), a)
-    if ("error" in r) return r.error
+    if ("status" in r) return ruleResponse(r)
     const before = structuredClone(a)
     Object.assign(a, r.fields)
-    const changes = diff(before, a, ["provider", "accountNo", "owner", "branch", "bankType", "walletType", "authorised", "serviceCharge", "openingBalance", "openingDate", "active"])
+    const changes = diff(before, a, ACCOUNT_DIFF_FIELDS)
     const action = before.active !== a.active ? (a.active ? "activated" : "deactivated") : "updated"
     const at = new Date().toISOString()
     a.updatedAt = at
-    recordAudit({ at, actor: user.name, entity: "account", entityId: a.id, ref: `${a.provider} · ${a.accountNo}`, action, changes })
+    recordAudit({ at, actor: user.name, entity: "account", entityId: a.id, ref: accountRef(a), action, changes })
     return json(accountRow(a))
   }),
   DELETE: withAuth<Ctx>("master.edit", async (_req, { params }, user) => {
@@ -289,43 +316,47 @@ export const accountDocRoutes = {
     const i = db.moneyAccounts.findIndex((x) => x.id === id)
     if (i < 0) return problem(404, "Account not found")
     const a = db.moneyAccounts[i]
-    const used = db.moneyDocs.some((m) => m.accountId === id) || db.treasury.some((t) => t.accountId === id)
-    if (used) return problem(409, `${a.provider} · ${a.accountNo} has transactions — deactivate it instead.`)
+    const rule = accountDeleteRule(a)
+    if (rule) return ruleResponse(rule)
     db.moneyAccounts.splice(i, 1)
-    recordAudit({ actor: user.name, entity: "account", entityId: a.id, ref: `${a.provider} · ${a.accountNo}`, action: "deleted" })
+    recordAudit({ actor: user.name, entity: "account", entityId: a.id, ref: accountRef(a), action: "deleted" })
     return json({ ok: true })
   }),
 }
 
 /* ── Receipts & payments ───────────────────────────────────────────────── */
 
-const invoicesOf = (kind: MoneyKind): (Sale | Purchase)[] => (kind === "receipt" ? db.sales : db.purchases)
-const partyOf = (kind: MoneyKind, id: string): Party | undefined => (kind === "receipt" ? db.customers : db.vendors).find((p) => p.id === id)
+const invoicesOf = (kind: MoneyKind, src: AccountingSource = db): (Sale | Purchase)[] => (kind === "receipt" ? src.sales : src.purchases)
+export const partyOf = (kind: MoneyKind, id: string, src: AccountingSource = db): Party | undefined =>
+  (kind === "receipt" ? src.customers : src.vendors).find((p) => p.id === id)
 const invoiceParty = (d: Sale | Purchase) => ("customerId" in d ? d.customerId : d.vendorId)
 
 /** Approved invoices of a party that still have something to settle, oldest first. */
-export function openInvoices(kind: MoneyKind, partyId: string): OpenInvoice[] {
-  return invoicesOf(kind)
+export function openInvoices(kind: MoneyKind, partyId: string, src: AccountingSource = db): OpenInvoice[] {
+  return invoicesOf(kind, src)
     .filter((d) => d.process === "Approved" && invoiceParty(d) === partyId && d.due > 0.004)
     .sort((a, b) => a.issueDate.localeCompare(b.issueDate) || a.invoiceNo.localeCompare(b.invoiceNo))
     .map((d) => ({ id: d.id, no: d.invoiceNo, challanNo: d.challanNo, date: d.issueDate, total: d.netTotal, paid: d.paid, due: d.due, days: daysBetween(d.issueDate, TODAY) }))
 }
 
-function buildMoney(kind: MoneyKind) {
-  return (body: unknown, self?: MoneyDoc) => {
+/** What `buildMoney` returns: every field of the document but the identity and the lifecycle the caller adds. */
+export type MoneyFields = Omit<MoneyDoc, "id" | "no" | "process" | "createdAt" | "history">
+
+export function buildMoney(kind: MoneyKind) {
+  return (body: unknown, self?: MoneyDoc, src: AccountingSource = db): RuleProblem | { process: "Created" | "Approved"; date: string; fields: MoneyFields } => {
     const parsed = moneyInput.safeParse(body)
-    if (!parsed.success) return { error: zodProblem(parsed.error) }
+    if (!parsed.success) return invalidRule(zodErrors(parsed.error))
     const m = parsed.data
-    const party = partyOf(kind, m.partyId)
-    if (!party || party.active === false) return { error: invalid({ partyId: ["unknown"] }) }
-    if (self && self.partyId !== m.partyId) return { error: problem(409, `A ${kind} cannot move to another party — create a new one.`) }
-    if (closed(m.date)) return { error: invalid({ date: ["dateClosed"] }) }
-    if (m.date > TODAY) return { error: invalid({ date: ["future"] }) }
-    const acct = db.moneyAccounts.find((a) => a.id === m.accountId && a.active)
-    if (!acct) return { error: invalid({ accountId: ["unknown"] }) }
-    if (acct.kind !== METHOD_ACCOUNT[m.method]) return { error: invalid({ accountId: ["accountMismatch"] }) }
+    const party = partyOf(kind, m.partyId, src)
+    if (!party || party.active === false) return invalidRule({ partyId: ["unknown"] })
+    if (self && self.partyId !== m.partyId) return { status: 409, title: `A ${kind} cannot move to another party — create a new one.` }
+    if (closed(m.date, src)) return invalidRule({ date: ["dateClosed"] })
+    if (m.date > TODAY) return invalidRule({ date: ["future"] })
+    const acct = src.moneyAccounts.find((a) => a.id === m.accountId && a.active)
+    if (!acct) return invalidRule({ accountId: ["unknown"] })
+    if (acct.kind !== METHOD_ACCOUNT[m.method]) return invalidRule({ accountId: ["accountMismatch"] })
     const errors: Record<string, string[]> = {}
-    const open = new Map(openInvoices(kind, party.id).map((o) => [o.id, o]))
+    const open = new Map(openInvoices(kind, party.id, src).map((o) => [o.id, o]))
     const seen = new Set<string>()
     const allocations: Allocation[] = []
     m.allocations.forEach((a, i) => {
@@ -337,10 +368,10 @@ function buildMoney(kind: MoneyKind) {
       if (a.amount > inv.due + 0.004) { errors[`allocations.${i}.amount`] = ["exceedsDue"]; return }
       allocations.push({ docId: inv.id, docNo: inv.no, docDate: inv.date, docTotal: inv.total, amount: round2(a.amount) })
     })
-    if (has(errors)) return { error: invalid(errors) }
+    if (has(errors)) return invalidRule(errors)
     const allocated = round2(allocations.reduce((s, a) => s + a.amount, 0))
-    if (allocated > m.amount + 0.004) return { error: invalid({ amount: ["overAllocated"] }) }
-    if (!db.accountingConfig.allowAdvance && allocated < m.amount - 0.004) return { error: invalid({ amount: ["advanceNotAllowed"] }) }
+    if (allocated > m.amount + 0.004) return invalidRule({ amount: ["overAllocated"] })
+    if (!src.accountingConfig.allowAdvance && allocated < m.amount - 0.004) return invalidRule({ amount: ["advanceNotAllowed"] })
     return {
       process: m.process, date: m.date,
       fields: {
@@ -349,19 +380,54 @@ function buildMoney(kind: MoneyKind) {
         reference: m.method === "cash" || m.method === "cheque" ? m.reference || undefined : m.reference,
         amount: round2(m.amount), charge: round2(m.charge ?? 0), allocations, allocated, unallocated: round2(m.amount - allocated), note: m.note || undefined,
         issuedBy: self?.issuedBy ?? "",
-      } satisfies Partial<MoneyDoc>,
+      } satisfies MoneyFields,
     }
   }
 }
-/** Apply (+1) or reverse (−1) the allocations on the invoices. */
-function settle(d: MoneyDoc, sign: 1 | -1) {
+/**
+ * Apply (+1) or reverse (−1) the allocations on the invoices, and hand back the ones it moved: their `paid` and
+ * `due` are columns of `sales` and `purchases` now, so whoever writes a receipt writes those rows with it — the same
+ * way a production batch writes the counters an approval moves.
+ */
+export function settle(d: MoneyDoc, sign: 1 | -1, src: AccountingSource = db): (Sale | Purchase)[] {
+  const moved: (Sale | Purchase)[] = []
   for (const a of d.allocations) {
-    const inv = invoicesOf(d.kind).find((x) => x.id === a.docId)
+    const inv = invoicesOf(d.kind, src).find((x) => x.id === a.docId)
     if (!inv) continue
     inv.paid = round2(inv.paid + sign * a.amount)
     inv.due = round2(inv.netTotal - inv.paid)
+    moved.push(inv)
+  }
+  return moved
+}
+/**
+ * Approving: the books must not be closed for the date, and every invoice it settles has to still have that much
+ * due — another receipt may have settled it in the meantime.
+ */
+export function moneyApproveRule(d: MoneyDoc, src: AccountingSource = db): RuleProblem | undefined {
+  if (closed(d.date, src)) return { status: 409, title: `The books are closed up to ${src.accountingConfig.closedUpTo} — ${d.no} cannot be approved.` }
+  const open = new Map(openInvoices(d.kind, d.partyId, src).map((o) => [o.id, o]))
+  const errors: Record<string, string[]> = {}
+  d.allocations.forEach((a, i) => { if (a.amount > (open.get(a.docId)?.due ?? 0) + 0.004) errors[`allocations.${i}.amount`] = ["exceedsDue"] })
+  if (!has(errors)) return undefined
+  return {
+    status: 409,
+    title: `An invoice was settled in the meantime — ${d.allocations.filter((_, i) => errors[`allocations.${i}.amount`]).map((a) => a.docNo).join(", ")} no longer has that much due.`,
+    errors,
   }
 }
+/** Cancelling: the books must not be closed for the date either. */
+export function moneyCancelRule(d: MoneyDoc, src: AccountingSource = db): RuleProblem | undefined {
+  return closed(d.date, src)
+    ? { status: 409, title: `The books are closed up to ${src.accountingConfig.closedUpTo} — ${d.no} cannot be cancelled.` }
+    : undefined
+}
+/** A new receipt's or payment's identity: the next id of its series and the next MR-/PV-MMYY####. */
+export const moneyIdentity = (kind: MoneyKind, date: string) => ({
+  id: `${kind === "receipt" ? "mr" : "pv"}${db.seq[kind] + 1}`,
+  no: nextNo(kind === "receipt" ? "MR" : "PV", kind, db.moneyDocs, date),
+})
+export const claimMoneyId = (kind: MoneyKind) => { db.seq[kind] += 1 }
 const moneySpec: QuerySpec<MoneyDoc> = {
   search: (m) => `${m.no} ${m.partyName} ${m.partyBin} ${m.chequeNo ?? ""} ${m.reference ?? ""} ${m.allocations.map((a) => a.docNo).join(" ")}`,
   dateField: "date",
@@ -370,22 +436,24 @@ const moneySpec: QuerySpec<MoneyDoc> = {
 }
 export function moneyRoutes(kind: MoneyKind) {
   const label = kind === "receipt" ? "Receipt" : "Payment"
-  const build = buildMoney(kind)
+  // the rules are data (above); `lifecycle` wants a Response, so a RuleProblem is turned back into one here
+  const build = (body: unknown, self?: MoneyDoc) => {
+    const r = buildMoney(kind)(body, self)
+    return "status" in r ? { error: ruleResponse(r) } : r
+  }
   return lifecycle<MoneyDoc, ReturnType<typeof build> extends infer R ? R extends { fields: infer F } ? F : never : never>({
     entity: kind, label, list: () => db.moneyDocs, idPrefix: kind === "receipt" ? "mr" : "pv", seq: kind, noPrefix: kind === "receipt" ? "MR" : "PV",
-    filter: (rows, sp) => { const inv = sp.get("invoice"); sp.delete("invoice"); return rows.filter((m) => m.kind === kind && (!inv || m.allocations.some((a) => a.docId === inv))) },
+    filter: (rows, sp) => moneyInvoiceFilter(kind, sp, rows),
     build,
     approve: (d) => {
-      if (closed(d.date)) return problem(409, `The books are closed up to ${db.accountingConfig.closedUpTo} — ${d.no} cannot be approved.`)
-      const open = new Map(openInvoices(kind, d.partyId).map((o) => [o.id, o]))
-      const errors: Record<string, string[]> = {}
-      d.allocations.forEach((a, i) => { if (a.amount > (open.get(a.docId)?.due ?? 0) + 0.004) errors[`allocations.${i}.amount`] = ["exceedsDue"] })
-      if (has(errors)) return problem(409, `An invoice was settled in the meantime — ${d.allocations.filter((_, i) => errors[`allocations.${i}.amount`]).map((a) => a.docNo).join(", ")} no longer has that much due.`, errors)
+      const rule = moneyApproveRule(d)
+      if (rule) return ruleResponse(rule)
       settle(d, 1)
       return null
     },
     cancel: (d) => {
-      if (closed(d.date)) return problem(409, `The books are closed up to ${db.accountingConfig.closedUpTo} — ${d.no} cannot be cancelled.`)
+      const rule = moneyCancelRule(d)
+      if (rule) return ruleResponse(rule)
       settle(d, -1)
       return null
     },
@@ -398,28 +466,41 @@ export function moneyRoutes(kind: MoneyKind) {
       { key: "invoices", label: "Invoices", get: (m) => m.allocations.map((a) => `${a.docNo}:${a.amount}`).join("; ") }, { key: "process", label: "Process" },
     ],
     csvName: kind === "receipt" ? "receipts" : "payments",
-    facetLabels: () => ({
-      party: Object.fromEntries((kind === "receipt" ? db.customers : db.vendors).map((p) => [p.id, p.name])),
-      account: Object.fromEntries(db.moneyAccounts.map((a) => [a.id, `${a.provider} · ${a.accountNo}`])),
-    }),
+    facetLabels: () => moneyFacetLabels(kind),
   })
+}
+/** The register's facet labels: the parties a receipt or payment may be taken from and the accounts it may go into. */
+export const moneyFacetLabels = (kind: MoneyKind, src: AccountingSource = db) => ({
+  party: Object.fromEntries((kind === "receipt" ? src.customers : src.vendors).map((p) => [p.id, p.name])),
+  account: Object.fromEntries(src.moneyAccounts.map((a) => [a.id, accountRef(a)])),
+})
+/** The register's `?invoice=` filter: the receipts or payments that settle one, taken out of the params before the query runs. */
+export const moneyInvoiceFilter = (kind: MoneyKind, params: URLSearchParams, src: MoneyDoc[] = db.moneyDocs) => {
+  const inv = params.get("invoice")
+  params.delete("invoice")
+  return src.filter((m) => m.kind === kind && (!inv || m.allocations.some((a) => a.docId === inv)))
+}
+/** What `?kind=&party=` asks for — the open invoices of one party, or a 422 naming the party. */
+export function openInvoiceParams(sp: URLSearchParams, src: AccountingSource = db): RuleProblem | { kind: MoneyKind; party: Party } {
+  const kind: MoneyKind = sp.get("kind") === "payment" ? "payment" : "receipt"
+  const party = partyOf(kind, sp.get("party") ?? "", src)
+  return party ? { kind, party } : invalidRule({ party: ["unknown"] })
 }
 export const openInvoicesRoute = withAuth(null, async (req) => {
   const sp = new URL(req.url).searchParams
-  const kind = sp.get("kind") === "payment" ? "payment" : "receipt"
-  const party = sp.get("party") ?? ""
-  if (!partyOf(kind, party)) return invalid({ party: ["unknown"] })
+  const r = openInvoiceParams(sp)
+  if ("status" in r) return ruleResponse(r)
   await delay(60)
-  return json(openInvoices(kind, party))
+  return json(openInvoices(r.kind, r.party.id))
 })
 
 /* ── Party statement ───────────────────────────────────────────────────── */
 
-export function statement(kind: "customer" | "vendor", party: Party, from: string, to: string): PartyStatement {
+export function statement(kind: "customer" | "vendor", party: Party, from: string, to: string, src: AccountingSource = db): PartyStatement {
   const mk: MoneyKind = kind === "customer" ? "receipt" : "payment"
-  const invs = invoicesOf(mk).filter((d) => d.process === "Approved" && invoiceParty(d) === party.id)
-  const money = db.moneyDocs.filter((m) => m.kind === mk && m.process === "Approved" && m.partyId === party.id)
-  const vds = db.vds.filter((v) => v.mode === (kind === "customer" ? "sales" : "purchase") && v.process === "Approved" && v.partyId === party.id && (v.settled ?? 0) > 0)
+  const invs = invoicesOf(mk, src).filter((d) => d.process === "Approved" && invoiceParty(d) === party.id)
+  const money = src.moneyDocs.filter((m) => m.kind === mk && m.process === "Approved" && m.partyId === party.id)
+  const vds = src.vds.filter((v) => v.mode === (kind === "customer" ? "sales" : "purchase") && v.process === "Approved" && v.partyId === party.id && (v.settled ?? 0) > 0)
   const all: Omit<StatementRow, "balance">[] = []
   for (const d of invs) {
     all.push({ date: d.issueDate, type: "invoice", ref: d.invoiceNo, refId: d.id, note: d.challanNo, debit: d.netTotal, credit: 0 })
@@ -438,7 +519,7 @@ export function statement(kind: "customer" | "vendor", party: Party, from: strin
   let bal = opening
   const rows: StatementRow[] = [{ date: from, type: "opening", debit: 0, credit: 0, balance: opening }]
   for (const r of all.filter((x) => x.date >= from && x.date <= to)) { bal = round2(bal + r.debit - r.credit); rows.push({ ...r, balance: bal }) }
-  const open = openInvoices(mk, party.id)
+  const open = openInvoices(mk, party.id, src)
   const ageing = { d0_30: 0, d31_60: 0, d61_90: 0, d90: 0 }
   for (const o of open) {
     const k = o.days <= 30 ? "d0_30" : o.days <= 60 ? "d31_60" : o.days <= 90 ? "d61_90" : "d90"
@@ -453,44 +534,72 @@ export function statement(kind: "customer" | "vendor", party: Party, from: strin
     closing: bal, ageing, openInvoices: open, advances, invoiceDue, reconciled: Math.abs(fullClosing - (invoiceDue - advances)) < 0.01,
   }
 }
-export const statementRoute = withAuth(null, async (req) => {
-  const sp = new URL(req.url).searchParams
-  const kind = sp.get("kind") === "vendor" ? "vendor" : "customer"
-  const party = (kind === "customer" ? db.customers : db.vendors).find((p) => p.id === sp.get("party"))
+/** The statement's CSV: one row per entry, running balance, and the debit/credit columns named for the party. */
+export const statementCsvColumns = (kind: "customer" | "vendor") => [
+  { key: "date", label: "Date" }, { key: "type", label: "Type" }, { key: "ref", label: "Reference" }, { key: "note", label: "Details" },
+  { key: "debit", label: kind === "customer" ? "Invoiced" : "Billed" }, { key: "credit", label: kind === "customer" ? "Received" : "Paid" }, { key: "balance", label: "Balance" },
+]
+export const statementCsvName = (party: Party, from: string, to: string) =>
+  `statement-${party.name.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}-${from}-${to}.csv`
+/** What `?kind=&party=&from=&to=` asks for — one party's statement over a range, or a 422 naming what is missing. */
+export function statementParams(sp: URLSearchParams, src: AccountingSource = db): RuleProblem | { kind: "customer" | "vendor"; party: Party; from: string; to: string } {
+  const kind: "customer" | "vendor" = sp.get("kind") === "vendor" ? "vendor" : "customer"
+  const party = (kind === "customer" ? src.customers : src.vendors).find((p) => p.id === sp.get("party"))
   const from = sp.get("from") || "2025-07-01", to = sp.get("to") || TODAY
   const errors: Record<string, string[]> = {}
   if (!party) errors.party = ["required"]
   if (!ISO.test(from)) errors.from = ["required"]
   if (!ISO.test(to)) errors.to = ["required"]
   if (!errors.from && !errors.to && from > to) errors.to = ["toBeforeFrom"]
-  if (has(errors) || !party) return invalid(errors)
-  const s = statement(kind, party, from, to)
-  if (sp.get("format") === "csv") {
-    return csvResponse(toCSV(s.rows, [
-      { key: "date", label: "Date" }, { key: "type", label: "Type" }, { key: "ref", label: "Reference" }, { key: "note", label: "Details" },
-      { key: "debit", label: kind === "customer" ? "Invoiced" : "Billed" }, { key: "credit", label: kind === "customer" ? "Received" : "Paid" }, { key: "balance", label: "Balance" },
-    ]), `statement-${party.name.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}-${from}-${to}.csv`)
-  }
+  if (has(errors) || !party) return invalidRule(errors)
+  return { kind, party, from, to }
+}
+export const statementRoute = withAuth(null, async (req) => {
+  const sp = new URL(req.url).searchParams
+  const r = statementParams(sp)
+  if ("status" in r) return ruleResponse(r)
+  const s = statement(r.kind, r.party, r.from, r.to)
+  if (sp.get("format") === "csv") return csvResponse(toCSV(s.rows, statementCsvColumns(r.kind)), statementCsvName(r.party, r.from, r.to))
   await delay(120)
   return json(s)
 })
 
 /* ── Accounting config ─────────────────────────────────────────────────── */
 
+export const ACCOUNTING_CONFIG_DIFF_FIELDS = ["closedUpTo", "allowAdvance", "autoAllocate"]
+export const accountingConfigDiff = (before: AccountingConfig, after: AccountingConfig) => diff(before, after, ACCOUNTING_CONFIG_DIFF_FIELDS)
+/** What `buildAccountingConfig` returns: the three settings, before the caller adds who changed them and when. */
+export type AccountingConfigFields = Omit<AccountingConfig, "updatedAt" | "updatedBy">
+/**
+ * Validates an accounting-configuration body (R5.6: as data, so the API's native module answers with the same
+ * 422/409): the books may not be closed up to a future date, and drafts dated inside the period being closed must be
+ * approved or deleted first — the books cannot be closed over an open document.
+ */
+export function buildAccountingConfig(body: unknown, src: AccountingSource = db): RuleProblem | { fields: AccountingConfigFields } {
+  const parsed = accountingConfigInput.safeParse(body)
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  const c = parsed.data
+  if (c.closedUpTo && c.closedUpTo > TODAY) return invalidRule({ closedUpTo: ["future"] })
+  if (c.closedUpTo) {
+    const drafts = src.moneyDocs.filter((m) => m.process === "Created" && m.date <= c.closedUpTo)
+    if (drafts.length) return {
+      status: 409,
+      title: `Drafts dated on or before ${c.closedUpTo} are still open (${drafts.map((m) => m.no).join(", ")}) — approve or delete them before closing the books.`,
+    }
+  }
+  return { fields: { closedUpTo: c.closedUpTo || undefined, allowAdvance: c.allowAdvance, autoAllocate: c.autoAllocate } }
+}
+/** The configuration the demo data set starts with — and the shape a row has before it was ever updated. */
+export const DEFAULT_ACCOUNTING_CONFIG: AccountingConfig = { allowAdvance: true, autoAllocate: true }
 export const accountingConfigRoutes = {
   GET: withAuth(null, async () => json(db.accountingConfig)),
   PUT: withAuth("settings.manage", async (req, _ctx, user) => {
-    const parsed = accountingConfigInput.safeParse(await req.json().catch(() => ({})))
-    if (!parsed.success) return zodProblem(parsed.error)
-    const c = parsed.data
-    if (c.closedUpTo && c.closedUpTo > TODAY) return invalid({ closedUpTo: ["future"] })
-    if (c.closedUpTo) {
-      const drafts = db.moneyDocs.filter((m) => m.process === "Created" && m.date <= c.closedUpTo)
-      if (drafts.length) return problem(409, `Drafts dated on or before ${c.closedUpTo} are still open (${drafts.map((m) => m.no).join(", ")}) — approve or delete them before closing the books.`)
-    }
+    const r = buildAccountingConfig(await req.json().catch(() => ({})))
+    if ("status" in r) return ruleResponse(r)
     const before = { ...db.accountingConfig }
-    db.accountingConfig = { closedUpTo: c.closedUpTo || undefined, allowAdvance: c.allowAdvance, autoAllocate: c.autoAllocate, updatedAt: new Date().toISOString(), updatedBy: user.name }
-    recordAudit({ actor: user.name, entity: "accountingConfig", ref: "Accounting config", action: "updated", changes: diff(before, db.accountingConfig, ["closedUpTo", "allowAdvance", "autoAllocate"]) })
+    const at = new Date().toISOString()
+    db.accountingConfig = { ...r.fields, updatedAt: at, updatedBy: user.name }
+    recordAudit({ at, actor: user.name, entity: "accountingConfig", ref: "Accounting config", action: "updated", changes: accountingConfigDiff(before, db.accountingConfig) })
     return json(db.accountingConfig)
   }),
 }

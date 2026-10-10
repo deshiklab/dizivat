@@ -1141,7 +1141,163 @@ export const workOrderLines = pgTable("work_order_lines", {
 ])
 
 /**
- * Modules not yet migrated (accounting, the VAT returns, the registers that are derived from documents…) keep their exact
+ * A money account (R5.6): where the company's money is — a bank account, a mobile wallet (bKash, Nagad …) or a cash
+ * box. What the account holds is derived: the opening balance plus every approved receipt less every approved payment
+ * and treasury deposit, which is `accountRow`'s own sum, so a balance is never entered twice.
+ */
+export const moneyAccounts = pgTable("money_accounts", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["bank", "mobile", "cash"] }).notNull(),
+  /** bank name, wallet service or cash-box name */
+  provider: text("provider").notNull(),
+  /** bank: account number · mobile: wallet number · cash: optional code */
+  accountNo: text("account_no").notNull(),
+  owner: text("owner").notNull(),
+  branch: text("branch"),
+  address: text("address"),
+  bankType: text("bank_type", { enum: ["current", "savings", "transaction", "other"] }),
+  /** merchant wallets carry the provider's own; the type is the account's, not the service's */
+  walletType: text("wallet_type", { enum: ["personal", "general", "merchant"] }),
+  /** mobile: the person authorised to operate the wallet */
+  authorised: text("authorised"),
+  /** % the bank / MFS charges on incoming money */
+  serviceCharge: numeric("service_charge", { precision: 6, scale: 3, mode: "number" }).notNull(),
+  openingBalance: numeric("opening_balance", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** the date the opening balance is taken from */
+  openingDate: date("opening_date", { mode: "string" }).notNull(),
+  active: boolean("active").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the account's own trail: created / updated / activated / deactivated / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  index("money_accounts_kind_idx").on(t.kind),
+  // the account number is unique within a provider, digits only — the rule the mock's duplicate check used
+  index("money_accounts_provider_idx").on(t.provider),
+  check("money_accounts_kind_check", sql`${t.kind} in ('bank','mobile','cash')`),
+  check("money_accounts_bank_type_check",
+    sql`${t.bankType} is null or ${t.bankType} in ('current','savings','transaction','other')`),
+  check("money_accounts_wallet_type_check",
+    sql`${t.walletType} is null or ${t.walletType} in ('personal','general','merchant')`),
+  // the bank-only and wallet-only columns belong to their kind
+  check("money_accounts_branch_check", sql`${t.branch} is null or ${t.kind} = 'bank'`),
+  check("money_accounts_bank_check", sql`${t.bankType} is null or ${t.kind} = 'bank'`),
+  check("money_accounts_wallet_check",
+    sql`(${t.walletType} is null and ${t.authorised} is null) or ${t.kind} = 'mobile'`),
+])
+
+/**
+ * A customer receipt (MR-) or a supplier payment (PV-): money in or out, allocated to the invoices it settles. Both
+ * kinds share one table — `kind` tells them apart, as it does for the transfers, the damage entries and the notes —
+ * because the register, the audit trail and the party statement read them the same way.
+ *
+ * The allocations are rows of `money_allocations`, and approving one writes the invoice's `paid` and `due` in the same
+ * transaction — those are columns of `sales` and `purchases`, so a settlement reaches the invoice registers at once.
+ */
+export const moneyDocs = pgTable("money_docs", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** MR-MMYY#### (receipt) / PV-MMYY#### (payment) */
+  no: text("no").notNull(),
+  kind: text("kind", { enum: ["receipt", "payment"] }).notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  partyId: text("party_id").notNull(),
+  partyName: text("party_name").notNull(),
+  partyBin: text("party_bin").notNull(),
+  method: text("method", { enum: ["cash", "bankTransfer", "cheque", "mobile"] }).notNull(),
+  /** the account the money went into or came out of */
+  accountId: text("account_id").notNull(),
+  accountName: text("account_name").notNull(),
+  /** cheque: the number, the date it is drawn on and the bank it is drawn against */
+  chequeNo: text("cheque_no"),
+  chequeDate: date("cheque_date", { mode: "string" }),
+  chequeBank: text("cheque_bank"),
+  /** mobile-wallet transaction id / bank reference */
+  reference: text("reference"),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** bank / MFS charge deducted (receipts) */
+  charge: numeric("charge", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** what the allocations add up to, and what is left on account */
+  allocated: numeric("allocated", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  unallocated: numeric("unallocated", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later document taking the same id. There is no undo for a money document.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("money_docs_no_key").on(t.no),
+  index("money_docs_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?party=`, `?account=` and `?invoice=` filters, and a party's statement */
+  index("money_docs_kind_idx").on(t.kind),
+  index("money_docs_party_idx").on(t.partyId),
+  index("money_docs_account_idx").on(t.accountId),
+  index("money_docs_date_idx").on(t.date),
+  check("money_docs_kind_check", sql`${t.kind} in ('receipt','payment')`),
+  check("money_docs_method_check", sql`${t.method} in ('cash','bankTransfer','cheque','mobile')`),
+  check("money_docs_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  // the cheque block belongs to a cheque, and the money never allocates more than it takes
+  check("money_docs_cheque_check", sql`${t.chequeNo} is null or ${t.method} = 'cheque'`),
+  check("money_docs_allocated_check",
+    sql`${t.allocated} >= 0 and ${t.allocated} <= ${t.amount} + 0.004 and ${t.unallocated} = ${t.amount} - ${t.allocated}`),
+])
+
+/**
+ * What a receipt or payment settles: one row per invoice, with the amount set against it and the invoice's own total
+ * beside it, in the order they are printed. An allocation of zero is dropped before the document is stored.
+ */
+export const moneyAllocations = pgTable("money_allocations", {
+  docId: text("doc_id").notNull(),
+  /** position on the receipt / payment */
+  ord: integer("ord").notNull(),
+  /** the invoice settled — a `sales` or `purchases` id */
+  invoiceId: text("invoice_id").notNull(),
+  invoiceNo: text("invoice_no").notNull(),
+  invoiceDate: date("invoice_date", { mode: "string" }).notNull(),
+  invoiceTotal: numeric("invoice_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.docId, t.ord] }),
+  /** the register's `?invoice=` filter, and a party's statement */
+  index("money_allocations_invoice_idx").on(t.invoiceId),
+  // an invoice is settled at most once per document
+  uniqueIndex("money_allocations_invoice_key").on(t.docId, t.invoiceId),
+  check("money_allocations_amount_check", sql`${t.amount} > 0`),
+])
+
+/**
+ * The accounting configuration (R5.6): one row — how far the books are closed, whether a receipt may exceed the
+ * invoices it settles (an advance), and whether a new one pre-allocates the oldest invoices first. A receipt or
+ * payment dated inside the closed period is refused, so this row is a control on every money document written after
+ * it, which is why it belongs in the database and not in the JSONB document.
+ */
+export const accountingConfig = pgTable("accounting_config", {
+  id: integer("id").primaryKey().default(1),
+  /** receipts/payments dated on or before this date are rejected (legacy "Account close") */
+  closedUpTo: date("closed_up_to", { mode: "string" }),
+  /** allow receipts/payments larger than the invoices they settle (advance / on-account) */
+  allowAdvance: boolean("allow_advance").notNull(),
+  /** new receipts/payments pre-allocate oldest invoices first */
+  autoAllocate: boolean("auto_allocate").notNull(),
+  updatedAt: ts("updated_at"),
+  updatedBy: text("updated_by"),
+}, (t) => [
+  check("accounting_config_single_row", sql`${t.id} = 1`),
+])
+
+/**
+ * Modules not yet migrated (the VAT returns, the registers that are derived from documents…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
  */
 export const compatState = pgTable("compat_state", {
