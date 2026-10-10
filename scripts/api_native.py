@@ -2477,11 +2477,19 @@ def run():
         scMoved = [r for r in arif.get(f"{BASE}/production/subcontract",
                                        params={"from": "2025-01-01", "to": tdate}).json()["rows"] if r["id"] == scOne["id"]][0]
         scLots1 = arif.get(f"{BASE}/production/lots", params={"all": 1}).json()
+        # the lots read a batch's *lines*, not the totals on its row, so this challan's lots cannot have moved; the
+        # whole list is compared too, and anything that did move is named in the failure
+        scLotOf = lambda ls: [l for l in ls if l["batchId"] == scOne["id"]]
+        scLotDiff = [(a, b) for a, b in zip(scLots0, scLots1) if a != b]
+        if len(scLots0) != len(scLots1):
+            scLotDiff.append((len(scLots0), len(scLots1)))
         check(scMoved["received"] == scNewRec and scMoved["pending"] == scNewPend
-              and scMoved["status"] != "returned" and scMoved["days"] >= scOne["days"] and scLots1 == scLots0,
+              and scMoved["status"] != "returned" and scMoved["days"] >= scOne["days"]
+              and scLotOf(scLots1) == scLotOf(scLots0) and not scLotDiff,
               f"R5.5: a challan's receipt changed in SQL alone moves the register at once ({scOne['received']} → "
               f"{scMoved['received']} returned, {scOne['pending']} → {scMoved['pending']} pending, "
-              f"{scOne['status']} → {scMoved['status']}) and leaves the lots alone")
+              f"{scOne['status']} → {scMoved['status']}, {scOne['days']} → {scMoved['days']} days) and leaves the "
+              f"lots alone ({json.dumps(scLotDiff)[:300] if scLotDiff else 'no lot moved'})")
         psql(f"update batches set total_receive = {scRec0}, received_at = "
              + (f"'{scAt0}'" if scAt0 else "null") + f" where id = '{scOne['id']}'")
         scBack = [r for r in arif.get(f"{BASE}/production/subcontract",
