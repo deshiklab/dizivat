@@ -17,7 +17,8 @@ import {
 import { accountInput, accountingConfigInput, adjustmentInput, cancelInput, moneyInput, returnInput, treasuryInput, vatSettingsInput, vdsInput } from "@/lib/schemas"
 import type {
   AccountingConfig, Allocation, AuditChange, AuditEntity, HistoryEntry, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, OpenInvoice, Party, PartyStatement, Process,
-  Purchase, ReturnView, Sale, StatementRow, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturn, VatReturnRow, VdsEligible, VdsEntry,
+  Purchase, ReturnView, Sale, StatementRow, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturn, VatReturnRow, VatSettings,
+  VdsEligible, VdsEntry,
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
@@ -39,6 +40,19 @@ export interface AccountingSource {
 }
 /** `db` is the whole world, which is what the mock handlers pass by default. */
 export const accountingSource = (): AccountingSource => db
+/**
+ * R5.6: what the VAT rules read, as data — the treasury deposits (TR-6), the VDS entries (Mushak 6.6) and the VAT
+ * adjustments (Mushak 9.1 note 27–40), on top of everything the accounting rules already asked for (the parties, the
+ * invoices a certificate settles and the money account a deposit leaves from), plus the two collections the period
+ * lock and a claim for SD on the inputs of exported goods look at. The Next.js handlers pass their in-memory copies;
+ * the API passes what it read from the tables.
+ */
+export interface VatSource extends AccountingSource {
+  adjustments: VatAdjustment[]
+  returns: VatReturn[]
+  vatSettings: VatSettings
+}
+export const vatSource = (): VatSource => db
 const invalid = (errors: Record<string, string[]>) => problem(422, "Validation failed", errors)
 const has = (e: Record<string, string[]>) => Object.keys(e).length > 0
 const ISO = /^\d{4}-\d{2}-\d{2}$/
@@ -48,26 +62,26 @@ const CURRENT = periodOf(TODAY)
 /* ── Period lock (Mushak 9.1 submitted) & accounting close ─────────────── */
 
 /** The submitted Mushak 9.1 return that locks a date's tax period, if any. */
-export const periodLocked = (date: string) => lockingReturn(db, date)
+export const periodLocked = (date: string, src: VatSource = db) => lockingReturn(src, date)
 /** R5.3: the lock as data — the field error, and the 409's title — so the native modules raise the same problem. */
-export const lockedFieldRule = (date: string, field: string) => (periodLocked(date) ? { [field]: ["periodLocked"] } : null)
-export function lockedConflictRule(date: string, no: string) {
-  const r = periodLocked(date)
+export const lockedFieldRule = (date: string, field: string, src: VatSource = db) => (periodLocked(date, src) ? { [field]: ["periodLocked"] } : null)
+export function lockedConflictRule(date: string, no: string, src: VatSource = db) {
+  const r = periodLocked(date, src)
   return r ? `Tax period ${periodLabel(r.period)} is locked — its Mushak 9.1 return was submitted on ${r.submissionDate}. ${no} cannot change; record a correction in the current period (credit/debit note or VAT adjustment).` : null
 }
 /** 422 field error when a date falls in a tax period whose return has been submitted. */
-export function lockedField(date: string, field: string) {
-  const errors = lockedFieldRule(date, field)
+export function lockedField(date: string, field: string, src: VatSource = db) {
+  const errors = lockedFieldRule(date, field, src)
   return errors ? invalid(errors) : null
 }
 /** The lock as a 409 rule problem (R5.3) — what both runtimes raise for approve / cancel in a locked period. */
-export function lockedConflictProblem(date: string, no: string): RuleProblem | null {
-  const title = lockedConflictRule(date, no)
+export function lockedConflictProblem(date: string, no: string, src: VatSource = db): RuleProblem | null {
+  const title = lockedConflictRule(date, no, src)
   return title ? { status: 409, title } : null
 }
 /** 409 when a document's tax period is locked (approve / cancel of an existing document). */
-export function lockedConflict(date: string, no: string) {
-  const title = lockedConflictRule(date, no)
+export function lockedConflict(date: string, no: string, src: VatSource = db) {
+  const title = lockedConflictRule(date, no, src)
   return title ? problem(409, title) : null
 }
 export const closed = (date: string, src: AccountingSource = db) => !!src.accountingConfig.closedUpTo && date <= src.accountingConfig.closedUpTo
@@ -110,6 +124,16 @@ export function nextNo(prefix: string, entity: AuditEntity, list: { no: string }
   const used = [...list.map((d) => d.no), ...auditStore.events.filter((e) => e.entity === entity).map((e) => e.ref)]
   const n = used.reduce((m, no) => (no.startsWith(key) ? Math.max(m, Number(no.slice(key.length)) || 0) : m), 0) + 1
   return `${key}${String(n).padStart(4, "0")}`
+}
+/**
+ * The document's own trail — its history entry, stamped by whoever writes it. The mock's `history()` records the
+ * audit event with it; a native module writes the row itself and keeps the same list.
+ */
+export const stampLifeHistory = (d: { history?: HistoryEntry[]; updatedAt?: string }, by: string,
+                                 action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) => {
+  d.history = [...(d.history ?? []), { at, by, action, note }]
+  d.updatedAt = at
+  return at
 }
 function history(entity: AuditEntity, d: LifeDoc, by: string, action: HistoryEntry["action"], note?: string, changes?: AuditChange[], ref = d.no, entityId = d.id) {
   const at = new Date().toISOString()
@@ -430,12 +454,7 @@ export function moneyCancelRule(d: MoneyDoc, src: AccountingSource = db): RulePr
     : undefined
 }
 /** The document's own trail — its history entry and the audit event, stamped by whoever writes it. */
-export const stampMoneyHistory = (m: { history?: HistoryEntry[]; updatedAt?: string }, by: string,
-                                  action: HistoryEntry["action"], note?: string, at: string = new Date().toISOString()) => {
-  m.history = [...(m.history ?? []), { at, by, action, note }]
-  m.updatedAt = at
-  return at
-}
+export const stampMoneyHistory = stampLifeHistory
 /** What an edit of a receipt or payment records in the audit trail. */
 export const MONEY_DIFF_FIELDS = ["date", "method", "accountName", "chequeNo", "chequeDate", "reference", "amount", "charge", "allocated", "note"]
 /** The register's CSV: one row per document, with the invoices it settles named on it. */
@@ -630,144 +649,205 @@ export const accountingConfigRoutes = {
 
 /* ── Treasury deposits (TR-6) ──────────────────────────────────────────── */
 
-const treasurySpec: QuerySpec<TreasuryDeposit> = {
+/** The register: what a deposit may be searched by, the facets it is grouped by and the totals it prints. */
+export const treasurySpec: QuerySpec<TreasuryDeposit> = {
   search: (t) => `${t.no} ${t.challanNo} ${t.bank} ${t.bankBranch} ${t.code} ${t.description}`,
   dateField: "challanDate",
   facets: { process: (t) => t.process, head: (t) => t.head, period: (t) => t.taxPeriod, mode: (t) => t.mode },
   totals: ["amount"],
 }
-type TreasuryFields = Omit<TreasuryDeposit, "id" | "no" | "process" | "createdAt" | "history">
+export type TreasuryFields = Omit<TreasuryDeposit, "id" | "no" | "process" | "createdAt" | "history">
+/** What the register prints… */
+export const TREASURY_CSV_COLUMNS: { key: string; label: string }[] = [
+  { key: "challanDate", label: "Challan date" }, { key: "challanNo", label: "Treasury challan no" }, { key: "no", label: "Internal no" }, { key: "head", label: "Head" },
+  { key: "code", label: "Economic code" }, { key: "taxPeriod", label: "Tax period" }, { key: "bank", label: "Bank" }, { key: "bankBranch", label: "Branch" },
+  { key: "district", label: "District" }, { key: "mode", label: "Mode" }, { key: "amount", label: "Amount" }, { key: "process", label: "Process" },
+]
+export const treasuryCsvName = (date = new Date().toISOString().slice(0, 10)) => `treasury-deposits-${date}.csv`
+/** …and what an edit of one records in the audit trail. */
+export const TREASURY_DIFF_FIELDS = ["head", "taxPeriod", "challanNo", "challanDate", "mode", "bank", "bankBranch", "district", "amount", "description"]
+export const treasuryDiff = (a: TreasuryDeposit, b: TreasuryDeposit) => diff(a, b, TREASURY_DIFF_FIELDS)
+/** A new deposit's identity: the next id of the `tc` series and the next TC-MMYY#### (the audit trail takes part in the number). */
+export const treasuryIdentity = (date: string) => ({ id: `tc${db.seq.treasury + 1}`, no: nextNo("TC", "treasury", db.treasury, date) })
+export const claimTreasuryId = () => { db.seq.treasury += 1 }
+/** The deposit's own trail — its history entry, stamped by whoever writes it. */
+export const stampTreasuryHistory = stampLifeHistory
+/**
+ * What a deposit may hold: the head and the economic code it takes from the company's zone, a challan date that is
+ * neither in the future nor outside the return range, a bank account the deposit can leave from, and a challan no
+ * another live deposit has not used.
+ */
+export function treasuryBuild(body: unknown, self: TreasuryDeposit | undefined, src: VatSource = db): RuleProblem | { process: "Created" | "Approved"; date: string; fields: TreasuryFields } {
+  const parsed = treasuryInput.safeParse(body)
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  const t = parsed.data
+  if (t.challanDate > TODAY) return invalidRule({ challanDate: ["future"] })
+  if (t.taxPeriod > CURRENT || t.taxPeriod < FIRST_RETURN) return invalidRule({ taxPeriod: ["outOfRange"] })
+  const lock = lockedFieldRule(`${t.taxPeriod}-01`, "taxPeriod", src); if (lock) return invalidRule(lock)
+  if (t.accountId && !src.moneyAccounts.some((a) => a.id === t.accountId && a.kind === "bank" && a.active)) return invalidRule({ accountId: ["unknown"] })
+  const dup = src.treasury.find((x) => x.id !== self?.id && x.process !== "Cancelled" && x.challanNo === t.challanNo)
+  if (dup) return invalidRule({ challanNo: ["duplicate"] })
+  return {
+    process: t.process, date: t.challanDate,
+    fields: {
+      head: t.head, code: economicCode(t.head, src.vatSettings.zoneCode), taxPeriod: t.taxPeriod, challanNo: t.challanNo, challanDate: t.challanDate, mode: t.mode,
+      bank: t.bank, bankBranch: t.bankBranch, district: t.district, bankAddress: t.bankAddress || undefined, accountId: t.accountId || undefined, amount: round2(t.amount),
+      depositor: t.depositor, designation: t.designation || undefined, address: t.address, description: t.description,
+    },
+  }
+}
+/** Approving: the bank account it leaves from has to carry the amount. */
+export function treasuryApproveRule(d: TreasuryDeposit, src: VatSource = db): RuleProblem | undefined {
+  if (!d.accountId) return undefined
+  const a = src.moneyAccounts.find((x) => x.id === d.accountId)
+  if (a && accountRow(a, src).balance < d.amount - 0.004) return { status: 409, title: `Not enough balance in ${accountRef(a)} for this deposit.` }
+  return undefined
+}
+/** Cancelling: no VDS entry may still be quoting the challan. */
+export function treasuryCancelRule(d: TreasuryDeposit, src: VatSource = db): RuleProblem | undefined {
+  const linked = src.vds.filter((v) => v.treasuryId === d.id && v.process !== "Cancelled")
+  return linked.length ? { status: 409, title: `VDS entries ${linked.map((v) => v.no).join(", ")} quote this challan — unlink them first.` } : undefined
+}
+/** Approve and cancel both refuse to touch a deposit whose tax period has been submitted (Mushak 9.1). */
+export const treasuryLockRule = (d: TreasuryDeposit, src: VatSource = db) => lockedConflictProblem(`${d.taxPeriod}-01`, d.no, src) ?? undefined
 export const treasuryRoutes = lifecycle<TreasuryDeposit, TreasuryFields>({
   entity: "treasury", label: "Treasury deposit", list: () => db.treasury, idPrefix: "tc", seq: "treasury", noPrefix: "TC",
-  build: (body, self) => {
-    const parsed = treasuryInput.safeParse(body)
-    if (!parsed.success) return { error: zodProblem(parsed.error) }
-    const t = parsed.data
-    if (t.challanDate > TODAY) return { error: invalid({ challanDate: ["future"] }) }
-    if (t.taxPeriod > CURRENT || t.taxPeriod < FIRST_RETURN) return { error: invalid({ taxPeriod: ["outOfRange"] }) }
-    const lock = lockedField(`${t.taxPeriod}-01`, "taxPeriod"); if (lock) return { error: lock }
-    if (t.accountId && !db.moneyAccounts.some((a) => a.id === t.accountId && a.kind === "bank" && a.active)) return { error: invalid({ accountId: ["unknown"] }) }
-    const dup = db.treasury.find((x) => x.id !== self?.id && x.process !== "Cancelled" && x.challanNo === t.challanNo)
-    if (dup) return { error: invalid({ challanNo: ["duplicate"] }) }
-    return {
-      process: t.process, date: t.challanDate,
-      fields: {
-        head: t.head, code: economicCode(t.head, db.vatSettings.zoneCode), taxPeriod: t.taxPeriod, challanNo: t.challanNo, challanDate: t.challanDate, mode: t.mode,
-        bank: t.bank, bankBranch: t.bankBranch, district: t.district, bankAddress: t.bankAddress || undefined, accountId: t.accountId || undefined, amount: round2(t.amount),
-        depositor: t.depositor, designation: t.designation || undefined, address: t.address, description: t.description,
-      },
-    }
-  },
+  build: (body, self) => { const r = treasuryBuild(body, self); return "status" in r ? { error: ruleResponse(r) } : r },
   locked: (d) => lockedConflict(`${d.taxPeriod}-01`, d.no),
-  approve: (d) => {
-    if (d.accountId) {
-      const a = db.moneyAccounts.find((x) => x.id === d.accountId)
-      if (a && accountRow(a).balance < d.amount - 0.004) return problem(409, `Not enough balance in ${a.provider} · ${a.accountNo} for this deposit.`)
-    }
-    return null
-  },
-  cancel: (d) => {
-    const linked = db.vds.filter((v) => v.treasuryId === d.id && v.process !== "Cancelled")
-    return linked.length ? problem(409, `VDS entries ${linked.map((v) => v.no).join(", ")} quote this challan — unlink them first.`) : null
-  },
-  diffFields: ["head", "taxPeriod", "challanNo", "challanDate", "mode", "bank", "bankBranch", "district", "amount", "description"],
+  approve: (d) => { const r = treasuryApproveRule(d); return r ? ruleResponse(r) : null },
+  cancel: (d) => { const r = treasuryCancelRule(d); return r ? ruleResponse(r) : null },
+  diffFields: TREASURY_DIFF_FIELDS,
   spec: treasurySpec,
-  csv: [
-    { key: "challanDate", label: "Challan date" }, { key: "challanNo", label: "Treasury challan no" }, { key: "no", label: "Internal no" }, { key: "head", label: "Head" },
-    { key: "code", label: "Economic code" }, { key: "taxPeriod", label: "Tax period" }, { key: "bank", label: "Bank" }, { key: "bankBranch", label: "Branch" },
-    { key: "district", label: "District" }, { key: "mode", label: "Mode" }, { key: "amount", label: "Amount" }, { key: "process", label: "Process" },
-  ],
+  csv: TREASURY_CSV_COLUMNS,
   csvName: "treasury-deposits",
 })
 
 /* ── VDS (Mushak 6.6) ──────────────────────────────────────────────────── */
 
-const vdsDoc = (mode: VdsEntry["mode"], id: string): Sale | Purchase | undefined => (mode === "sales" ? db.sales : db.purchases).find((d) => d.id === id)
+const vdsDoc = (mode: VdsEntry["mode"], id: string, src: VatSource = db): Sale | Purchase | undefined =>
+  (mode === "sales" ? src.sales : src.purchases).find((d) => d.id === id)
 /** VAT subject to VDS on an invoice: sales → the invoice VAT (buyer is a withholding entity); purchases → VAT on the lines flagged VDS. */
 function vdsBase(mode: VdsEntry["mode"], d: Sale | Purchase) {
   if (mode === "sales") return (d as Sale).vds ? { value: d.subtotal, vat: d.vat } : { value: 0, vat: 0 }
   const ls = d.lines.filter((l) => l.vds)
   return { value: round2(ls.reduce((s, l) => s + l.subtotal, 0)), vat: round2(ls.reduce((s, l) => s + l.vat, 0)) }
 }
-export function vdsEligible(mode: VdsEntry["mode"], excludeId?: string): VdsEligible[] {
-  const docs = (mode === "sales" ? db.sales : db.purchases) as (Sale | Purchase)[]
+/** The approved invoices a certificate can be written against, and how much VAT each still has to withhold. */
+export function vdsEligible(mode: VdsEntry["mode"], excludeId?: string, src: VatSource = db): VdsEligible[] {
+  const docs = (mode === "sales" ? src.sales : src.purchases) as (Sale | Purchase)[]
   return docs.filter((d) => d.process === "Approved").flatMap((d) => {
     const b = vdsBase(mode, d)
     if (!b.vat) return []
-    const withheld = round2(db.vds.filter((v) => v.docId === d.id && v.mode === mode && v.process !== "Cancelled" && v.id !== excludeId).reduce((s, v) => s + v.amount, 0))
+    const withheld = round2(src.vds.filter((v) => v.docId === d.id && v.mode === mode && v.process !== "Cancelled" && v.id !== excludeId).reduce((s, v) => s + v.amount, 0))
     return [{ id: d.id, no: d.invoiceNo, challanNo: d.challanNo, date: d.issueDate, partyId: invoiceParty(d), partyName: "customerName" in d ? d.customerName : d.vendorName, value: b.value, vat: b.vat, withheld, remaining: round2(b.vat - withheld) }]
   }).sort((a, b) => b.date.localeCompare(a.date))
 }
-const vdsSpec: QuerySpec<VdsEntry> = {
+export const vdsSpec: QuerySpec<VdsEntry> = {
   search: (v) => `${v.no} ${v.docNo} ${v.challanNo} ${v.partyName} ${v.partyBin} ${v.certificateNo ?? ""} ${v.treasuryChallan ?? ""}`,
   dateField: "certificateDate",
   facets: { process: (v) => v.process, mode: (v) => v.mode, party: (v) => v.partyId, period: (v) => v.taxPeriod },
   totals: ["amount", "docVat", "docValue"],
 }
-type VdsFields = Omit<VdsEntry, "id" | "no" | "process" | "createdAt" | "history">
-export const vdsRoutes = lifecycle<VdsEntry, VdsFields>({
-  entity: "vds", label: "VDS entry", list: () => db.vds, idPrefix: "vds", seq: "vds", noPrefix: "VDS",
-  build: (body, self) => {
-    const parsed = vdsInput.safeParse(body)
-    if (!parsed.success) return { error: zodProblem(parsed.error) }
-    const v = parsed.data
-    if (self && (self.mode !== v.mode || self.docId !== v.docId)) return { error: problem(409, "A VDS entry cannot move to another invoice — create a new one.") }
-    const d = vdsDoc(v.mode, v.docId)
-    if (!d || d.process !== "Approved") return { error: invalid({ docId: ["notApproved"] }) }
-    const el = vdsEligible(v.mode, self?.id).find((x) => x.id === d.id)
-    if (!el) return { error: invalid({ docId: ["notVds"] }) }
-    if (v.amount > el.remaining + 0.004) return { error: invalid({ amount: ["exceedsVds"] }) }
-    if (v.certificateDate < d.issueDate) return { error: invalid({ certificateDate: ["beforeInvoice"] }) }
-    if (v.certificateDate > TODAY) return { error: invalid({ certificateDate: ["future"] }) }
-    const lock = lockedField(v.certificateDate, "certificateDate"); if (lock) return { error: lock }
-    const t = v.treasuryId ? db.treasury.find((x) => x.id === v.treasuryId && x.head === "vds" && x.process !== "Cancelled") : undefined
-    if (v.treasuryId && !t) return { error: invalid({ treasuryId: ["unknown"] }) }
-    if (v.mode === "sales" && t) return { error: invalid({ treasuryId: ["purchaseOnly"] }) }
-    const party = "customerId" in d ? db.customers.find((c) => c.id === d.customerId) : db.vendors.find((x) => x.id === (d as Purchase).vendorId)
-    return {
-      process: v.process, date: v.certificateDate,
-      fields: {
-        mode: v.mode, docId: d.id, docNo: d.invoiceNo, challanNo: d.challanNo, docDate: d.issueDate,
-        partyId: invoiceParty(d), partyName: party?.name ?? "", partyBin: party?.bin ?? "", partyAddress: party?.address ?? "",
-        docValue: el.value, docVat: el.vat, amount: round2(v.amount), certificateNo: v.certificateNo || undefined, certificateDate: v.certificateDate, taxPeriod: periodOf(v.certificateDate),
-        treasuryId: t?.id, treasuryChallan: t?.challanNo, remark: v.remark || undefined, issuedBy: self?.issuedBy ?? "",
-      },
-    }
-  },
-  locked: (d) => lockedConflict(d.certificateDate, d.no),
-  approve: (d) => {
-    const el = vdsEligible(d.mode, d.id).find((x) => x.id === d.docId)
-    if (!el || d.amount > el.remaining + 0.004) return problem(409, `${d.docNo} has only ${el?.remaining ?? 0} VAT left to withhold.`, { amount: ["exceedsVds"] })
-    const inv = vdsDoc(d.mode, d.docId)!
-    // the certificate settles part of what is owed on the invoice
+export type VdsFields = Omit<VdsEntry, "id" | "no" | "process" | "createdAt" | "history">
+/** What the register prints… */
+export const VDS_CSV_COLUMNS: { key: string; label: string }[] = [
+  { key: "certificateDate", label: "Certificate date" }, { key: "no", label: "VDS No" }, { key: "mode", label: "Mode" }, { key: "certificateNo", label: "Certificate No" },
+  { key: "docNo", label: "Invoice" }, { key: "challanNo", label: "Challan (6.3)" }, { key: "partyName", label: "Party" }, { key: "partyBin", label: "BIN" },
+  { key: "docValue", label: "Value" }, { key: "docVat", label: "Invoice VAT" }, { key: "amount", label: "VAT deducted" }, { key: "taxPeriod", label: "Tax period" },
+  { key: "treasuryChallan", label: "Treasury challan" }, { key: "process", label: "Process" },
+]
+export const vdsCsvName = (date = new Date().toISOString().slice(0, 10)) => `vds-${date}.csv`
+/** …and what an edit of one records in the audit trail. */
+export const VDS_DIFF_FIELDS = ["amount", "certificateNo", "certificateDate", "treasuryChallan", "remark"]
+export const vdsDiff = (a: VdsEntry, b: VdsEntry) => diff(a, b, VDS_DIFF_FIELDS)
+/** A new certificate's identity: the next id of the `vds` series and the next VDS-MMYY####. */
+export const vdsIdentity = (date: string) => ({ id: `vds${db.seq.vds + 1}`, no: nextNo("VDS", "vds", db.vds, date) })
+export const claimVdsId = () => { db.seq.vds += 1 }
+/** The names the register's party facet prints. */
+export const vdsFacetLabels = (src: VatSource = db) => ({ party: Object.fromEntries([...src.customers, ...src.vendors].map((p) => [p.id, p.name])) })
+/** The certificate's own trail — its history entry, stamped by whoever writes it. */
+export const stampVdsHistory = stampLifeHistory
+/**
+ * What a certificate may hold: an invoice that is approved and still has VAT to withhold, an amount within what is
+ * left on it, a certificate date neither before the invoice nor in the future nor in a submitted period, and — on a
+ * purchase — a treasury challan under the VDS head.
+ */
+export function vdsBuild(body: unknown, self: VdsEntry | undefined, src: VatSource = db): RuleProblem | { process: "Created" | "Approved"; date: string; fields: VdsFields } {
+  const parsed = vdsInput.safeParse(body)
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  const v = parsed.data
+  if (self && (self.mode !== v.mode || self.docId !== v.docId)) return { status: 409, title: "A VDS entry cannot move to another invoice — create a new one." }
+  const d = vdsDoc(v.mode, v.docId, src)
+  if (!d || d.process !== "Approved") return invalidRule({ docId: ["notApproved"] })
+  const el = vdsEligible(v.mode, self?.id, src).find((x) => x.id === d.id)
+  if (!el) return invalidRule({ docId: ["notVds"] })
+  if (v.amount > el.remaining + 0.004) return invalidRule({ amount: ["exceedsVds"] })
+  if (v.certificateDate < d.issueDate) return invalidRule({ certificateDate: ["beforeInvoice"] })
+  if (v.certificateDate > TODAY) return invalidRule({ certificateDate: ["future"] })
+  const lock = lockedFieldRule(v.certificateDate, "certificateDate", src); if (lock) return invalidRule(lock)
+  const t = v.treasuryId ? src.treasury.find((x) => x.id === v.treasuryId && x.head === "vds" && x.process !== "Cancelled") : undefined
+  if (v.treasuryId && !t) return invalidRule({ treasuryId: ["unknown"] })
+  if (v.mode === "sales" && t) return invalidRule({ treasuryId: ["purchaseOnly"] })
+  const party = "customerId" in d ? src.customers.find((c) => c.id === d.customerId) : src.vendors.find((x) => x.id === (d as Purchase).vendorId)
+  return {
+    process: v.process, date: v.certificateDate,
+    fields: {
+      mode: v.mode, docId: d.id, docNo: d.invoiceNo, challanNo: d.challanNo, docDate: d.issueDate,
+      partyId: invoiceParty(d), partyName: party?.name ?? "", partyBin: party?.bin ?? "", partyAddress: party?.address ?? "",
+      docValue: el.value, docVat: el.vat, amount: round2(v.amount), certificateNo: v.certificateNo || undefined, certificateDate: v.certificateDate, taxPeriod: periodOf(v.certificateDate),
+      treasuryId: t?.id, treasuryChallan: t?.challanNo, remark: v.remark || undefined, issuedBy: self?.issuedBy ?? "",
+    },
+  }
+}
+/** Approving: the invoice still has to have that much VAT left — another certificate may have taken it since. */
+export function vdsApproveRule(d: VdsEntry, src: VatSource = db): RuleProblem | undefined {
+  const el = vdsEligible(d.mode, d.id, src).find((x) => x.id === d.docId)
+  if (!el || d.amount > el.remaining + 0.004) return { status: 409, title: `${d.docNo} has only ${el?.remaining ?? 0} VAT left to withhold.`, errors: { amount: ["exceedsVds"] } }
+  return undefined
+}
+/**
+ * Apply (+1) or reverse (−1) what a certificate settles on its invoice, and hand back the invoice it moved: `paid`
+ * and `due` are columns of `sales` and `purchases`, so whoever approves a certificate writes that row with it.
+ */
+export function vdsSettle(d: VdsEntry, sign: 1 | -1, src: VatSource = db): (Sale | Purchase)[] {
+  const inv = vdsDoc(d.mode, d.docId, src)
+  if (!inv) return []
+  if (sign === 1) {
     d.settled = round2(Math.min(d.amount, Math.max(0, inv.due)))
     inv.paid = round2(inv.paid + d.settled)
-    inv.due = round2(inv.netTotal - inv.paid)
+  } else if (d.settled) {
+    inv.paid = round2(inv.paid - d.settled)
+  } else return []
+  inv.due = round2(inv.netTotal - inv.paid)
+  if (sign === -1) d.settled = 0
+  return [inv]
+}
+/** Approve and cancel both refuse to touch a certificate whose tax period has been submitted (Mushak 9.1). */
+export const vdsLockRule = (d: VdsEntry, src: VatSource = db) => lockedConflictProblem(d.certificateDate, d.no, src) ?? undefined
+export const vdsRoutes = lifecycle<VdsEntry, VdsFields>({
+  entity: "vds", label: "VDS entry", list: () => db.vds, idPrefix: "vds", seq: "vds", noPrefix: "VDS",
+  build: (body, self) => { const r = vdsBuild(body, self); return "status" in r ? { error: ruleResponse(r) } : r },
+  locked: (d) => lockedConflict(d.certificateDate, d.no),
+  approve: (d) => {
+    const r = vdsApproveRule(d); if (r) return ruleResponse(r)
+    vdsSettle(d, 1)
     return null
   },
-  cancel: (d) => {
-    const inv = vdsDoc(d.mode, d.docId)
-    if (inv && d.settled) { inv.paid = round2(inv.paid - d.settled); inv.due = round2(inv.netTotal - inv.paid) }
-    d.settled = 0
-    return null
-  },
-  diffFields: ["amount", "certificateNo", "certificateDate", "treasuryChallan", "remark"],
+  cancel: (d) => { vdsSettle(d, -1); return null },
+  diffFields: VDS_DIFF_FIELDS,
   spec: vdsSpec,
-  csv: [
-    { key: "certificateDate", label: "Certificate date" }, { key: "no", label: "VDS No" }, { key: "mode", label: "Mode" }, { key: "certificateNo", label: "Certificate No" },
-    { key: "docNo", label: "Invoice" }, { key: "challanNo", label: "Challan (6.3)" }, { key: "partyName", label: "Party" }, { key: "partyBin", label: "BIN" },
-    { key: "docValue", label: "Value" }, { key: "docVat", label: "Invoice VAT" }, { key: "amount", label: "VAT deducted" }, { key: "taxPeriod", label: "Tax period" },
-    { key: "treasuryChallan", label: "Treasury challan" }, { key: "process", label: "Process" },
-  ],
+  csv: VDS_CSV_COLUMNS,
   csvName: "vds",
-  facetLabels: () => ({ party: Object.fromEntries([...db.customers, ...db.vendors].map((p) => [p.id, p.name])) }),
+  facetLabels: () => vdsFacetLabels(),
 })
+
 /** R6.3: SD-paid purchase lines and the six-month export window (`exclude` = the claim being edited). */
 export const sdEligibleRoute = withAuth(null, async (req) => {
   const sp = new URL(req.url).searchParams
   await delay(60)
   return json(sdEligible({ purchases: db.purchases, sales: db.sales, adjustments: db.adjustments }, TODAY, sp.get("exclude") ?? undefined))
 })
+/** The invoices a VDS certificate can still be written against. */
 export const vdsEligibleRoute = withAuth(null, async (req) => {
   const sp = new URL(req.url).searchParams
   const mode = sp.get("mode") === "sales" ? "sales" : "purchase"
@@ -777,47 +857,71 @@ export const vdsEligibleRoute = withAuth(null, async (req) => {
 
 /* ── VAT adjustments ───────────────────────────────────────────────────── */
 
-type AdjFields = Omit<VatAdjustment, "id" | "no" | "process" | "createdAt" | "history">
-export const adjustmentRoutes = lifecycle<VatAdjustment, AdjFields>({
+export const adjustmentSpec: QuerySpec<VatAdjustment> = {
+  search: (a) => `${a.no} ${a.description} ${a.reference ?? ""} ${a.sdExport ? `${a.sdExport.purchaseNo} ${a.sdExport.saleNo} ${a.sdExport.itemName}` : ""}`,
+  dateField: "issueDate",
+  facets: { process: (a) => a.process, kind: (a) => a.kind, period: (a) => a.taxPeriod },
+  totals: ["amount"],
+}
+export type AdjustmentFields = Omit<VatAdjustment, "id" | "no" | "process" | "createdAt" | "history">
+/** What the register prints… */
+export const ADJUSTMENT_CSV_COLUMNS: { key: string; label: string }[] = [
+  { key: "issueDate", label: "Date" }, { key: "no", label: "Adjustment No" }, { key: "kind", label: "Kind" }, { key: "note", label: "9.1 note" }, { key: "taxPeriod", label: "Tax period" },
+  { key: "amount", label: "Amount" }, { key: "description", label: "Description" }, { key: "reference", label: "Reference" }, { key: "process", label: "Process" },
+]
+export const adjustmentCsvName = (date = new Date().toISOString().slice(0, 10)) => `vat-adjustments-${date}.csv`
+/** …and what an edit of one records in the audit trail. */
+export const ADJUSTMENT_DIFF_FIELDS = ["kind", "issueDate", "taxPeriod", "amount", "description", "reference"]
+export const adjustmentDiff = (a: VatAdjustment, b: VatAdjustment) => diff(a, b, ADJUSTMENT_DIFF_FIELDS)
+/** A new adjustment's identity: the next id of the `va` series and the next VA-MMYY####. */
+export const adjustmentIdentity = (date: string) => ({ id: `va${db.seq.adjustment + 1}`, no: nextNo("VA", "adjustment", db.adjustments, date) })
+export const claimAdjustmentId = () => { db.seq.adjustment += 1 }
+/** The adjustment's own trail — its history entry, stamped by whoever writes it. */
+export const stampAdjustmentHistory = stampLifeHistory
+/**
+ * What an adjustment may hold: a date that is not in the future, a tax period inside the return range and not yet
+ * submitted, and — for a claim of SD on the inputs of exported goods — a purchase line, an export sale and a quantity
+ * inside the six-month window, from which the amount is computed rather than taken.
+ */
+export function adjustmentBuild(body: unknown, self: VatAdjustment | undefined, src: VatSource = db): RuleProblem | { process: "Created" | "Approved"; date: string; fields: AdjustmentFields } {
+  const parsed = adjustmentInput.safeParse(body)
+  if (!parsed.success) return invalidRule(zodErrors(parsed.error))
+  const a = parsed.data
+  if (a.issueDate > TODAY) return invalidRule({ issueDate: ["future"] })
+  if (a.taxPeriod > CURRENT || a.taxPeriod < FIRST_RETURN) return invalidRule({ taxPeriod: ["outOfRange"] })
+  const lock = lockedFieldRule(`${a.taxPeriod}-01`, "taxPeriod", src); if (lock) return invalidRule(lock)
+  // R6.3: SD on inputs of exported goods — linked, window-checked, amount computed from the purchase line
+  let amount = round2(a.amount), sdExport: VatAdjustment["sdExport"]
+  if (a.kind === "sdExport") {
+    const r = sdExportLink(a, { purchases: src.purchases, sales: src.sales, adjustments: src.adjustments }, self?.id)
+    if ("errors" in r) return invalidRule(r.errors)
+    amount = r.amount; sdExport = r.link
+  }
+  return {
+    process: a.process, date: a.issueDate,
+    fields: { kind: a.kind, note: ADJUSTMENT_NOTE[a.kind], issueDate: a.issueDate, taxPeriod: a.taxPeriod, amount, description: a.description, reference: a.reference || undefined, sdExport, issuedBy: self?.issuedBy ?? "" },
+  }
+}
+/**
+ * Approving re-checks a claim for SD on the inputs of exported goods: another claim may have used the quantity since
+ * the draft was saved.
+ */
+export function adjustmentApproveRule(d: VatAdjustment, src: VatSource = db): RuleProblem | undefined {
+  if (d.kind !== "sdExport" || !d.sdExport) return undefined
+  const x = d.sdExport
+  const r = sdExportLink({ purchaseId: x.purchaseId, itemId: x.itemId, qty: x.qty, saleId: x.saleId, issueDate: d.issueDate, taxPeriod: d.taxPeriod }, { purchases: src.purchases, sales: src.sales, adjustments: src.adjustments }, d.id)
+  return "errors" in r ? invalidRule(r.errors) : undefined
+}
+/** Approve and cancel both refuse to touch an adjustment whose tax period has been submitted (Mushak 9.1). */
+export const adjustmentLockRule = (d: VatAdjustment, src: VatSource = db) => lockedConflictProblem(`${d.taxPeriod}-01`, d.no, src) ?? undefined
+export const adjustmentRoutes = lifecycle<VatAdjustment, AdjustmentFields>({
   entity: "adjustment", label: "VAT adjustment", list: () => db.adjustments, idPrefix: "va", seq: "adjustment", noPrefix: "VA",
-  build: (body, self) => {
-    const parsed = adjustmentInput.safeParse(body)
-    if (!parsed.success) return { error: zodProblem(parsed.error) }
-    const a = parsed.data
-    if (a.issueDate > TODAY) return { error: invalid({ issueDate: ["future"] }) }
-    if (a.taxPeriod > CURRENT || a.taxPeriod < FIRST_RETURN) return { error: invalid({ taxPeriod: ["outOfRange"] }) }
-    const lock = lockedField(`${a.taxPeriod}-01`, "taxPeriod"); if (lock) return { error: lock }
-    // R6.3: SD on inputs of exported goods — linked, window-checked, amount computed from the purchase line
-    let amount = round2(a.amount), sdExport: VatAdjustment["sdExport"]
-    if (a.kind === "sdExport") {
-      const r = sdExportLink(a, { purchases: db.purchases, sales: db.sales, adjustments: db.adjustments }, self?.id)
-      if ("errors" in r) return { error: invalid(r.errors) }
-      amount = r.amount; sdExport = r.link
-    }
-    return {
-      process: a.process, date: a.issueDate,
-      fields: { kind: a.kind, note: ADJUSTMENT_NOTE[a.kind], issueDate: a.issueDate, taxPeriod: a.taxPeriod, amount, description: a.description, reference: a.reference || undefined, sdExport, issuedBy: self?.issuedBy ?? "" },
-    }
-  },
+  build: (body, self) => { const r = adjustmentBuild(body, self); return "status" in r ? { error: ruleResponse(r) } : r },
   locked: (d) => lockedConflict(`${d.taxPeriod}-01`, d.no),
-  // R6.3: re-check an SD claim on approval — another claim may have used the quantity since the draft was saved
-  approve: (d) => {
-    if (d.kind !== "sdExport" || !d.sdExport) return null
-    const x = d.sdExport
-    const r = sdExportLink({ purchaseId: x.purchaseId, itemId: x.itemId, qty: x.qty, saleId: x.saleId, issueDate: d.issueDate, taxPeriod: d.taxPeriod }, { purchases: db.purchases, sales: db.sales, adjustments: db.adjustments }, d.id)
-    return "errors" in r ? invalid(r.errors) : null
-  },
-  diffFields: ["kind", "issueDate", "taxPeriod", "amount", "description", "reference"],
-  spec: {
-    search: (a) => `${a.no} ${a.description} ${a.reference ?? ""} ${a.sdExport ? `${a.sdExport.purchaseNo} ${a.sdExport.saleNo} ${a.sdExport.itemName}` : ""}`,
-    dateField: "issueDate",
-    facets: { process: (a) => a.process, kind: (a) => a.kind, period: (a) => a.taxPeriod },
-    totals: ["amount"],
-  },
-  csv: [
-    { key: "issueDate", label: "Date" }, { key: "no", label: "Adjustment No" }, { key: "kind", label: "Kind" }, { key: "note", label: "9.1 note" }, { key: "taxPeriod", label: "Tax period" },
-    { key: "amount", label: "Amount" }, { key: "description", label: "Description" }, { key: "reference", label: "Reference" }, { key: "process", label: "Process" },
-  ],
+  approve: (d) => { const r = adjustmentApproveRule(d); return r ? ruleResponse(r) : null },
+  diffFields: ADJUSTMENT_DIFF_FIELDS,
+  spec: adjustmentSpec,
+  csv: ADJUSTMENT_CSV_COLUMNS,
   csvName: "vat-adjustments",
 })
 

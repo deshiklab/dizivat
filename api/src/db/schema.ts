@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, HistoryEntry } from "@/lib/types"
+import type { AuditChange, HistoryEntry, SdExportLink } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -1294,6 +1294,168 @@ export const accountingConfig = pgTable("accounting_config", {
   updatedBy: text("updated_by"),
 }, (t) => [
   check("accounting_config_single_row", sql`${t.id} = 1`),
+])
+
+/**
+ * R5.6: a treasury deposit (TR-6) — the challan the VAT, the VDS, the SD, the interest or a penalty was paid into the
+ * government treasury with. It is what Mushak 9.1 counts as tax already paid, and what a purchase VDS certificate
+ * quotes, so it is a document of its own and not a column of the return.
+ */
+export const treasuryDeposits = pgTable("treasury_deposits", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** TC-MMYY#### */
+  no: text("no").notNull(),
+  head: text("head", { enum: ["vat", "vds", "sd", "interest", "penalty", "excise", "devSurcharge", "ictSurcharge", "healthSurcharge", "envSurcharge"] }).notNull(),
+  /** economic code, e.g. 1/1133/0015/0311 — derived from the head and the company's zone */
+  code: text("code").notNull(),
+  /** the VAT return period the deposit counts toward (YYYY-MM) */
+  taxPeriod: text("tax_period").notNull(),
+  challanNo: text("challan_no").notNull(),
+  challanDate: date("challan_date", { mode: "string" }).notNull(),
+  mode: text("mode", { enum: ["cash", "cheque", "payOrder", "draft", "online"] }).notNull(),
+  bank: text("bank").notNull(),
+  bankBranch: text("bank_branch").notNull(),
+  district: text("district").notNull(),
+  bankAddress: text("bank_address"),
+  /** the company bank account the money left from (optional) */
+  accountId: text("account_id"),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  depositor: text("depositor").notNull(),
+  designation: text("designation"),
+  address: text("address").notNull(),
+  description: text("description").notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** A deleted draft leaves the register but keeps its row, so its id and its number stay retired. */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("treasury_deposits_no_key").on(t.no),
+  index("treasury_deposits_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?head=`, `?period=` and `?mode=` facets, and the balance a deposit leaves an account with */
+  index("treasury_deposits_head_idx").on(t.head),
+  index("treasury_deposits_period_idx").on(t.taxPeriod),
+  index("treasury_deposits_account_idx").on(t.accountId),
+  index("treasury_deposits_challan_date_idx").on(t.challanDate),
+  check("treasury_deposits_head_check",
+    sql`${t.head} in ('vat','vds','sd','interest','penalty','excise','devSurcharge','ictSurcharge','healthSurcharge','envSurcharge')`),
+  check("treasury_deposits_mode_check", sql`${t.mode} in ('cash','cheque','payOrder','draft','online')`),
+  check("treasury_deposits_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("treasury_deposits_amount_check", sql`${t.amount} > 0`),
+])
+
+/**
+ * R5.6: a VAT deduction at source (Mushak 6.6) — VAT withheld on a supply. `purchase` is what we withheld from a
+ * supplier (we issue the certificate, and it may be deposited with a treasury challan); `sales` is what a withholding
+ * customer withheld from us. An approved certificate settles part of what the invoice still has due, so its approval
+ * writes the invoice's `paid` and `due` in the same transaction — those are columns of `sales` and `purchases`.
+ */
+export const vdsEntries = pgTable("vds_entries", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** VDS-MMYY#### */
+  no: text("no").notNull(),
+  mode: text("mode", { enum: ["purchase", "sales"] }).notNull(),
+  /** the invoice the certificate was written against */
+  docId: text("doc_id").notNull(),
+  docNo: text("doc_no").notNull(),
+  challanNo: text("challan_no").notNull(),
+  docDate: date("doc_date", { mode: "string" }).notNull(),
+  partyId: text("party_id").notNull(),
+  partyName: text("party_name").notNull(),
+  partyBin: text("party_bin").notNull(),
+  partyAddress: text("party_address").notNull(),
+  /** value of the supply subject to VDS, and the VAT charged on it */
+  docValue: numeric("doc_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  docVat: numeric("doc_vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  certificateNo: text("certificate_no"),
+  certificateDate: date("certificate_date", { mode: "string" }).notNull(),
+  taxPeriod: text("tax_period").notNull(),
+  /** purchase VDS: the treasury challan it was deposited with (both optional) */
+  treasuryId: text("treasury_id"),
+  treasuryChallan: text("treasury_challan"),
+  remark: text("remark"),
+  /** the part of `amount` that settled the invoice's due when the certificate was approved (reversed on cancel) */
+  settled: numeric("settled", { precision: 18, scale: 2, mode: "number" }),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** A deleted draft leaves the register but keeps its row, so its id and its number stay retired. */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("vds_entries_no_key").on(t.no),
+  index("vds_entries_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?mode=`, `?party=` and `?period=` facets, and the invoice a certificate was written against */
+  index("vds_entries_mode_idx").on(t.mode),
+  index("vds_entries_doc_idx").on(t.docId),
+  index("vds_entries_party_idx").on(t.partyId),
+  index("vds_entries_period_idx").on(t.taxPeriod),
+  index("vds_entries_treasury_idx").on(t.treasuryId),
+  index("vds_entries_certificate_date_idx").on(t.certificateDate),
+  check("vds_entries_mode_check", sql`${t.mode} in ('purchase','sales')`),
+  check("vds_entries_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("vds_entries_amount_check", sql`${t.amount} > 0`),
+  // a certificate settles at most what it withheld, and only a purchase one quotes a challan
+  check("vds_entries_settled_check", sql`${t.settled} is null or (${t.settled} >= 0 and ${t.settled} <= ${t.amount} + 0.004)`),
+  check("vds_entries_treasury_check", sql`${t.treasuryId} is null or ${t.mode} = 'purchase'`),
+])
+
+/**
+ * R5.6: a manual VAT adjustment — one of the Mushak 9.1 notes 27 / 32 / 38 / 39 / 40 that a book cannot derive: an
+ * increase or a decrease of output tax, of input tax credit or of SD, and (R6.3) the SD paid on an input that went
+ * into goods exported within six months, whose link to the purchase line and the export sale is kept with it.
+ */
+export const vatAdjustments = pgTable("vat_adjustments", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** VA-MMYY#### */
+  no: text("no").notNull(),
+  kind: text("kind", { enum: ["otherIncrease", "otherDecrease", "sdIncrease", "sdDecrease", "sdExport"] }).notNull(),
+  /** the 9.1 note the amount lands in: 27 / 32 / 38 / 39 / 40 */
+  note: integer("note").notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  taxPeriod: text("tax_period").notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  description: text("description").notNull(),
+  reference: text("reference"),
+  /** kind `sdExport`: the SD-paid input and the export invoice it went into */
+  sdExport: jsonb("sd_export").$type<SdExportLink>(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** A deleted draft leaves the register but keeps its row, so its id and its number stay retired. */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("vat_adjustments_no_key").on(t.no),
+  index("vat_adjustments_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?kind=` and `?period=` facets, and the 9.1 return's own notes */
+  index("vat_adjustments_kind_idx").on(t.kind),
+  index("vat_adjustments_period_idx").on(t.taxPeriod),
+  index("vat_adjustments_issue_date_idx").on(t.issueDate),
+  check("vat_adjustments_kind_check",
+    sql`${t.kind} in ('otherIncrease','otherDecrease','sdIncrease','sdDecrease','sdExport')`),
+  check("vat_adjustments_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("vat_adjustments_note_check", sql`${t.note} in (27, 32, 38, 39, 40)`),
+  check("vat_adjustments_amount_check", sql`${t.amount} > 0`),
+  // only a claim for SD on the inputs of exported goods carries its link
+  check("vat_adjustments_sd_export_check",
+    sql`(${t.sdExport} is null and ${t.kind} <> 'sdExport') or (${t.sdExport} is not null and ${t.kind} = 'sdExport')`),
 ])
 
 /**

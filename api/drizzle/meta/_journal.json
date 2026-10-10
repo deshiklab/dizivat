@@ -113,6 +113,13 @@
       "when": 1791664024333,
       "tag": "0015_r56_accounting",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791669144060,
+      "tag": "0016_r56_vat_documents",
+      "breakpoints": true
     }
   ]
 }
