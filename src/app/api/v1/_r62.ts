@@ -10,30 +10,39 @@ import { db } from "@/lib/mock/db"
 import { auditStore } from "@/lib/mock/audit"
 import { userStore } from "@/lib/mock/users"
 import { COMPANY } from "@/lib/company"
-import { bondRows, daysBetween, registerFrom, udRow, UD_WARN_PCT } from "@/lib/rmg"
-import { itemInput, partyInput, type UdInput } from "@/lib/schemas"
+import { bondRows, daysBetween, registerFrom, udAmendment, udFitForSale, udRow, UD_WARN_PCT } from "@/lib/rmg"
+import { z } from "zod"
+import { itemInput, partyInput, type UdParsed } from "@/lib/schemas"
 import type {
-  BackupRow, BackupStatus, Batch, ImportEntity, ImportIssue, ImportResult, Item, Party, SubconProcess, SubconRegister, SubconRow,
-  UdLine, UdRegister, RestoreDrill,
+  AuditChange, BackupRow, BackupStatus, Batch, ImportEntity, ImportIssue, ImportResult, Item, Party, Sale, SubconProcess,
+  SubconRegister, SubconRow, UdLine, UdRecord, UdRegister, UdRow, VatSettings, RestoreDrill,
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
 import { badUnit } from "@/lib/mock/units"
+import { diff as auditDiff } from "@/lib/mock/audit"
 import { buildItem, newItemId } from "./_items"
 import { invalidRule, type RuleProblem } from "./_lib"
 import { newPartyId } from "./_parties"
 
 /* ── UD / UP register ─────────────────────────────────────────────────────── */
 
-export function udRegister(today: string, customerId?: string): UdRegister {
-  const rows = db.uds
+/** What the UD register reads and writes: the declarations, the invoices that draw on them, the exporters and the SKUs. */
+export type UdSource = { uds: UdRecord[]; sales: Sale[]; customers: Party[]; items: Item[] }
+/** The company block the register's bond watch-list is built from: the licence the NBR profile carries. */
+export type UdHead = { name: string; profile: VatSettings["profile"] }
+
+/** The register: every exporter's declarations with the quantities already supplied, plus the bond licence watch-list. */
+export function udRegister(today: string, customerId?: string, src: UdSource = db,
+  head: UdHead = { name: COMPANY.name, profile: db.vatSettings.profile }): UdRegister {
+  const rows = src.uds
     .filter((u) => !customerId || u.customerId === customerId)
-    .map((u) => udRow(u, db.sales, today))
+    .map((u) => udRow(u, src.sales, today))
     .sort((a, b) => b.date.localeCompare(a.date) || a.no.localeCompare(b.no))
-  const p = db.vatSettings.profile
+  const p = head.profile
   const own = p && (p.bondLicenseNo || p.segment === "rmgDirect" || p.segment === "rmgComposite")
-    ? { name: COMPANY.name, licenceNo: p.bondLicenseNo, expiry: p.bondLicenseExpiry } : null
-  const bonds = bondRows(own, db.customers.filter((c) => c.active !== false), today)
+    ? { name: head.name, licenceNo: p.bondLicenseNo, expiry: p.bondLicenseExpiry } : null
+  const bonds = bondRows(own, src.customers.filter((c) => c.active !== false), today)
   return {
     rows, bonds,
     totals: {
@@ -46,17 +55,28 @@ export function udRegister(today: string, customerId?: string): UdRegister {
 }
 export { UD_WARN_PCT }
 
+/** The columns the register's CSV prints — one row per input of every declaration. */
+export const udCsvColumns = [
+  { key: "no", label: "UD / UP No" }, { key: "kind", label: "Type" }, { key: "date", label: "Date" }, { key: "expiry", label: "Expiry" },
+  { key: "customer", label: "Exporter" }, { key: "bin", label: "BIN" }, { key: "masterLcNo", label: "Export LC / contract" },
+  { key: "name", label: "Item" }, { key: "hsCode", label: "HS code" }, { key: "uom", label: "Unit" }, { key: "qty", label: "UD quantity" },
+  { key: "used", label: "Supplied" }, { key: "remaining", label: "Remaining" }, { key: "pct", label: "Used %" }, { key: "state", label: "Status" },
+]
+/** …and the rows: every line of every declaration in it. */
+export const udCsvRows = (reg: UdRegister) =>
+  reg.rows.flatMap((u) => u.lines.map((l) => ({ ...l, no: u.no, kind: u.kind, date: u.date, expiry: u.expiry, customer: u.customerName, bin: u.customerBin, masterLcNo: u.masterLcNo, state: u.state })))
+
 /** Business rules for create / update: the customer must be an exporter, items must exist, numbers unique per customer. */
-export function udCheck(d: UdInput & { lines: { itemId: string; qty: number; value?: number }[] }, selfId?: string): { errors?: Record<string, string[]>; customer?: Party; lines?: UdLine[] } {
+export function udCheck(d: UdParsed, selfId?: string, src: UdSource = db): { errors?: Record<string, string[]>; customer?: Party; lines?: UdLine[] } {
   const errors: Record<string, string[]> = {}
-  const customer = db.customers.find((c) => c.id === d.customerId)
+  const customer = src.customers.find((c) => c.id === d.customerId)
   if (!customer) errors.customerId = ["unknown"]
   else if (!customer.exporterType) errors.customerId = ["notExporter"]
   const no = d.no.trim().toUpperCase()
-  if (db.uds.some((u) => u.id !== selfId && u.customerId === d.customerId && u.no.trim().toUpperCase() === no)) errors.no = ["duplicate"]
+  if (src.uds.some((u) => u.id !== selfId && u.customerId === d.customerId && u.no.trim().toUpperCase() === no)) errors.no = ["duplicate"]
   const lines: UdLine[] = []
   d.lines.forEach((l, i) => {
-    const it = db.items.find((x) => x.id === l.itemId)
+    const it = src.items.find((x) => x.id === l.itemId)
     if (!it) { errors[`lines.${i}.itemId`] = ["unknown"]; return }
     lines.push({ itemId: it.id, name: it.name, hsCode: it.hsCode, uom: it.unit, qty: l.qty, ...(l.value != null && Number.isFinite(l.value) ? { value: Math.round(l.value * 100) / 100 } : {}) })
   })
@@ -64,8 +84,103 @@ export function udCheck(d: UdInput & { lines: { itemId: string; qty: number; val
 }
 
 /** Quantity of a UD line already supplied on approved / draft invoices (a UD whose lines are in use cannot be deleted). */
-export const udInUse = (udNo: string, customerId: string) =>
-  db.sales.some((s) => s.customerId === customerId && s.process !== "Cancelled" && s.export?.deemed && (s.export.udNo ?? "").trim().toUpperCase() === udNo.trim().toUpperCase())
+export const udInUse = (udNo: string, customerId: string, sales: Sale[] = db.sales) =>
+  sales.some((s) => s.customerId === customerId && s.process !== "Cancelled" && s.export?.deemed && (s.export.udNo ?? "").trim().toUpperCase() === udNo.trim().toUpperCase())
+
+/** The id the next declaration takes — the mock's own counter, which the API keeps in the snapshot with the rest of `db.seq`. */
+export const newUdId = (stamp: string) => `ud${++db.seq.ud}-${stamp}`
+
+/** What a write hands back: the declaration as it stands, what the register shows, and what the audit trail should say. */
+export type UdWrite = RuleProblem | {
+  ud: UdRecord; row: UdRow
+  action: "created" | "edited" | "deleted"; ref: string; changes?: AuditChange[]; note?: string
+}
+
+/**
+ * Creating one: the rules above, then the document itself — the number in capitals, its inputs priced from the SKUs'
+ * own names and units, and the history entry that opens it. Pushed into `src`, which is the mock's array or, in the
+ * API, the rows that carry the collection.
+ */
+export function udCreate(d: UdParsed, user: User, today: string, src: UdSource = db, stamp = Date.now().toString(36)): UdWrite {
+  const c = udCheck(d, undefined, src)
+  if (c.errors) return { status: 422, title: "Validation failed", errors: c.errors }
+  const at = new Date().toISOString()
+  const ud: UdRecord = {
+    id: newUdId(stamp), no: d.no.trim().toUpperCase(), kind: d.kind, date: d.date, expiry: d.expiry,
+    customerId: c.customer!.id, customerName: c.customer!.name, customerBin: c.customer!.bin, masterLcNo: d.masterLcNo, buyer: d.buyer || undefined,
+    lines: c.lines!, status: d.status, note: d.note || undefined, masterLcValue: d.masterLcValue, currency: d.currency, createdBy: user.name, createdAt: at,
+    history: [{ at, by: user.name, action: "created" }],
+  }
+  src.uds.push(ud)
+  return { ud, row: udRow(ud, src.sales, today), action: "created", ref: `${ud.no} · ${ud.customerName}` }
+}
+
+/**
+ * Editing one — the exporter's customer and the number cannot change once the UD is used on an invoice, and a line
+ * cannot drop below what was already supplied. A change of quantities or of the LC value is an amendment
+ * (BGMEA / BKMEA amendment certificate), and once the UD is in use the amendment needs its reason: the date must be
+ * the UD's own day or later, and not in the future. A line or the LC value sent without a value keeps the one on
+ * file — clearing one needs an explicit 0.
+ */
+export function udUpdate(u: UdRecord, d: UdParsed, user: User, today: string, src: UdSource = db): UdWrite {
+  const c = udCheck(d, u.id, src)
+  if (c.errors) return { status: 422, title: "Validation failed", errors: c.errors }
+  const row = udRow(u, src.sales, today)
+  const used = row.lines.some((l) => l.used > 0) || udInUse(u.no, u.customerId, src.sales)
+  if (used && (d.customerId !== u.customerId || d.no.trim().toUpperCase() !== u.no))
+    return { status: 422, title: "Validation failed", errors: { [d.customerId !== u.customerId ? "customerId" : "no"]: ["udInUse"] } }
+  const errors: Record<string, string[]> = {}
+  row.lines.forEach((l) => {
+    const i = d.lines.findIndex((x) => x.itemId === l.itemId)
+    if (l.used > 0 && (i < 0 || d.lines[i].qty < l.used)) errors[i < 0 ? "lines" : `lines.${i}.qty`] = ["belowUsed"]
+  })
+  for (const l of c.lines!) if (l.value == null) { const old = u.lines.find((x) => x.itemId === l.itemId)?.value; if (old != null) l.value = old }
+  if (d.masterLcValue == null) d.masterLcValue = u.masterLcValue
+  const amendment = udAmendment(u, c.lines!, d.masterLcValue, { reason: d.amendReason, date: d.amendDate || today, by: user.name })
+  if (amendment) {
+    if (used && !amendment.reason) errors.amendReason = ["amendmentReason"]
+    if (amendment.date < u.date) errors.amendDate = ["beforeIssue"]
+    else if (amendment.date > today) errors.amendDate = ["future"]
+  }
+  if (Object.keys(errors).length) return { status: 422, title: "Validation failed", errors }
+  const before = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
+  const at = new Date().toISOString()
+  Object.assign(u, {
+    no: d.no.trim().toUpperCase(), kind: d.kind, date: d.date, expiry: d.expiry, customerId: c.customer!.id, customerName: c.customer!.name, customerBin: c.customer!.bin,
+    masterLcNo: d.masterLcNo, buyer: d.buyer || undefined, lines: c.lines!, status: d.status, note: d.note || undefined, updatedAt: at,
+    masterLcValue: d.masterLcValue, currency: d.currency,
+  })
+  if (amendment) (u.amendments ??= []).push({ ...amendment, at })
+  const after = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
+  const changes = auditDiff(before, after, ["no", "kind", "date", "expiry", "masterLcNo", "masterLcValue", "buyer", "status", "lines", "note"])
+  ;(u.history ??= []).push({ at, by: user.name, action: "edited", note: amendment ? `Amendment ${amendment.no}${amendment.reason ? ` — ${amendment.reason}` : ""}` : changes.map((x) => x.field).join(", ") || undefined })
+  return { ud: u, row: udRow(u, src.sales, today), action: "edited", ref: `${u.no} · ${u.customerName}`, changes,
+    note: amendment ? `Amendment ${amendment.no}${amendment.reason ? ` — ${amendment.reason}` : ""}` : undefined }
+}
+
+/** Deleting one: only a UD no invoice refers to can go (otherwise close it). */
+export function udRemove(u: UdRecord, src: UdSource = db): UdWrite {
+  if (udInUse(u.no, u.customerId, src.sales)) return { status: 409, title: "udInUse" }
+  src.uds.splice(src.uds.indexOf(u), 1)
+  return { ud: u, row: udRow(u, src.sales, ""), action: "deleted", ref: `${u.no} · ${u.customerName}` }
+}
+
+/** One UD as the register and the invoice view see it — its lines with what the invoices have drawn on them. */
+export const udAnswer = (u: UdRecord, today: string, src: UdSource = db) => udRow(u, src.sales, today)
+
+/** What the fit question may be given: the exporter, the invoice's date, its lines, and the UD number it cites. */
+export const udFitInput = z.object({
+  saleId: z.string().optional(), customerId: z.string().min(1), issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  udNo: z.string().optional().default(""),
+  lines: z.array(z.object({ itemId: z.string(), qty: z.number() })).default([]),
+})
+
+/** R6.2: does this deemed-export invoice fit inside the exporter's UD? Read-only, asked live by the sales form. */
+export function udFitAnswer(body: { saleId?: string; customerId: string; issueDate: string; udNo?: string; lines: { itemId: string; qty: number }[] },
+  src: UdSource = db) {
+  return udFitForSale({ id: body.saleId ?? "", customerId: body.customerId, issueDate: body.issueDate, lines: body.lines as never,
+    export: { deemed: true, udNo: body.udNo ?? "" } as never }, src.uds, src.sales)
+}
 
 /* ── Subcontracting (Mushak 6.4) register ─────────────────────────────────── */
 

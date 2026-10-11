@@ -48,7 +48,8 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | Health | `health` (public) | **native** — liveness + DB round-trip |
 | The NBR VAT documents (R5.6) | `vat/treasury`, `vat/treasury/{id}`, `vat/vds`, `vat/vds/{id}`, `vat/vds/eligible`, `vat/adjustments`, `vat/adjustments/{id}` | **native** — `treasury_deposits` (TR-6), `vds_entries` (Mushak 6.6), `vat_adjustments` (the 9.1 notes no book can derive); an approved certificate settles what it withholds, on the invoice's row |
 | The Mushak 9.1 return (R5.6) | `vat/returns`, `vat/returns/{period}`, `vat/returns/{period}/notes/{note}`, `vat/periods`, `vat/compliance`, `vat/settings` | **native** — `vat_returns` (one row per tax period, the period being its id; a submitted one carries the computation it was filed with) and the one row of `vat_settings`; the period lock every other family checks reads them, not the compat snapshot |
-| Everything else: the Mushak books, the Mushak forms, notifications, dashboard, search, import, the services… | 33 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| The exporters' Utilization Declarations (R6.2) | `vat/uds`, `vat/uds/{id}`, `vat/uds/fit` | **native** — `uds` + `ud_lines` (the amendment certificates travel with the head as JSONB); one declaration number per exporter is a unique index, and a delete stamps `deleted_at` so the id stays retired |
+| Everything else: the Mushak books, the Mushak forms, notifications, dashboard, search, import, the services… | 22 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -683,6 +684,38 @@ the rows, the totals, the deadlines, the hits and the import's issues cannot dri
 - **25 compat route modules are left, 91 native.** What is left is the R6 VAT registers, and then `compat_state` and
   the lock are removed and the API can scale out.
 
+## R6.2 — the exporters' Utilization Declarations on their own tables
+
+`api/src/modules/uds.ts` serves `vat/uds` (the register, with the bond licence watch-list and its CSV), `vat/uds/{id}`
+(one declaration with what every deemed-export invoice has drawn on it), `vat/uds/fit` (the question the sales form
+asks before it saves a deemed export) and the create / edit / delete behind the register. The rules are the mock's
+own, re-exported by `api/src/compat/entry.ts` from `_r62.ts` (`udRegister`, `udCsvColumns`, `udCsvRows`, `udCheck`,
+`udInUse`, `newUdId`, `udCreate`, `udUpdate`, `udRemove`, `udAnswer`, `udFitInput`, `udFitAnswer`) — the exporter that
+has to be one, the SKU every input has to be, the number that is unique per exporter, the quantity that cannot drop
+below what was already supplied, and the amendment a change of quantities or of the LC value becomes — so the rows,
+the error codes, the amendments and the audit events cannot drift between the two runtimes.
+
+- **A declaration is a row and each input is a row.** `uds` holds the head (the export LC / contract, the buyer, the
+  dates, the status, the LC value in the declaration's currency); `ud_lines` holds what it permits, in the order it
+  was entered. What a garment order may still procure, and how much of it is left, is a `SUM` over those rows.
+- **One number per exporter, in the database as well.** A partial unique index on `(customer_id, no)` covers the live
+  rows, so a race that slips past the application check is a 409, not a 500 — while a deleted declaration frees its
+  number again, exactly as the mock's array did.
+- **A delete stamps `deleted_at`.** The declaration has no undo and the mock removed it from its array for good, but
+  its id counter had moved on, so the row is what stops a later declaration from taking the same id. The lines stay
+  with it, as every other document family's do.
+- **Amendments travel with the head.** A BGMEA / BKMEA amendment certificate — what changed, when, why and who signed
+  it — is JSONB on the declaration's row, the way a document's history already was: it is a record of the edit, not a
+  figure anything has to add up.
+- **The in-memory copy stays**, because the RMG export register — still compat code — reads `db.uds` to decide which
+  export invoices are at risk, and the bond register, the drawback claims and the sales form read it too. The module
+  keeps that copy in step on every write, and the write-back adopts whatever a compat handler changes: closing a
+  declaration natively moves the export register's at-risk count at once, which the suite checks.
+- **`vat/uds/fit` is registered before `vat/uds/{id}`** — Express would read "fit" as a declaration id otherwise, the
+  same ordering the VDS register's `eligible` route needs.
+- **22 compat route modules are left, 94 native.** What is left is the rest of the R6 VAT registers, and then
+  `compat_state` and the lock are removed and the API can scale out.
+
 ## Tables
 
 | Table | Purpose |
@@ -727,7 +760,9 @@ the rows, the totals, the deadlines, the hits and the import's issues cannot dri
 | `accounting_config` (single row) | **R5.6:** how far the books are closed (`closed_up_to`), whether an advance is allowed and whether a new document pre-allocates the oldest invoices — a control on every money document written after it |
 | `vat_returns` | **R5.6:** one Mushak 9.1 return per tax period, the period being its id (`ord` only keeps the insertion order stable) — the kind (`original` / `amended` / `full` / `late`, an amended one with its reason), whether there were taxable activities, `draft` or `submitted`, the manual notes (parts 4–5, JSONB) and, once filed, the date, the acknowledgement number, who filed it and **every note of the computation as it was filed** (JSONB); the period lock every other document checks is a row here |
 | `vat_settings` (single row) | **R5.6:** the NBR settings — the zone the economic codes are derived from and the business profile the forms print (JSONB), with who last changed them and when |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice) |
+| `uds` | **R6.2:** a Utilization Declaration (BGMEA / BKMEA) or Utilization Permission (customs) of an exporter customer — the number (unique per exporter), the kind, the dates, the exporter as printed, the export LC / contract and the buyer behind it, the LC value in the declaration's own currency, the amendment certificates (JSONB), its history (JSONB); `deleted_at` keeps a deleted declaration's id retired |
+| `ud_lines` | **R6.2:** the inputs a declaration permits — item, name, HS code, unit, the quantity, and the value the declaration allows for it; primary key (declaration, position) |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the

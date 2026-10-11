@@ -1,10 +1,9 @@
 import { TODAY } from "@/lib/company"
 import { db } from "@/lib/mock/db"
-import { diff, recordAudit } from "@/lib/mock/audit"
-import { udAmendment, udRow } from "@/lib/rmg"
+import { recordAudit } from "@/lib/mock/audit"
 import { udInput } from "@/lib/schemas"
 import { json, problem, withAuth, zodProblem } from "../../../_lib"
-import { udCheck, udInUse } from "../../../_r62"
+import { udAnswer, udRemove, udUpdate } from "../../../_r62"
 
 type Ctx = { params: Promise<{ id: string }> }
 const find = async (p: Ctx["params"]) => { const { id } = await p; return db.uds.find((u) => u.id === id) }
@@ -12,61 +11,30 @@ const find = async (p: Ctx["params"]) => { const { id } = await p; return db.uds
 /** One UD / UP with its usage per line (every deemed-export invoice that drew on it). */
 export const GET = withAuth<Ctx>(null, async (_req, { params }) => {
   const u = await find(params)
-  return u ? json(udRow(u, db.sales, TODAY)) : problem(404, "UD not found")
+  return u ? json(udAnswer(u, TODAY)) : problem(404, "UD not found")
 })
 
 /**
  * Edit (amendment) — the exporter's customer cannot change once the UD is used on an invoice, and a line cannot drop
- * below what was already supplied.
+ * below what was already supplied. The rules are `_r62.ts`'s, shared with the PostgreSQL build.
  */
 export const PUT = withAuth<Ctx>("doc.edit", async (req, { params }, user) => {
   const u = await find(params)
   if (!u) return problem(404, "UD not found")
   const parsed = udInput.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const c = udCheck(d, u.id)
-  if (c.errors) return problem(422, "Validation failed", c.errors)
-  const row = udRow(u, db.sales, TODAY)
-  const used = row.lines.some((l) => l.used > 0) || udInUse(u.no, u.customerId)
-  if (used && (d.customerId !== u.customerId || d.no.trim().toUpperCase() !== u.no)) return problem(422, "Validation failed", { [d.customerId !== u.customerId ? "customerId" : "no"]: ["udInUse"] })
-  const errors: Record<string, string[]> = {}
-  row.lines.forEach((l) => {
-    const i = d.lines.findIndex((x) => x.itemId === l.itemId)
-    if (l.used > 0 && (i < 0 || d.lines[i].qty < l.used)) errors[i < 0 ? "lines" : `lines.${i}.qty`] = ["belowUsed"]
-  })
-  // R6.3: a change of quantities / values is an amendment — once the UD is in use it needs the amendment reason
-  // a line (or the LC value) sent without a value keeps the one on file — clearing needs an explicit 0
-  for (const l of c.lines!) if (l.value == null) { const old = u.lines.find((x) => x.itemId === l.itemId)?.value; if (old != null) l.value = old }
-  if (d.masterLcValue == null) d.masterLcValue = u.masterLcValue
-  const amendment = udAmendment(u, c.lines!, d.masterLcValue, { reason: d.amendReason, date: d.amendDate || TODAY, by: user.name })
-  if (amendment) {
-    if (used && !amendment.reason) errors.amendReason = ["amendmentReason"]
-    if (amendment.date < u.date) errors.amendDate = ["beforeIssue"]
-    else if (amendment.date > TODAY) errors.amendDate = ["future"]
-  }
-  if (Object.keys(errors).length) return problem(422, "Validation failed", errors)
-  const before = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
-  const at = new Date().toISOString()
-  Object.assign(u, {
-    no: d.no.trim().toUpperCase(), kind: d.kind, date: d.date, expiry: d.expiry, customerId: c.customer!.id, customerName: c.customer!.name, customerBin: c.customer!.bin,
-    masterLcNo: d.masterLcNo, buyer: d.buyer || undefined, lines: c.lines!, status: d.status, note: d.note || undefined, updatedAt: at,
-    masterLcValue: d.masterLcValue, currency: d.currency,
-  })
-  if (amendment) (u.amendments ??= []).push({ ...amendment, at })
-  const after = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
-  const changes = diff(before, after, ["no", "kind", "date", "expiry", "masterLcNo", "masterLcValue", "buyer", "status", "lines", "note"])
-  ;(u.history ??= []).push({ at, by: user.name, action: "edited", note: amendment ? `Amendment ${amendment.no}${amendment.reason ? ` — ${amendment.reason}` : ""}` : changes.map((x) => x.field).join(", ") || undefined })
-  recordAudit({ actor: user, entity: "ud", entityId: u.id, ref: `${u.no} · ${u.customerName}`, action: "edited", changes })
-  return json(udRow(u, db.sales, TODAY))
+  const w = udUpdate(u, parsed.data, user, TODAY)
+  if ("status" in w) return problem(w.status, w.title, w.errors)
+  recordAudit({ actor: user, entity: "ud", entityId: w.ud.id, ref: w.ref, action: "edited", changes: w.changes, note: w.note })
+  return json(w.row)
 })
 
 /** Only a UD that no invoice refers to can be deleted (otherwise close it). */
 export const DELETE = withAuth<Ctx>("doc.delete", async (_req, { params }, user) => {
   const u = await find(params)
   if (!u) return problem(404, "UD not found")
-  if (udInUse(u.no, u.customerId)) return problem(409, "udInUse")
-  db.uds.splice(db.uds.indexOf(u), 1)
-  recordAudit({ actor: user, entity: "ud", entityId: u.id, ref: `${u.no} · ${u.customerName}`, action: "deleted" })
+  const w = udRemove(u)
+  if ("status" in w) return problem(w.status, w.title, w.errors)
+  recordAudit({ actor: user, entity: "ud", entityId: w.ud.id, ref: w.ref, action: "deleted" })
   return json({ ok: true })
 })

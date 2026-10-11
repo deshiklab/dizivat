@@ -10,7 +10,7 @@ import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
   AccountingConfig, AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind,
-  TreasuryDeposit, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
+  TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
@@ -33,6 +33,7 @@ interface Globals {
     boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
     moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
     adjustments: VatAdjustment[]
+    uds: UdRecord[]
     accountingConfig: AccountingConfig
     returns: VatReturn[]; vatSettings: VatSettings
     trash: TrashEntry[]
@@ -68,6 +69,7 @@ export function restoreGlobals(s: {
   boms: Bom[]; productionConfig: ProductionConfig; workOrders: WorkOrder[]
   moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
   adjustments: VatAdjustment[]
+  uds: UdRecord[]
   accountingConfig: AccountingConfig
   returns: VatReturn[]; vatSettings: VatSettings
   events: AuditEvent[]
@@ -81,7 +83,7 @@ export function restoreGlobals(s: {
     creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings, batches: s.batches,
     boms: s.boms, productionConfig: s.productionConfig, workOrders: s.workOrders,
     moneyAccounts: s.moneyAccounts, moneyDocs: s.moneyDocs, treasury: s.treasury, vds: s.vds,
-    adjustments: s.adjustments,
+    adjustments: s.adjustments, uds: s.uds,
     accountingConfig: s.accountingConfig,
     returns: s.returns ?? [], vatSettings: s.vatSettings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
@@ -383,6 +385,23 @@ export const mirror = {
   },
   removeReturn(id: string) {
     const list = mirror.returns()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R6.2: the exporters' Utilization Declarations — the bond register, the export statements and the sales form's
+   *  fit check read them (their own register reads the rows, see uds.ts) */
+  uds: (): UdRecord[] => G.__dzDb!.uds,
+  putUds(list: UdRecord[]) { const a = mirror.uds(); a.splice(0, a.length, ...list) },
+  findUd: (idOrNo: string) => mirror.uds().find((u) => u.id === idOrNo || u.no === idOrNo),
+  putUd(u: UdRecord) {
+    const list = mirror.uds()
+    const cur = list.find((x) => x.id === u.id)
+    if (cur) replaceObject(cur, u)
+    else list.push(u)
+    return cur ?? u
+  },
+  removeUd(id: string) {
+    const list = mirror.uds()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },

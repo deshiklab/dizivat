@@ -394,6 +394,28 @@ PRE_R56_RETURNS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (
   'returns', {RETURN_AGG}, 'vatSettings', {SETTINGS_DOC}
 )) where key = 'main'"""
 
+# ── R6.2 upgrade drill: the exporters' Utilization Declarations ─────────────────────────────────────────────
+# The first of the R6 registers to get a table: a database written before this slice holds every declaration
+# inside compat_state — the head with its inputs (`lines`) and its amendment certificates, optional fields absent
+# rather than null, dates as the strings the mock carried — and no row in `uds` / `ud_lines`. These statements
+# rebuild that shape from the live tables, so the first boot on this code has to adopt them. Nothing here ships:
+# it is the inverse of the UD half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+UD_LINES_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'hsCode', l.hs_code, 'uom', l.uom, 'qty', l.qty, 'value', l.value)""")
+    + """ order by l.ord), '[]'::jsonb) from ud_lines l where l.ud_id = u.id)""")
+UD_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', u.id, 'no', u.no, 'date', to_char(u.date, 'YYYY-MM-DD'), 'kind', u.kind, 'customerId', u.customer_id,
+    'customerName', u.customer_name, 'customerBin', u.customer_bin, 'masterLcNo', u.master_lc_no, 'buyer', u.buyer,
+    'expiry', to_char(u.expiry, 'YYYY-MM-DD'), 'status', u.status, 'note', u.note, 'masterLcValue', u.master_lc_value,
+    'currency', u.currency, 'amendments', u.amendments, 'lines', """ + UD_LINES_DOC + """, 'createdBy', u.created_by,
+    'createdAt', """ + _ISO.format("u.created_at") + """, 'updatedAt', """ + _ISO.format("u.updated_at") + """,
+    'history', u.history)""") + ")")
+UD_AGG = f"(select coalesce(jsonb_agg({UD_DOC} order by u.ord), '[]'::jsonb) from uds u where u.deleted_at is null)"
+# the collection back inside the snapshot (a deleted declaration has no place there: the mock removed it for good)
+PRE_R62_UDS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'uds', {UD_AGG}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -479,10 +501,10 @@ def flush_snapshot(s):
     rewinds those tables into their pre-release shape therefore has to flush the snapshot first, or the database it
     pretends to be — one the old code wrote, saving after every request — would hold a counter the real one never
     lost. Read-only: a GET changes nothing, it just runs the compat path's persist(). Which route is still compat
-    moves as the port does (R5.6 left the R6 registers — the UDs, the drawback claims and the export proceeds — so
-    the first of these that answers is the one that flushes).
+    moves as the port does (R6.2 left the drawback claims and the export proceeds, so the first of these that
+    answers is the one that flushes).
     """
-    for path in ("/vat/penalty", "/vat/sd-eligible", "/vat/uds", "/vat/return-amendments", "/vat/proceeds"):
+    for path in ("/vat/penalty", "/vat/sd-eligible", "/vat/return-amendments", "/vat/proceeds"):
         if s.get(f"{BASE}{path}").status_code == 200:
             return
     raise AssertionError("no compat route left for the drills to flush the snapshot with")
@@ -600,10 +622,18 @@ def run():
     # stays in PostgreSQL (and stays deleted across a restart) instead of living in the in-memory undo buffer
     gone = arif.post(f"{BASE}/vendors", json={"name": f"R5 Deleted Vendor {TAG}", "mode": "Foreign", "country": "China", "address": "Shenzhen, China"})
     gid = gone.json().get("id")
-    ud_body = {"kind": "UD", "no": f"BKMEA/UD/2026/R5{TAG}".upper(), "date": "2026-09-20", "customerId": "c10",
-               "masterLcNo": f"EXP-LC-R5-{TAG}", "buyer": "E2E BUYER", "expiry": "2027-03-31", "lines": [{"itemId": "i21", "qty": 1000}]}
+    ud_body = {"kind": "UD", "no": f"BKMEA/UD/2026/R6{TAG}".upper(), "date": "2026-09-20", "customerId": "c10",
+               "masterLcNo": f"EXP-LC-R6-{TAG}", "buyer": "E2E BUYER", "expiry": "2027-03-31", "lines": [{"itemId": "i21", "qty": 1000}]}
     ud = arif.post(f"{BASE}/vat/uds", json=ud_body)
-    check(ud.status_code == 201, f"compat: UD created for the snapshot check ({ud.status_code})")
+    check(ud.status_code == 201, f"native (R6.2): a declaration is created for the restart check ({ud.status_code})")
+    # …and the snapshot check below: the declarations are rows of their own now, so what it looks for is one of the
+    # company's own bond UDs — still a compat document, saved with the rest of compat_state
+    bu = arif.post(f"{BASE}/vat/bond-uds", json={"kind": "UD", "issuer": "BKMEA", "no": f"BKMEA/UD/2026/R5{TAG}".upper(),
+                                                 "date": "2026-08-01", "expiry": "2026-09-01",
+                                                 "masterLcNo": f"EXP-LC-R5-{TAG}",
+                                                 "inputs": [{"itemId": "i9", "qty": 100}],
+                                                 "garments": [{"itemId": "i18", "qty": 300}]})
+    check(bu.status_code == 201, f"compat: own UD created for the snapshot check ({bu.status_code})")
     unit = arif.post(f"{BASE}/units", json={"code": f"R5{TAG[:3]}", "name": "R5 test unit", "decimals": 1, "active": True})
     check(unit.status_code == 201 and unit.json()["id"].startswith("un"), "native: unit created")
     # R5.2: SKUs and master items are native too. A master item's rename carries its SKUs along (they quote its name),
@@ -3091,6 +3121,156 @@ def run():
           "R5.6: approving needs doc.approve, and the register needs a session")
     check(requests.get(f"{BASE}/vat/treasury").status_code == 401, "R5.6: …and a session is what the register answers to")
 
+    # R6.2: the exporters' Utilization Declarations are rows
+    print("R6.2: the UD / UP register is served from the tables")
+    udToday = tdate  # the fit question is asked for an invoice dated today
+    udReg = arif.get(f"{BASE}/vat/uds").json()
+    udRows = udReg.get("rows", [])
+    udLines = sum(len(r["lines"]) for r in udRows)
+    check(len(udRows) >= 3 and set(udReg.get("totals", {})) == {"active", "warn", "over", "expired"}
+          and len(udReg.get("bonds", [])) >= 1
+          and all(set(r) >= {"id", "no", "state", "usedPct", "daysLeft", "invoices", "bblc", "lines"} for r in udRows),
+          f"native (R6.2): the register answers every declaration with its usage and the bond watch-list "
+          f"({len(udRows)} declarations, {len(udReg.get('bonds', []))} licences)")
+    if DB_URL:
+        check(psql("select count(*) from uds where deleted_at is null") == str(len(udRows))
+              and psql("select count(*) from ud_lines l join uds u on u.id = l.ud_id where u.deleted_at is null")
+              == str(udLines)
+              and psql("select count(*) from compat_state where data->'db' ? 'uds'") == "0",
+              f"R6.2: …every one of them is a row in uds with its inputs in ud_lines ({udLines} inputs), "
+              f"and none is inside the compat snapshot")
+    check(arif.get(f"{BASE}/vat/uds", params={"format": "csv"}).headers.get("content-disposition", "").startswith('attachment; filename="ud-register-')
+          and arif.get(f"{BASE}/vat/uds", params={"format": "csv"}).text.splitlines()[0].lstrip("\ufeff").startswith("UD / UP No"),
+          "R6.2: the register prints its own CSV")
+    check(len(arif.get(f"{BASE}/vat/uds", params={"customer": "c10"}).json().get("rows", [])) >= 3
+          and not arif.get(f"{BASE}/vat/uds", params={"customer": "c1"}).json().get("rows"),
+          "R6.2: …and one exporter's own declarations, which is what the sales form asks for")
+    udOpen = [r for r in udRows if r["id"] == "ud3"][0]
+    check(arif.get(f"{BASE}/vat/uds/ud3").json().get("no") == udOpen["no"]
+          and len(arif.get(f"{BASE}/vat/uds/ud3").json().get("lines", [])) == len(udOpen["lines"])
+          and arif.get(f"{BASE}/vat/uds/nope").status_code == 404,
+          "R6.2: one declaration answers with its lines, and an unknown id is 404")
+
+    # the fit question the sales form asks: inside the declaration, over it, and for a number not in the register
+    udFitIn = arif.post(f"{BASE}/vat/uds/fit", json={"customerId": "c10", "issueDate": udToday,
+                                                    "udNo": udOpen["no"],
+                                                    "lines": [{"itemId": udOpen["lines"][0]["itemId"], "qty": 10}]})
+    udFitOver = arif.post(f"{BASE}/vat/uds/fit", json={"customerId": "c10", "issueDate": udToday,
+                                                       "udNo": udOpen["no"],
+                                                       "lines": [{"itemId": udOpen["lines"][0]["itemId"], "qty": 10_000_000}]})
+    udFitNone = arif.post(f"{BASE}/vat/uds/fit", json={"customerId": "c10", "issueDate": udToday,
+                                                       "udNo": f"NOT-IN-REGISTER-{TAG}", "lines": []})
+    check(udFitIn.status_code == 200 and udFitIn.json().get("ok") is True and udFitIn.json().get("udId") == "ud3"
+          and not udFitIn.json().get("problems"),
+          f"native (R6.2): an invoice inside the declaration fits ({udFitIn.status_code})")
+    check(udFitOver.status_code == 200 and udFitOver.json().get("ok") is False
+          and udFitOver.json().get("problems") == ["exceeds"],
+          "R6.2: …one that takes more than the declaration permits does not")
+    check(udFitNone.status_code == 200 and udFitNone.json() is None,
+          "R6.2: …and a number the register does not hold answers null, as the mock did")
+
+    # one declaration: created, amended and deleted — the number in capitals, unique per exporter
+    udNo = f"BKMEA/UD/2026/R62{TAG}".upper()
+    udBody = {"kind": "UD", "no": udNo.lower(), "date": "2026-09-01", "customerId": "c10",
+              "masterLcNo": f"EXP-LC-R62-{TAG}", "buyer": "R6.2 BUYER", "expiry": "2027-03-31",
+              "note": f"R6.2 {TAG}", "masterLcValue": 100000, "currency": "USD",
+              "lines": [{"itemId": "i21", "qty": 500, "value": 2150}, {"itemId": "i20", "qty": 20, "value": 100}]}
+    udMade = arif.post(f"{BASE}/vat/uds", json=udBody)
+    udU = udMade.json() if udMade.status_code == 201 else {}
+    check(udMade.status_code == 201 and udU.get("no") == udNo and udU.get("id", "").startswith("ud")
+          and len(udU.get("lines", [])) == 2 and udU.get("status") == "active"
+          and udU.get("createdBy") == "Arif Hossain" and [h["action"] for h in udU.get("history", [])] == ["created"],
+          f"native (R6.2): a declaration is created with its number in capitals ({udMade.status_code} {udU.get('no')})")
+    if DB_URL:
+        check(psql(f"select count(*) from uds where id = '{udU.get('id')}' and deleted_at is null") == "1"
+              and psql(f"select count(*) from ud_lines where ud_id = '{udU.get('id')}'") == "2"
+              and psql(f"select master_lc_value::text from uds where id = '{udU.get('id')}'") == "100000.00",
+              "R6.2: …it is a row in uds, its two inputs are rows in ud_lines, and the LC value is a number in SQL")
+        check(psql(f"select count(*) from audit_events where entity = 'ud' and entity_id = '{udU.get('id')}' "
+                   f"and action = 'created'") == "1",
+              "R6.2: …and its creation is an event in audit_events")
+    check(arif.post(f"{BASE}/vat/uds", json={**udBody, "no": udNo.lower()}).json().get("errors", {}).get("no") == ["duplicate"],
+          "R6.2: the same number for the same exporter is refused with the mock's own 422")
+    udDup = subprocess.run(["psql", DB_URL, "-c",
+                            f"insert into uds (id, no, date, kind, customer_id, customer_name, customer_bin,"
+                            f" master_lc_no, expiry, status, created_by, created_at) select 'dupU{TAG}', no, date,"
+                            f" kind, customer_id, customer_name, customer_bin, master_lc_no, expiry, status,"
+                            f" created_by, created_at from uds where deleted_at is null limit 1"],
+                           capture_output=True, text=True) if DB_URL else None
+    check(udDup is None or udDup.returncode != 0,
+          "R6.2: …and the database refuses it too — one number per exporter, while the declaration lives")
+    check(arif.post(f"{BASE}/vat/uds", json={**udBody, "no": f"{udNo}B", "customerId": "c1"}).json()
+          .get("errors", {}).get("customerId") == ["notExporter"],
+          "R6.2: a customer that is not an exporter cannot hold one")
+    check(arif.post(f"{BASE}/vat/uds", json={**udBody, "no": f"{udNo}C", "lines": [{"itemId": "nope", "qty": 1}]}).json()
+          .get("errors", {}).get("lines.0.itemId") == ["unknown"],
+          "R6.2: …nor can an input the SKUs do not hold")
+    check(arif.post(f"{BASE}/vat/uds", json={**udBody, "no": f"{udNo}D", "expiry": "2026-01-01"}).status_code == 422
+          and arif.post(f"{BASE}/vat/uds", json={**udBody, "no": f"{udNo}D", "lines": []}).status_code == 422,
+          "R6.2: an expiry before its date and a declaration with no inputs are refused")
+
+    # an edit of the quantities is an amendment (BGMEA/BKMEA certificate), stored with the declaration
+    udEdit = arif.put(f"{BASE}/vat/uds/{udU.get('id')}",
+                      json={**udBody, "masterLcValue": 120000, "amendReason": "buyer raised the order",
+                            "amendDate": "2026-09-20",
+                            "lines": [{"itemId": "i21", "qty": 600, "value": 2580}, {"itemId": "i20", "qty": 20, "value": 100}]})
+    udE = udEdit.json() if udEdit.status_code == 200 else {}
+    check(udEdit.status_code == 200 and [l["qty"] for l in udE.get("lines", [])] == [600, 20]
+          and len(udE.get("amendments", [])) == 1 and udE["amendments"][0]["no"] == 1
+          and udE["amendments"][0]["reason"] == "buyer raised the order"
+          and udE["amendments"][0]["masterLcValueFrom"] == 100000
+          and udE["amendments"][0]["masterLcValueTo"] == 120000,
+          f"R6.2: raising a quantity is an amendment, and it is stored with the declaration ({udEdit.status_code})")
+    if DB_URL:
+        check(psql(f"select jsonb_array_length(amendments) from uds where id = '{udU.get('id')}'") == "1"
+              and psql(f"select trim_scale(qty) from ud_lines where ud_id = '{udU.get('id')}' and item_id = 'i21'") == "600",
+              "R6.2: …the certificate and the new quantity are what the columns hold")
+        check(psql(f"select count(*) from audit_events where entity = 'ud' and entity_id = '{udU.get('id')}' "
+                   f"and action = 'edited'") == "1",
+              "R6.2: …and the edit is an event in audit_events, with the changes it made")
+
+    # the two copies are one: the RMG export register is still compat code and reads the declarations from memory
+    udExpBefore = arif.get(f"{BASE}/vat/exports").json()["totals"]["atRisk"]["count"]
+    udUsed = [r for r in arif.get(f"{BASE}/vat/uds").json()["rows"] if r["invoices"] > 0][0]
+    udBody2 = {k: udUsed.get(k) for k in ("kind", "no", "date", "customerId", "masterLcNo", "expiry")}
+    udClosed = arif.put(f"{BASE}/vat/uds/{udUsed['id']}", json={**udBody2, "buyer": udUsed.get("buyer", ""),
+        "note": udUsed.get("note", ""), "masterLcValue": udUsed.get("masterLcValue"), "currency": udUsed.get("currency", "USD"),
+        "status": "closed", "amendReason": "", "amendDate": "",
+        "lines": [{"itemId": l["itemId"], "qty": l["qty"], "value": l.get("value")} for l in udUsed["lines"]]})
+    udExports = arif.get(f"{BASE}/vat/exports").json()
+    check(udClosed.status_code == 200 and udExports["totals"]["atRisk"]["count"] == udExpBefore + 1
+          and "udBalance" in [m for r in udExports["rows"] if r["id"] == "s226" for m in r["missing"]],
+          f"R6.2: closing a declaration natively is seen at once by the export register, which is still compat "
+          f"code reading the in-memory copy ({udExpBefore} → {udExports['totals']['atRisk']['count']} at risk)")
+    arif.put(f"{BASE}/vat/uds/{udUsed['id']}", json={**udBody2, "buyer": udUsed.get("buyer", ""),
+        "note": udUsed.get("note", ""), "masterLcValue": udUsed.get("masterLcValue"), "currency": udUsed.get("currency", "USD"),
+        "status": "active", "amendReason": "", "amendDate": "",
+        "lines": [{"itemId": l["itemId"], "qty": l["qty"], "value": l.get("value")} for l in udUsed["lines"]]})
+    check(arif.get(f"{BASE}/vat/exports").json()["totals"]["atRisk"]["count"] == udExpBefore,
+          "R6.2: …and reopening it puts the export register back")
+
+    # deleting: only a declaration no invoice has drawn on goes, and its row stays to retire the id
+    check(arif.delete(f"{BASE}/vat/uds/{udUsed['id']}").status_code == 409,
+          "R6.2: a declaration an invoice has drawn on cannot be deleted (409)")
+    udDel = arif.delete(f"{BASE}/vat/uds/{udU.get('id')}")
+    check(udDel.status_code == 200 and arif.get(f"{BASE}/vat/uds/{udU.get('id')}").status_code == 404
+          and not any(r["no"] == udNo for r in arif.get(f"{BASE}/vat/uds").json()["rows"]),
+          f"R6.2: deleting one answers {{ok: true}} and takes it out of the register ({udDel.status_code})")
+    if DB_URL:
+        check(psql(f"select count(*) from uds where id = '{udU.get('id')}' and deleted_at is not null") == "1",
+              "R6.2: …the row is stamped rather than removed, so its id stays retired")
+    udAgain = arif.post(f"{BASE}/vat/uds", json=udBody)
+    check(udAgain.status_code == 201 and udAgain.json().get("id") != udU.get("id"),
+          f"R6.2: …so the next declaration takes a new id ({udU.get('id')} → {udAgain.json().get('id')})")
+    if udAgain.status_code == 201:
+        arif.delete(f"{BASE}/vat/uds/{udAgain.json()['id']}")
+    check(session("auditor").post(f"{BASE}/vat/uds", json=udBody).status_code == 403
+          and session("auditor").get(f"{BASE}/vat/uds").status_code == 200,
+          "R6.2: writing one needs doc.create, and the register needs a session")
+    check(requests.post(f"{BASE}/vat/uds", json=udBody).status_code == 401
+          and requests.get(f"{BASE}/vat/uds").status_code == 401,
+          "R6.2: …and a session is what both answer to")
+
     # R6: chain verification endpoint
     v = arif.get(f"{BASE}/audit/verify")
     check(v.status_code == 200 and v.json().get("ok") is True and v.json().get("algorithm") == "SHA-256", f"R6: audit chain verifies ({v.json().get('count') if v.ok else v.status_code} events)")
@@ -3308,7 +3488,8 @@ def run():
         check(a.get(f"{BASE}/me").status_code == 200 and b.get(f"{BASE}/me").status_code == 401, "revocations survive a restart")
         check(arif.get(f"{BASE}/customers/{cid}").status_code == 200, "R5.2: customer still there (read from the parties table)")
         check(arif.get(f"{BASE}/vendors/{gid}").status_code == 404, "R5.2: a deleted party stays deleted across a restart")
-        check(any(u["no"] == ud_body["no"] for u in arif.get(f"{BASE}/vat/uds").json().get("rows", [])), "compat: the UD still there")
+        check(any(u["no"] == ud_body["no"] for u in arif.get(f"{BASE}/vat/uds").json().get("rows", [])),
+              "R6.2: the declaration is still there — read from uds, not from the snapshot")
         check(any(x["code"] == f"R5{TAG[:3]}" for x in arif.get(f"{BASE}/units").json()["data"]), "native: unit still there")
         check(arif.get(f"{BASE}/notifications").json()["unread"] == 0, "R5.6: the notifications read before the restart are still read (the user store is in the snapshot)")
         check(arif.get(f"{BASE}/items/{iid}").json().get("remain") == 40, "R5.2: the SKU's stock survives a restart (counters are columns, not memory)")
@@ -3361,7 +3542,7 @@ def run():
             check(psql(f"select count(*) from stock_documents where note like '%R5.3 stale {TAG}%'") == "0",
                   "R5.3: the refused document never reached stock_documents")
             wu = arif.post(f"{BASE}/vat/uds", json={**ud_body, "no": f"BKMEA/UD/2026/SW{TAG}".upper(), "masterLcNo": f"EXP-LC-SW-{TAG}"})
-            check(wu.status_code == 503, f"stale instance refuses a compat write after a re-seed elsewhere (HTTP {wu.status_code})")
+            check(wu.status_code == 503, f"stale instance refuses a native declaration write after a re-seed elsewhere (HTTP {wu.status_code})")
             check(psql(f"select count(*) from compat_state where data::text like '%R6 Stale Write {TAG}%'") == "0", "stale snapshot not written over the re-seeded data")
             r = requests.post(f"{BASE}/auth/login", json={"username": "farzana", "password": PW})
             check(r.status_code == 503, f"stale instance refuses to append to the audit chain (HTTP {r.status_code})")
@@ -4220,6 +4401,82 @@ def run():
         check(ret_counts() == rnow and (rboots is None or rboots_after == rboots + 1)
               and (rboots is None or vd_boots() == rboots_after),
               "a second boot adopts nothing again — the tables are the only copy from then on")
+
+        # … and the first of the R6 registers, one release later: a database written before this slice holds every
+        # Utilization Declaration inside compat_state — the head with its inputs and its amendment certificates —
+        # and no row in `uds` / `ud_lines`. What has to survive the round trip is the register with its usage and
+        # its bond watch-list, the amendments, the id a deleted declaration claimed, and the in-memory copy the
+        # RMG export register still reads.
+        print("\nR6.2: upgrading a pre-R6.2 database moves the declarations into their tables")
+
+        def ud_counts():
+            return (psql("select count(*) from uds where deleted_at is null"),
+                    psql("select count(*) from ud_lines l join uds u on u.id = l.ud_id where u.deleted_at is null"),
+                    psql("select count(*) from uds u where u.deleted_at is null and u.amendments is not null"),
+                    psql("select count(*) from uds where deleted_at is not null"))
+
+        def ud_registers():
+            return {"uds": arif.get(f"{BASE}/vat/uds").json(),
+                    "udsCsv": arif.get(f"{BASE}/vat/uds", params={"format": "csv"}).text,
+                    "one": arif.get(f"{BASE}/vat/uds/ud2").json(),
+                    "fit": arif.post(f"{BASE}/vat/uds/fit", json={"customerId": "c10", "issueDate": tdate,
+                                                                 "udNo": "BKMEA/UD/2026/08812",
+                                                                 "lines": [{"itemId": "i21", "qty": 1000}]}).json(),
+                    "exports": arif.get(f"{BASE}/vat/exports").json()}
+
+        def ud_boots():
+            """How many boots adopted the declarations — one `R6.2 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return sum(1 for line in fh if "R6.2 upgrade:" in line)
+
+        udGone = arif.post(f"{BASE}/vat/uds", json={**udBody, "no": f"{udNo}drill"})
+        udGoneDoc = udGone.json() if udGone.status_code == 201 else {}
+        check(udGone.status_code == 201,
+              f"R6.2: the drill can draft a declaration ({udGone.status_code} "
+              f"{json.dumps(udGone.json().get('errors'))[:120] if udGone.status_code != 201 else udGoneDoc.get('no')})")
+        if udGoneDoc.get("id"):
+            arif.delete(f"{BASE}/vat/uds/{udGoneDoc['id']}")
+        flush_snapshot(arif)  # the counter the deleted declaration claimed has to be in the snapshot the rewind keeps
+        udc, udbefore, udboots = ud_counts(), ud_registers(), ud_boots()
+        psql(PRE_R62_UDS)
+        psql("delete from ud_lines")
+        psql("delete from uds")
+        check(ud_counts()[:3] == ("0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'uds'") == "1",
+              f"the database is back in the pre-R6.2 shape ({udc[0]} declarations, {udc[1]} inputs and "
+              f"{udc[2]} amendment histories inside the snapshot, both tables empty)")
+        restart()
+        check(ud_counts()[:3] == udc[:3],  # the fourth count is the deleted rows: the snapshot keeps none of them
+              f"the first boot moved every declaration into the tables ({udc[0]} declarations, {udc[1]} inputs, "
+              f"{udc[2]} with amendments)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'uds'") == "0",
+              "…and rewrote the snapshot without them")
+        check(ud_registers() == udbefore,
+              "…and serves the same answers: the register with its CSV, one declaration with its usage, the fit "
+              "question and the RMG export register that reads the declarations from memory")
+        check(psql(f"select count(*) from uds where id = '{udGoneDoc.get('id')}'") == "0",
+              "a declaration deleted before the upgrade stays deleted — the mock kept no row for it either")
+        udAfter = arif.post(f"{BASE}/vat/uds", json={**udBody, "no": f"{udNo}drill"})
+        udaf = udAfter.json() if udAfter.status_code == 201 else {}
+        check(udAfter.status_code == 201 and str(udaf.get("id", "")) > str(udGoneDoc.get("id", "")),
+              f"…but its id stays retired ({udGoneDoc.get('id')} → {udaf.get('id')})")
+        if udaf.get("id"):
+            arif.delete(f"{BASE}/vat/uds/{udaf['id']}")
+        udboots_after, udnow = ud_boots(), ud_counts()
+        restart()
+        check(ud_counts()[:3] == udnow[:3] and (udboots is None or udboots_after == udboots + 1)
+              and (udboots is None or ud_boots() == udboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        udWrite = arif.post(f"{BASE}/vat/uds", json={**udBody, "no": f"{udNo}after"})
+        udw = udWrite.json() if udWrite.status_code == 201 else {}
+        check(udWrite.status_code == 201
+              and psql(f"select count(*) from uds where id = '{udw.get('id')}' and deleted_at is null") == "1"
+              and psql(f"select count(*) from ud_lines where ud_id = '{udw.get('id')}'") == "2",
+              f"and writes land in the tables on the upgraded database ({udWrite.status_code})")
+        if udw.get("id"):
+            arif.delete(f"{BASE}/vat/uds/{udw['id']}")
 
     else:
         skipped("restart checks (API_RESTART_CMD not set)")

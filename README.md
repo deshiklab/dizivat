@@ -710,6 +710,38 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
   - **Next:** accounting and the VAT returns (R5.6) — done — and then the Mushak books, which is what removes
     `compat_state` and the single-writer lock.
 
+- **R6.2 — Backend: the exporters' Utilization Declarations on their own tables (branch `r6-enlistment-rmg`):**
+  `vat/uds`, `vat/uds/{id}` and `vat/uds/fit` leave the compat layer — **22 compat route modules left, 94 native**.
+  See [docs/BACKEND.md › R6.2](docs/BACKEND.md#r62--the-exporters-utilization-declarations-on-their-own-tables).
+  - **A declaration is a row and each input is a row.** `uds` holds the head — the exporter as printed, the export
+    LC / sales contract and the foreign buyer behind it, the dates, the status and the LC value in the declaration's
+    own currency — and `ud_lines` holds what it permits, in the order it was entered. What a garment order may still
+    procure, and how much of it is left, is a `SUM` over those rows instead of a walk over every document in memory.
+  - **One number per exporter, in the database as well.** A partial unique index on `(customer_id, no)` covers the
+    live rows, so two requests cannot give one exporter the same declaration number while a deleted declaration frees
+    its number again, exactly as the mock's array did. A delete stamps `deleted_at`: there is no undo for one, and
+    the row is what stops a later declaration from taking its id.
+  - **An amendment travels with the head.** Raising a quantity or the LC value is a BGMEA / BKMEA amendment
+    certificate — what changed, when, why and who signed it — and it is kept as JSONB on the declaration's row, the
+    way a document's history already was: a record of the edit, not a figure anything has to add up.
+  - **The rules are the mock's own, taken out of the route files.** `udRegister` with its CSV columns and rows,
+    `udCheck`, `udInUse`, `newUdId`, `udCreate`, `udUpdate`, `udRemove`, `udAnswer` and `udFitAnswer` are `_r62.ts`'s
+    now and take the declarations, the invoices, the exporters and the SKUs as data, so the three route files are a
+    dozen lines each and both runtimes call the same functions — the rows, the 422s, the amendments and the audit
+    events cannot drift. `vat/uds/fit` is registered before `vat/uds/{id}`, or "fit" would be read as an id.
+  - **The two copies are one.** The RMG export register is still compat code and reads the declarations from memory
+    to decide which export invoices are at risk: closing one natively moves its at-risk count at once, which the
+    suite checks, and the write-back adopts whatever a compat handler changes the other way.
+  - **Tests:** `api_native.py` 731 checks (+37: every declaration a row in `uds` with its inputs in `ud_lines` and
+    no declaration left in the snapshot, the register's CSV and the fit question served from the tables, a
+    declaration created with its number in capitals, its amendment stored on the row, the database refusing a
+    duplicate number per exporter, one an invoice has drawn on refusing to be deleted, a delete that stamps the row
+    and retires the id, and **an upgrade drill**: the database is rewritten into its pre-R6.2 shape — every
+    declaration with its inputs and its amendment certificates back inside `compat_state`, both tables empty — the
+    API restarted, and the same register, the same usage, the same fit answers and the same export register are
+    required back, with a declaration deleted before the upgrade still gone and its id still retired).
+    Contract unchanged: 676 checks / 226 endpoints.
+
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
 All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). ESLint stops components from importing the mock directly. On this branch the same `/api/v1` contract is also served by the **NestJS + PostgreSQL** API in `api/`: build and run with `API_UPSTREAM=http://127.0.0.1:4000` and no component changes are needed (see *Backend (R5)* below).

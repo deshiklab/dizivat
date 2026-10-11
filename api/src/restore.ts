@@ -95,7 +95,7 @@ async function freePort(): Promise<number> {
   })
 }
 
-async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number; treasury: number; vds: number; adjustments: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
+async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number; treasury: number; vds: number; adjustments: number; uds: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
   const port = await freePort()
   const child: ChildProcess = spawn(process.execPath, [join(__dirname, "main.js")], {
     env: { ...process.env, DATABASE_URL: target, API_PORT: String(port), API_HOST: "127.0.0.1", BACKUPS: "off", DEMO_RESEED: "off", SESSION_SECRET: randomBytes(24).toString("hex") },
@@ -128,7 +128,13 @@ async function bootCheck(target: string, admin: { username: string; password: st
       const page = (await r.json()) as { total?: number }
       if (page.total !== want) return { ok: false, detail: `GET /${path} total ${page.total} ≠ ${want} ${path} in the backup` }
     }
-    log(`  signed in as ${admin.username}; /sales lists all ${docs.sales} invoices, /purchases all ${docs.purchases}, /production/batches all ${docs.batches}, /production/boms all ${docs.boms} declarations, /production/work-orders all ${docs.workOrders}, /vat/treasury all ${docs.treasury} deposits, /vat/vds all ${docs.vds} certificates and /vat/adjustments all ${docs.adjustments}`)
+    // R6.2: the UD register answers every declaration at once — it is not paged
+    const udReg = await fetch(`${base}/vat/uds`, { headers: { cookie } })
+    if (!udReg.ok) return { ok: false, detail: `GET /vat/uds failed: HTTP ${udReg.status}` }
+    const reg = (await udReg.json()) as { rows?: unknown[] }
+    if ((reg.rows?.length ?? -1) !== docs.uds)
+      return { ok: false, detail: `GET /vat/uds answered ${reg.rows?.length ?? 0} declarations ≠ ${docs.uds} in the backup` }
+    log(`  signed in as ${admin.username}; /sales lists all ${docs.sales} invoices, /purchases all ${docs.purchases}, /production/batches all ${docs.batches}, /production/boms all ${docs.boms} declarations, /production/work-orders all ${docs.workOrders}, /vat/treasury all ${docs.treasury} deposits, /vat/vds all ${docs.vds} certificates, /vat/adjustments all ${docs.adjustments} and /vat/uds all ${docs.uds} declarations`)
     return { ok: true, detail: "health, sign-in and documents ok" }
   } finally {
     child.kill("SIGTERM")
@@ -236,8 +242,8 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
     const admin = a.adminPassword ? (a.adminUser ? users.find((u) => u.username === a.adminUser) : users.find((u) => u.role === "admin" && u.active)) : undefined
     // the documents the restored instance must list: their own tables since R5.3 (a stamped draft is not listed),
     // the snapshot's arrays in a backup taken before that — the production batches the same way since R5.4, the
-    // price declarations and the work orders since R5.5, and the treasury deposits, the VDS certificates and the
-    // VAT adjustments since R5.6
+    // price declarations and the work orders since R5.5, the treasury deposits, the VDS certificates and the VAT
+    // adjustments since R5.6, and the exporters' UDs since R6.2
     const snapshotDb = (payload.tables.compat_state?.[0] as { data?: { db?: Record<string, unknown[]> } } | undefined)?.data?.db
     const live = (table: string, collection: string) => {
       const rows = payload.tables[table] as { deleted_at?: string | null }[] | undefined
@@ -248,7 +254,7 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
         sales: live("sales", "sales"), purchases: live("purchases", "purchases"), batches: live("batches", "batches"),
         boms: live("boms", "boms"), workOrders: live("work_orders", "workOrders"),
         treasury: live("treasury_deposits", "treasury"), vds: live("vds_entries", "vds"),
-        adjustments: live("vat_adjustments", "adjustments"),
+        adjustments: live("vat_adjustments", "adjustments"), uds: live("uds", "uds"),
       }, log)
     boot = r.ok ? "ok" : "failed"
     if (!r.ok) mismatches.push(`boot: ${r.detail}`)

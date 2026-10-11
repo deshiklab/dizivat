@@ -603,6 +603,8 @@ export const udInput = z.object({
   v.lines.forEach((l, i) => { if (seen.has(l.itemId)) ctx.addIssue({ code: "custom", path: ["lines", i, "itemId"], message: "duplicate" }); seen.add(l.itemId) })
 })
 export type UdInput = z.input<typeof udInput>
+/** A UD as the rule parsed it — every default filled in. This is what the rules run on. */
+export type UdParsed = z.output<typeof udInput>
 
 /** Export proceeds realised through the bank (PRC). */
 export const realisationInput = z.object({

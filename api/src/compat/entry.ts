@@ -136,6 +136,12 @@ export {
 export { notificationsFor, type NotificationSource } from "@/lib/mock/notifications"
 export { notifReadInput } from "@/app/api/v1/_derived"
 export { bulkImport, type ImportSource } from "@/app/api/v1/_r62"
+// R6.2: the exporters' UD / UP register — its rows, its rules and its three writes, over whichever copy of the
+// documents the caller holds
+export { udRegister, udCheck, udInUse, udCreate, udUpdate, udRemove, udAnswer, udFitAnswer, udFitInput,
+  udCsvColumns, udCsvRows, newUdId } from "@/app/api/v1/_r62"
+export type { UdSource, UdHead, UdWrite } from "@/app/api/v1/_r62"
+export type { UdParsed } from "@/lib/schemas"
 export { bulkImportInput } from "@/lib/schemas"
 export { SERVICES } from "@/lib/r2"
 export { SALE_SERVICES } from "@/lib/r3"

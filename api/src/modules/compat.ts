@@ -32,6 +32,7 @@ import { accountingConfigDelta, applyAccountingDeltas, commitAccountingConfigDel
 import {
   applyVatDocDeltas, commitVatDocDelta, vatDocDelta,
 } from "./vat"
+import { applyUdDelta, commitUdDelta, udDelta } from "./uds"
 import { applyReturnDeltas, commitReturnDelta, commitVatSettingsDelta, returnDelta, vatSettingsDelta } from "./returns"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
@@ -42,13 +43,13 @@ const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade",
 /** The JSONB document saved for the unported modules (units, parties, items, master items, the stock documents,
  *  the sales invoices, the purchases, both note families, the opening stock entries, the production batches, the
  *  price declarations with their configuration, the work orders, the money accounts, the receipts and the payments,
- *  the accounting configuration, the treasury deposits, the VDS entries and the VAT adjustments have their own
- *  tables). */
+ *  the accounting configuration, the treasury deposits, the VDS entries, the VAT adjustments and (R6.2) the
+ *  exporters' declarations have their own tables). */
 export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes,
     openings, batches, boms, productionConfig, workOrders, moneyAccounts, moneyDocs, accountingConfig,
-    treasury, vds, adjustments, returns, vatSettings, ...rest } = G.__dzDb!
+    treasury, vds, adjustments, uds, returns, vatSettings, ...rest } = G.__dzDb!
   // R5.2/R5.3: a deleted party, sale or purchase is a `deleted_at` row, so the undo buffer keeps the rest only
   const kept = rest as { trash?: TrashEntry[] }
   kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale"
@@ -138,13 +139,14 @@ export class CompatService {
     const declared = bomDelta(), configured = configDelta(), ordered = workOrderDelta()
     const accounted = { accounts: moneyAccountDelta(), docs: moneyDocDelta(), config: accountingConfigDelta() }
     const vatted = vatDocDelta()
+    const udded = udDelta()
     const returned = { returns: returnDelta(), settings: vatSettingsDelta() }
     if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
       && deltaEmpty(stock) && deltaEmpty(sold) && deltaEmpty(bought)
       && deltaEmpty(noted.credit) && deltaEmpty(noted.debit) && deltaEmpty(opened) && deltaEmpty(made)
       && deltaEmpty(declared) && deltaEmpty(configured) && deltaEmpty(ordered)
       && deltaEmpty(accounted.accounts) && deltaEmpty(accounted.docs) && deltaEmpty(accounted.config)
-      && deltaEmpty(vatted.treasury) && deltaEmpty(vatted.vds) && deltaEmpty(vatted.adjustment)
+      && deltaEmpty(vatted.treasury) && deltaEmpty(vatted.vds) && deltaEmpty(vatted.adjustment) && deltaEmpty(udded)
       && deltaEmpty(returned.returns) && deltaEmpty(returned.settings)) return
     let refreshed: Awaited<ReturnType<typeof applyWorkOrderDelta>> = []
     await db.transaction(async (tx) => {
@@ -164,6 +166,7 @@ export class CompatService {
       refreshed = await applyWorkOrderDelta(tx, ordered)
       await applyAccountingDeltas(tx, accounted)
       await applyVatDocDeltas(tx, vatted)
+      await applyUdDelta(tx, udded)
       await applyReturnDeltas(tx, returned)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
@@ -176,6 +179,7 @@ export class CompatService {
     commitBatchDelta(made); commitBomDelta(declared); commitConfigDelta(configured); commitWorkOrderDelta(ordered)
     commitMoneyAccountDelta(accounted.accounts); commitMoneyDocDelta(accounted.docs); commitAccountingConfigDelta(accounted.config)
     commitVatDocDelta(vatted)
+    commitUdDelta(udded)
     commitReturnDelta(returned.returns); commitVatSettingsDelta(returned.settings)
     if (accounted.config.insert.length || accounted.config.update.length) markAccountingConfig()
     // the batches a compat handler wrote moved these work orders' progress: their rows are the new baseline too

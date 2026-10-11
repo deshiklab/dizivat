@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, HistoryEntry, ReturnComputation, ReturnManual, SdExportLink, VatProfile } from "@/lib/types"
+import type { AuditChange, HistoryEntry, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -1549,4 +1549,72 @@ export const backups = pgTable("backups", {
   index("backups_at_idx").on(t.at),
   uniqueIndex("backups_scheduled_slot_key").on(t.slot).where(sql`${t.kind} = 'scheduled'`),
   check("backups_kind_check", sql`${t.kind} in ('scheduled','manual')`),
+])
+
+/**
+ * R6.2 — a Utilization Declaration (BGMEA / BKMEA) or Utilization Permission (customs) of an exporter customer: the
+ * raw materials it may procure duty- and VAT-free for one export order. A deemed-export invoice has to fit inside an
+ * active declaration's quantities, which is what the register and the sales form's live check answer.
+ */
+export const uds = pgTable("uds", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** the exporter's own reference (BGMEA / BKMEA) or the customs UP number — unique per exporter */
+  no: text("no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  kind: text("kind", { enum: ["UD", "UP"] }).notNull(),
+  customerId: text("customer_id").notNull(),
+  customerName: text("customer_name").notNull(),
+  customerBin: text("customer_bin").notNull(),
+  /** the export LC / sales contract of the garment order behind the declaration, and the foreign buyer */
+  masterLcNo: text("master_lc_no").notNull(),
+  buyer: text("buyer"),
+  expiry: date("expiry", { mode: "string" }).notNull(),
+  status: text("status", { enum: ["active", "closed"] }).notNull(),
+  note: text("note"),
+  /** R6.3: the export LC (garment order) value, in the declaration's own currency — the ceiling for back-to-back LCs */
+  masterLcValue: numeric("master_lc_value", { precision: 18, scale: 2, mode: "number" }),
+  currency: text("currency"),
+  /** R6.3: the amendment certificates, oldest first — what changed, when and why */
+  amendments: jsonb("amendments").$type<UdAmendment[]>(),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the declaration's own trail: created / edited / amended, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one exporter cannot hold the same declaration number twice; a deleted one frees its number again, as the
+  // mock's array did
+  uniqueIndex("uds_no_key").on(t.customerId, t.no).where(sql`${t.deletedAt} is null`),
+  index("uds_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?customer=` filter, and the sales form's lookups */
+  index("uds_customer_idx").on(t.customerId),
+  /** the bond watch-list walks the live declarations' expiries */
+  index("uds_expiry_idx").on(t.expiry),
+  check("uds_kind_check", sql`${t.kind} in ('UD','UP')`),
+  check("uds_status_check", sql`${t.status} in ('active','closed')`),
+  check("uds_expiry_check", sql`${t.expiry} >= ${t.date}`),
+  check("uds_master_lc_value_check", sql`${t.masterLcValue} is null or ${t.masterLcValue} >= 0`),
+])
+
+/** What a declaration permits: one row per input, with the quantity and (R6.3) the value it may be procured for. */
+export const udLines = pgTable("ud_lines", {
+  udId: text("ud_id").notNull(),
+  /** position on the declaration */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** R6.3: the value the declaration permits for this input, in its currency — NULL means "not stated" */
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }),
+}, (t) => [
+  primaryKey({ columns: [t.udId, t.ord] }),
+  /** what the fit check looks up: every declaration an input appears on */
+  index("ud_lines_item_idx").on(t.itemId),
+  check("ud_lines_qty_check", sql`${t.qty} > 0`),
+  check("ud_lines_value_check", sql`${t.value} is null or ${t.value} >= 0`),
 ])
