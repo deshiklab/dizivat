@@ -47,6 +47,11 @@ export const NATIVE = [
   // certificates (`vds_entries`) and the manual VAT adjustments (`vat_adjustments`)
   "vat/treasury", "vat/treasury/[id]", "vat/vds", "vat/vds/[id]", "vat/vds/eligible",
   "vat/adjustments", "vat/adjustments/[id]",
+  // R5.6: the Mushak 9.1 return (`vat_returns`, one row per tax period) with the note sub-forms behind its
+  // computation, the tax periods it can be filed for, the compliance centre over one of them, and the NBR settings
+  // (the one row of `vat_settings`)
+  "vat/returns", "vat/returns/[period]", "vat/returns/[period]/notes/[note]", "vat/periods", "vat/compliance",
+  "vat/settings",
 ]
 
 const found = []

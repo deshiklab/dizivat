@@ -1,5 +1,5 @@
 /**
- * Compat layer (R5.1): the 39 mock route modules not yet ported run unchanged inside NestJS.
+ * Compat layer (R5.1): the 33 mock route modules not yet ported run unchanged inside NestJS.
  * Auth comes from the sessions table (via the session-user shim), and after every request the shared state is
  * saved to PostgreSQL (`compat_state` JSONB + forwarded audit events) in one transaction — so documents survive
  * restarts and redeploys. Registered last: native controllers always win.
@@ -29,7 +29,10 @@ import { applyStockDelta, commitStockDelta, stockDelta } from "./stock"
 import { applyBomDelta, applyConfigDelta, bomDelta, commitBomDelta, commitConfigDelta, configDelta } from "./production"
 import { applyWorkOrderDelta, commitWorkOrderDelta, markWorkOrders, workOrderDelta } from "./workorders"
 import { accountingConfigDelta, applyAccountingDeltas, commitAccountingConfigDelta, commitMoneyAccountDelta, commitMoneyDocDelta, markAccountingConfig, moneyAccountDelta, moneyDocDelta } from "./accounting"
-import { applyVatDocDeltas, commitVatDocDelta, vatDocDelta } from "./vat"
+import {
+  applyVatDocDeltas, commitVatDocDelta, vatDocDelta,
+} from "./vat"
+import { applyReturnDeltas, commitReturnDelta, commitVatSettingsDelta, returnDelta, vatSettingsDelta } from "./returns"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
 interface Route { pattern: RegExp; names: string[]; statics: number; mod: Record<string, unknown> }
@@ -45,7 +48,7 @@ export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes,
     openings, batches, boms, productionConfig, workOrders, moneyAccounts, moneyDocs, accountingConfig,
-    treasury, vds, adjustments, ...rest } = G.__dzDb!
+    treasury, vds, adjustments, returns, vatSettings, ...rest } = G.__dzDb!
   // R5.2/R5.3: a deleted party, sale or purchase is a `deleted_at` row, so the undo buffer keeps the rest only
   const kept = rest as { trash?: TrashEntry[] }
   kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale"
@@ -135,12 +138,14 @@ export class CompatService {
     const declared = bomDelta(), configured = configDelta(), ordered = workOrderDelta()
     const accounted = { accounts: moneyAccountDelta(), docs: moneyDocDelta(), config: accountingConfigDelta() }
     const vatted = vatDocDelta()
+    const returned = { returns: returnDelta(), settings: vatSettingsDelta() }
     if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
       && deltaEmpty(stock) && deltaEmpty(sold) && deltaEmpty(bought)
       && deltaEmpty(noted.credit) && deltaEmpty(noted.debit) && deltaEmpty(opened) && deltaEmpty(made)
       && deltaEmpty(declared) && deltaEmpty(configured) && deltaEmpty(ordered)
       && deltaEmpty(accounted.accounts) && deltaEmpty(accounted.docs) && deltaEmpty(accounted.config)
-      && deltaEmpty(vatted.treasury) && deltaEmpty(vatted.vds) && deltaEmpty(vatted.adjustment)) return
+      && deltaEmpty(vatted.treasury) && deltaEmpty(vatted.vds) && deltaEmpty(vatted.adjustment)
+      && deltaEmpty(returned.returns) && deltaEmpty(returned.settings)) return
     let refreshed: Awaited<ReturnType<typeof applyWorkOrderDelta>> = []
     await db.transaction(async (tx) => {
       await lockState(tx) // cross-process: never overwrite a newer instance's re-seed with this process's state
@@ -159,6 +164,7 @@ export class CompatService {
       refreshed = await applyWorkOrderDelta(tx, ordered)
       await applyAccountingDeltas(tx, accounted)
       await applyVatDocDeltas(tx, vatted)
+      await applyReturnDeltas(tx, returned)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
           .onConflictDoUpdate({ target: compatState.key, set: { data: JSON.parse(json) as unknown, updatedAt: new Date() } })
@@ -170,6 +176,7 @@ export class CompatService {
     commitBatchDelta(made); commitBomDelta(declared); commitConfigDelta(configured); commitWorkOrderDelta(ordered)
     commitMoneyAccountDelta(accounted.accounts); commitMoneyDocDelta(accounted.docs); commitAccountingConfigDelta(accounted.config)
     commitVatDocDelta(vatted)
+    commitReturnDelta(returned.returns); commitVatSettingsDelta(returned.settings)
     if (accounted.config.insert.length || accounted.config.update.length) markAccountingConfig()
     // the batches a compat handler wrote moved these work orders' progress: their rows are the new baseline too
     if (refreshed.length) markWorkOrders(refreshed)

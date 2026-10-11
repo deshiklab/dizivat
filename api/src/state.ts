@@ -10,7 +10,7 @@ import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
   AccountingConfig, AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind,
-  TreasuryDeposit, Unit, VatAdjustment, VdsEntry, WorkOrder,
+  TreasuryDeposit, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
 export type PartyKind = "customer" | "vendor"
@@ -34,6 +34,7 @@ interface Globals {
     moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
     adjustments: VatAdjustment[]
     accountingConfig: AccountingConfig
+    returns: VatReturn[]; vatSettings: VatSettings
     trash: TrashEntry[]
   }
   __dzUsers?: UserStore
@@ -68,6 +69,7 @@ export function restoreGlobals(s: {
   moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
   adjustments: VatAdjustment[]
   accountingConfig: AccountingConfig
+  returns: VatReturn[]; vatSettings: VatSettings
   events: AuditEvent[]
 }) {
   // documents only: an older snapshot's deleted parties, sales and purchases are rebuilt from their `deleted_at` rows
@@ -81,6 +83,7 @@ export function restoreGlobals(s: {
     moneyAccounts: s.moneyAccounts, moneyDocs: s.moneyDocs, treasury: s.treasury, vds: s.vds,
     adjustments: s.adjustments,
     accountingConfig: s.accountingConfig,
+    returns: s.returns ?? [], vatSettings: s.vatSettings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
@@ -364,6 +367,25 @@ export const mirror = {
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
+  /** R5.6: the Mushak 9.1 returns — one per tax period, and the lock every document reads before it is written */
+  returns: (): VatReturn[] => G.__dzDb!.returns,
+  putReturns(list: VatReturn[]) { const a = mirror.returns(); a.splice(0, a.length, ...list) },
+  findReturn: (idOrPeriod: string) => mirror.returns().find((r) => r.id === idOrPeriod || r.period === idOrPeriod),
+  putReturn(r: VatReturn) {
+    const list = mirror.returns()
+    const cur = list.find((x) => x.id === r.id)
+    if (cur) replaceObject(cur, r)
+    else list.push(r)
+    return cur ?? r
+  },
+  removeReturn(id: string) {
+    const list = mirror.returns()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R5.6: the NBR settings — one object, replaced in place so the period lock reads the new zone and deadline */
+  vatSettings: (): VatSettings => G.__dzDb!.vatSettings,
+  putVatSettings(v: VatSettings) { replaceObject(G.__dzDb!.vatSettings, v) },
   /** R5.6: the accounting configuration — one object, replaced in place so a receipt reads the closed books */
   accountingConfig: (): AccountingConfig => G.__dzDb!.accountingConfig,
   putAccountingConfig(c: AccountingConfig) { replaceObject(G.__dzDb!.accountingConfig, c) },

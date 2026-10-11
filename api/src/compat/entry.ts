@@ -152,4 +152,17 @@ export {
   type VatSource,
 } from "@/app/api/v1/_r4"
 export { periodLocked } from "@/app/api/v1/_r4"
+export { EMPTY_MANUAL } from "@/lib/mock/vat-return"
+// R5.6: the Mushak 9.1 return and the NBR settings, shared the same way — one return per tax period, the period
+// itself being its id, which is what every document is locked against. What a period may be filed for (in order, and
+// not twice), what a submission needs (the period over, the previous return filed, a real date and note 58 covering
+// note 50), the acknowledgement number it is given, the register's spec and CSV columns, the compliance centre's
+// answer, the note sub-forms and the settings row. The returns live in `vat_returns` and the settings in
+// `vat_settings`; the rest of the Mushak books still read them through the mirror this module writes.
+export {
+  RETURN_CSV_COLUMNS, RETURN_DIFF_FIELDS, SUBFORM_CSV_COLUMNS, VAT_SETTINGS_DIFF_FIELDS,
+  complianceAnswer, currentPeriod, returnCreateRule, returnCsvName, returnDeleteRule, returnEditRule, returnRef,
+  returnRow, returnSpec, returnSubmitRule, returnView, stampLifeHistory, subFormAnswer, taxPeriods, vatSettingsRule,
+  type ComplianceAnswer, type ReturnFields, type ReturnSource, type SubFormAnswer,
+} from "@/app/api/v1/_r4"
 export { branchLabels, postStock, stockShortfall } from "@/lib/mock/db"

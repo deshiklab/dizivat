@@ -946,6 +946,10 @@ export const adjustmentRoutes = lifecycle<VatAdjustment, AdjustmentFields>({
  * which is why the period lock reads these and nothing else.
  */
 export const findReturn = (period: string, src: ReturnSource = db) => src.returns.find((r) => r.period === period)
+/** The tax period the company's clock is in — the one a compliance answer defaults to. */
+export const currentPeriod = () => CURRENT
+/** The ref the audit trail records for a return — "9.1 · September 2026" — the same on either side. */
+export const returnRef = (period: string): string => `9.1 · ${periodLabel(period)}`
 /** The row the register prints: the totals the period computes to, its due date and whether it was filed late. */
 export function returnRow(r: VatReturn, src: ReturnSource = db): VatReturnRow {
   const c = r.snapshot ?? computeReturn(src, r.period, r.manual)
@@ -1088,7 +1092,7 @@ export const returnListRoutes = {
     if ("status" in rule) return ruleResponse(rule)
     const r: VatReturn = { id: rule.period, period: rule.period, type: "original", activities: true, status: "draft", manual: { ...EMPTY_MANUAL }, createdAt: new Date().toISOString(), history: [] }
     db.returns.push(r)
-    history("vatReturn", r as unknown as LifeDoc, user.name, "created", undefined, undefined, `9.1 · ${periodLabel(rule.period)}`, rule.period)
+    history("vatReturn", r as unknown as LifeDoc, user.name, "created", undefined, undefined, returnRef(rule.period), rule.period)
     return json(returnView(rule.period), { status: 201 })
   }),
 }
@@ -1106,7 +1110,7 @@ export const returnDocRoutes = {
     if ("status" in rule) return ruleResponse(rule)
     const r = findReturn(period)!
     Object.assign(r, rule.fields)
-    history("vatReturn", r as unknown as LifeDoc, user.name, "edited", undefined, rule.changes, `9.1 · ${periodLabel(period)}`, period)
+    history("vatReturn", r as unknown as LifeDoc, user.name, "edited", undefined, rule.changes, returnRef(period), period)
     return json(returnView(period))
   }),
   PATCH: withAuth<PCtx>("doc.approve", async (req, { params }, user) => {
@@ -1121,7 +1125,7 @@ export const returnDocRoutes = {
     r.submittedBy = user.name
     r.submittedAt = new Date().toISOString()
     r.ackNo = rule.ackNo
-    history("vatReturn", r as unknown as LifeDoc, user.name, "submitted", `Acknowledgement ${r.ackNo}`, undefined, `9.1 · ${periodLabel(period)}`, period)
+    history("vatReturn", r as unknown as LifeDoc, user.name, "submitted", `Acknowledgement ${r.ackNo}`, undefined, returnRef(period), period)
     return json(returnView(period))
   }),
   DELETE: withAuth<PCtx>("doc.delete", async (_req, { params }, user) => {
@@ -1130,7 +1134,7 @@ export const returnDocRoutes = {
     if (rule) return ruleResponse(rule)
     const i = db.returns.findIndex((r) => r.period === period)
     const [r] = db.returns.splice(i, 1)
-    history("vatReturn", r as unknown as LifeDoc, user.name, "deleted", undefined, undefined, `9.1 · ${periodLabel(period)}`, period)
+    history("vatReturn", r as unknown as LifeDoc, user.name, "deleted", undefined, undefined, returnRef(period), period)
     return json({ ok: true })
   }),
 }
