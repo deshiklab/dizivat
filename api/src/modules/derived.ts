@@ -22,6 +22,7 @@
 import { Controller, Get, Inject, Injectable, Param, Req, Res } from "@nestjs/common"
 import type { Request, Response } from "express"
 import type { MovementSource } from "@/lib/mock/db"
+export type { MovementSource }
 import { toCSV } from "@/lib/mock/query"
 import { TODAY } from "@/lib/company"
 import type { Batch, CreditNote, Damage, DebitNote, ItemLedger, Transfer } from "@/lib/types"

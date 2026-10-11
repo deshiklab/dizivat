@@ -110,6 +110,9 @@ export const mirror = {
     G.__dzUsers!.prefs[u.id] = prefs
     return cur ?? u
   },
+  /** The notification ids one user has read — the mock keeps them in the user store, inside the snapshot. */
+  notifRead: (id: string): string[] => G.__dzUsers!.notifRead[id]?.ids ?? [],
+  putNotifRead(id: string, ids: string[]) { G.__dzUsers!.notifRead[id] = { ids } },
   company: (): Company => G.__dzCompany!,
   putCompany: (c: Company) => replaceObject(G.__dzCompany!, c),
   units: (): Unit[] => G.__dzDb!.units,

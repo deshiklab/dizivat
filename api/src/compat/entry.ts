@@ -134,7 +134,9 @@ export {
 // trail's decisions on the documents the user issued and the stock below its re-order level) and the bulk master-data
 // import with its all-or-nothing rule, shared the same way.
 export { notificationsFor, type NotificationSource } from "@/lib/mock/notifications"
+export { notifReadInput } from "@/app/api/v1/_derived"
 export { bulkImport, type ImportSource } from "@/app/api/v1/_r62"
+export { bulkImportInput } from "@/lib/schemas"
 export { SERVICES } from "@/lib/r2"
 export { SALE_SERVICES } from "@/lib/r3"
 // R5.5: the two registers the rest of production is watched by, served the same way — the finished-goods lots (what

@@ -641,6 +641,46 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     same six invoices are there, and the dashboard's period, KPIs, charts, mix, deadlines and low stock are byte
     for byte the mock's.
 
+- **R5.6 — Backend: the Mushak books and the rest of the readers, served from the tables (branch `r5-nestjs`):**
+  `mushak/[form]` (6.1, 6.2, 6.2.1 and 6.10), the dashboard, the ⌘K search, the notifications and their
+  mark-as-read, the two service-code lists and the bulk master-data import leave the compat layer — **25 route
+  modules left, 91 native**. None of them stores a row of its own: each adds up documents that already have tables.
+  See [docs/BACKEND.md › R5.6](docs/BACKEND.md#r56--the-mushak-books-and-the-rest-of-the-readers-served-from-the-tables).
+  - **One item's book, every movement that touched it.** The Mushak 6.1 (inputs), 6.2 (finished goods) and 6.2.1
+    (traded goods) books run a balance over a range the way the forms do, valued at cost or at the document's own
+    value, and the ledger reconciles to the SKU's opening counter — which is a column, so a quantity changed in SQL
+    alone moves the book's closing balance with the in-memory copies left stale on purpose. 6.10 answers the
+    purchases and the sales above ৳2,00,000, and `format=csv` exports either with the form's own columns.
+  - **The dashboard's deadlines are the return's.** The KPIs, the twelve months, the top customers, the mix, the six
+    newest invoices, the low stock and the four statutory deadlines add up the year's invoices *and* the Mushak 9.1's
+    own computation, read from `sales`, `purchases` and the return rows of the slice before this one — so an
+    invoice's total changed in SQL alone moves the KPIs at once.
+  - **The rules are the mock's own**, so nothing an answer says can drift: the range every book shares (which
+    defaults to the financial year to date, and refuses one the wrong way round), the 404 that points Mushak 9.1 at
+    `/vat/returns/{period}`, which form an item may be asked for, the eighteen CSV columns, the five families the ⌘K
+    search walks, the notification an approval or a deadline becomes, the security reminder that cannot be
+    dismissed, and the import's own rules — every row validated first, then either all of them created or none, with
+    records already on file skipped as duplicates rather than errors.
+  - **The two writes save the snapshot the way a compat handler's does.** Marking notifications read writes the user
+    store, and the bulk import creates SKUs and parties through the mirror's arrays: both live inside the snapshot,
+    which a native module's own rows do not — so they take the state lock and persist before they answer, and the
+    item and party write-backs carry what the import created into `items` and `parties` in the same transaction.
+  - **Proved both ways:** 676 contract checks with the eight routes served natively, 676 with the mock handlers
+    serving them, and **27 captured answers compared across the two configurations** — every book with and without a
+    range, both CSV exports, the 422s and the 404, the dashboard, three searches, the notifications, both
+    service-code lists, the three import bodies and the registers the import writes into — **0 differences the slice
+    is responsible for**; the one the slice before this one documented (the dashboard's recent-sales strip, ordered
+    by a `createdAt` string the seed writes in two shapes) is unchanged, and still the only one.
+  - **Tests:** `api_native.py` 694 checks (+15: **the readers** — one SKU's Mushak 6.1 book with its running balance
+    and its CSV, the 6.10 register above the limit, and the decisive ones: an SKU's opening counter changed in SQL
+    alone moves the book's closing balance, an invoice's total moves the dashboard's KPIs, the same invoice left as
+    a draft is one more approval in the notifications, and its number is what the ⌘K search finds it by; the bulk
+    import creating a customer through the mirror that the party write-back carries into `parties`, with one audit
+    event for the party and one for the import itself; and the notifications read before a restart still read after
+    it). Contract unchanged: 676 checks / 226 endpoints.
+  - **Next:** the R6 VAT registers — the UDs and the bond, the drawback claims, the export proceeds, the late filings
+    and the 9.4 amendments; then `compat_state` and the lock come out and the API can scale out.
+
 - **R5.5 — Backend: the lots and the subcontracting register, served from the tables (branch `r5-nestjs`):**
   `production/lots` and `production/subcontract` leave the compat layer — **55 route modules left, 61 native**, and
   production is out of `compat_state` entirely. Neither stores anything: the lots add up `batch_lines` and

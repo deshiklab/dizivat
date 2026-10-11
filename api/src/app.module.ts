@@ -22,6 +22,7 @@ import { WorkOrdersController, WorkOrdersService } from "./modules/workorders"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
 import { AdjustmentsController, AdjustmentsService, TreasuryController, TreasuryService, VdsController, VdsEligibleController, VdsService } from "./modules/vat"
 import { ComplianceController, PeriodsController, ReturnSubFormController, ReturnsController, ReturnsService, VatSettingsController } from "./modules/returns"
+import { BooksService, DashboardController, ImportController, MushakController, NotificationsController, SaleServicesController, SearchController, ServicesController } from "./modules/books"
 import { SEED_VERSION } from "./boot"
 
 export const VERSION = "0.15.0"
@@ -43,6 +44,10 @@ const NATIVE_CONTROLLERS = [
   // the return: `vat/returns/:period/notes/:note` after the return's own routes, and the periods, the compliance
   // centre and the NBR settings last
   ReturnsController, ReturnSubFormController, PeriodsController, ComplianceController, VatSettingsController,
+  // the readers: the Mushak books, the dashboard, the search, the notifications, the service codes and the bulk
+  // import — nothing among them stores a row of its own
+  MushakController, DashboardController, SearchController, NotificationsController,
+  ServicesController, SaleServicesController, ImportController,
 ]
 
 @Global()
@@ -51,13 +56,13 @@ const NATIVE_CONTROLLERS = [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService,
-    TreasuryService, VdsService, AdjustmentsService, ReturnsService, DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, CompatService, BackupsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService,
-    TreasuryService, VdsService, AdjustmentsService, ReturnsService, DerivedService, CompatService, BackupsService,
+    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, CompatService, BackupsService,
   ],
 })
 class CoreModule {}

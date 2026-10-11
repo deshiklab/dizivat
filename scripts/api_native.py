@@ -478,10 +478,14 @@ def flush_snapshot(s):
     a deleted draft's id in production (boot lifts `db.seq` from the highest id each table has seen). A drill that
     rewinds those tables into their pre-release shape therefore has to flush the snapshot first, or the database it
     pretends to be — one the old code wrote, saving after every request — would hold a counter the real one never
-    lost. Read-only: /notifications changes nothing, it just runs the compat path's persist().
+    lost. Read-only: a GET changes nothing, it just runs the compat path's persist(). Which route is still compat
+    moves as the port does (R5.6 left the R6 registers — the UDs, the drawback claims and the export proceeds — so
+    the first of these that answers is the one that flushes).
     """
-    r = s.get(f"{BASE}/notifications")
-    assert r.status_code == 200, r.text
+    for path in ("/vat/penalty", "/vat/sd-eligible", "/vat/uds", "/vat/return-amendments", "/vat/proceeds"):
+        if s.get(f"{BASE}{path}").status_code == 200:
+            return
+    raise AssertionError("no compat route left for the drills to flush the snapshot with")
 
 
 def token_of(s):
@@ -3230,6 +3234,70 @@ def run():
     fr = arif.post(f"{BASE}/vat/return-amendments/{am_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"NBR/N/{TAG}"}) if am_id else None
     check(fr is not None and fr.status_code == 200 and fr.json().get("status") == "filed", "R6.6: a Mushak 9.4 application is created and filed")
 
+    # R5.6: the readers — the Mushak books, the dashboard, the ⌘K search, the notifications, the two service-code
+    # lists and the bulk import. None of them stores a row of its own: each adds up documents that live in the
+    # tables, so the decisive checks are the ones that move a row in SQL alone — the in-memory copies left stale on
+    # purpose — and require the answer to have moved with it. What they read through the mirror (the SKUs, the
+    # parties, the company) is checked after the restart below, with everything else.
+    print("R5.6: the Mushak books, the dashboard, the search, the notifications and the import")
+    bk = arif.get(f"{BASE}/mushak/6.1", params={"item": iid}).json()
+    check(bk.get("form") == "6.1" and bk.get("item", {}).get("id") == iid and len(bk.get("rows", [])) >= 1,
+          "R5.6: the Mushak 6.1 book for one SKU is served from the tables")
+    bkcsv = arif.get(f"{BASE}/mushak/6.1", params={"item": iid, "format": "csv"})
+    check(bkcsv.status_code == 200 and "text/csv" in bkcsv.headers.get("content-type", "")
+          and len(bkcsv.text.strip().splitlines()) == len(bk.get("rows", [])) + 1,
+          "R5.6: …and its CSV export carries a header and one line per row")
+    m610 = arif.get(f"{BASE}/mushak/6.10").json()
+    check(m610.get("limit") == 200_000 and len(m610.get("purchases", [])) >= 1 and len(m610.get("sales", [])) >= 1,
+          "R5.6: the Mushak 6.10 register is served too — the purchases and the sales above the ৳2,00,000 limit")
+    check(len(arif.get(f"{BASE}/services").json()) == 8 and len(arif.get(f"{BASE}/sale-services").json()) == 6,
+          "R5.6: the NBR service codes and the company's own, straight from the bundle")
+    if DB_URL:
+        counts = lambda d: sum(n.get("values", {}).get("count", 0) for n in d.values() if n.get("kind") == "approvals")
+        psql(f"update items set opening = opening + 7 where id = '{iid}'")
+        bk2 = arif.get(f"{BASE}/mushak/6.1", params={"item": iid}).json()
+        check(round(bk2["closing"]["qty"] - bk["closing"]["qty"], 2) == 7,
+              f"…the SKU's opening counter changed in SQL alone moves the book's closing balance — the ledger "
+              f"reconciles to the counter, and the counter is a column ({bk['closing']['qty']} → {bk2['closing']['qty']})")
+        psql(f"update items set opening = opening - 7 where id = '{iid}'")
+        sid = psql("select id from sales where issue_date >= '2026-09-01' and process = 'Approved' and deleted_at is null order by ord limit 1")
+        sno = psql(f"select invoice_no from sales where id = '{sid}'")
+        k0 = arif.get(f"{BASE}/dashboard").json()["kpis"]["sales"]
+        psql(f"update sales set net_total = net_total + 100000 where id = '{sid}'")
+        k1 = arif.get(f"{BASE}/dashboard").json()["kpis"]["sales"]
+        check(k1 == k0 + 100_000, f"…an invoice's total changed in SQL alone moves the dashboard's KPIs ({k0} → {k1})")
+        psql(f"update sales set net_total = net_total - 100000 where id = '{sid}'")
+        n0 = {n["id"]: n for n in arif.get(f"{BASE}/notifications").json()["items"]}
+        psql(f"update sales set process = 'Created' where id = '{sid}'")
+        n1 = {n["id"]: n for n in arif.get(f"{BASE}/notifications").json()["items"]}
+        check(counts(n1) == counts(n0) + 1, f"…and the same row left as a draft is one more approval in the notifications ({counts(n0)} → {counts(n1)})")
+        psql(f"update sales set process = 'Approved' where id = '{sid}'")
+        psql(f"update sales set invoice_no = 'SRCH{TAG[:4]}' where id = '{sid}'")
+        check(any(h.get("id") == sid for h in arif.get(f"{BASE}/search", params={"q": f"SRCH{TAG[:4]}"}).json()),
+              "…and an invoice's number changed in SQL alone is what the ⌘K search finds it by")
+        psql(f"update sales set invoice_no = '{sno}' where id = '{sid}'")
+
+    cust = {"name": f"R5.6 Import {TAG}", "mode": "Local", "bin": "123456789-0123", "mobile": "01711-555012",
+            "address": f"House 1, Road 2 — native check {TAG}"}
+    # the importer stores a party's name in capitals, and that is what the table and the audit ref carry
+    cname = cust["name"].upper()
+    imps = int(psql("select count(*) from audit_events where entity = 'import' and action = 'imported'")) if DB_URL else 0
+    imp = arif.post(f"{BASE}/import", json={"entity": "customers", "rows": [cust], "dryRun": False})
+    check(imp.status_code == 201 and imp.json().get("created") == 1, f"R5.6: the bulk import creates a customer (HTTP {imp.status_code})")
+    imp2 = arif.post(f"{BASE}/import", json={"entity": "customers", "rows": [cust], "dryRun": False})
+    check(imp2.json().get("duplicates") == 1 and imp2.json().get("created") == 0, "R5.6: …and the same row a second time is a duplicate, not an error")
+    bad = arif.post(f"{BASE}/import", json={"entity": "customers", "rows": [dict(cust, bin="1")], "dryRun": False})
+    check(bad.json().get("issues") and bad.json().get("created") == 0, "R5.6: …and one bad row refuses the lot (all-or-nothing)")
+    if DB_URL:
+        check(psql(f"select count(*) from parties where name = '{cname}' and kind = 'customer'") == "1",
+              "R5.6: …and the party write-back carries it into the parties table")
+        check(psql(f"select count(*) from audit_events where entity = 'customer' and action = 'created' and ref = '{cname}'") == "1"
+              and int(psql("select count(*) from audit_events where entity = 'import' and action = 'imported'")) == imps + 1,
+              "R5.6: …with one audit event for the party and one for the import itself")
+
+    arif.post(f"{BASE}/notifications/read", json={"all": True})
+    check(arif.get(f"{BASE}/notifications").json()["unread"] == 0, "R5.6: marking the notifications read dismisses them")
+
     # re-baseline: the R6.2 block above adds audit events for this run's tag (officer, access log, backups)
     before_ids = sorted(e["id"] for e in arif.get(f"{BASE}/audit", params={"q": TAG, "size": 50}).json()["data"])
     if RESTART:
@@ -3242,6 +3310,7 @@ def run():
         check(arif.get(f"{BASE}/vendors/{gid}").status_code == 404, "R5.2: a deleted party stays deleted across a restart")
         check(any(u["no"] == ud_body["no"] for u in arif.get(f"{BASE}/vat/uds").json().get("rows", [])), "compat: the UD still there")
         check(any(x["code"] == f"R5{TAG[:3]}" for x in arif.get(f"{BASE}/units").json()["data"]), "native: unit still there")
+        check(arif.get(f"{BASE}/notifications").json()["unread"] == 0, "R5.6: the notifications read before the restart are still read (the user store is in the snapshot)")
         check(arif.get(f"{BASE}/items/{iid}").json().get("remain") == 40, "R5.2: the SKU's stock survives a restart (counters are columns, not memory)")
         check(arif.get(f"{BASE}/master-items/{mid}").json().get("name") == f"R5 Master Renamed {TAG}", "R5.2: …and the master item kept its rename")
         me = arif.get(f"{BASE}/me").json()

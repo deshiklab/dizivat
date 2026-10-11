@@ -10,6 +10,7 @@
  * column per stock-holding branch), and the ledger's assembly — which rows a `?branch=` shows (transfers only appear
  * then, because company-wide they net to zero), the running balance, the totals and the closing quantity.
  */
+import { z } from "zod"
 import { TODAY } from "@/lib/company"
 import { company } from "@/lib/mock/company"
 import { db, branchSplit, mainBranchId, stockBranches, withStock, type MovementSource } from "@/lib/mock/db"
@@ -245,6 +246,10 @@ export function dashboardAnswer(src: DashboardSource = db): DashboardData {
     monthly: months.map((k) => { const x = kpi(k); return { month: k, sales: x.sales, purchases: x.purchases, outputVat: x.outputVat, inputVat: x.inputVat } }),
     topCustomers: [...byCustomer.values()].sort((a, b) => b.amount - a.amount).slice(0, 5).map((x) => ({ ...x, amount: round2(x.amount) })),
     mix: [...mix.entries()].map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 5),
+    // Ordered by the `createdAt` string, as the demo data set wrote it: the seed stamps some invoices `…T14:19:00+06:00`
+    // and others `toISOString()`, so the two shapes do not sort together, and the sales table (R5.3) renders every
+    // instant as UTC — two invoices of 24-09-2026 change places between the two runtimes. Kept as the mock has it:
+    // the same six invoices are there, and the demo must not move.
     recentSales: [...src.sales].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 6),
     lowStock: src.items.map(withStock).filter((i) => i.remain < i.reorderLevel).sort((a, b) => a.remain / a.reorderLevel - b.remain / b.reorderLevel).slice(0, 5),
     deadlines,
@@ -268,6 +273,11 @@ function dashboardDeadlines(cur: string, prev: string, src: DashboardSource): Da
     { id: "r91", title: "return91", due, status: st(r?.status === "submitted", due), href: `/vat/return-9-1?period=${cur}` },
   ]
 }
+
+/* ── /notifications/read ────────────────────────────────────────────────── */
+
+/** What marking notifications read may be given: either the lot, or up to a hundred ids. */
+export const notifReadInput = z.union([z.object({ all: z.literal(true) }), z.object({ ids: z.array(z.string()).min(1).max(100) })])
 
 /* ── /search: one query across the record types ─────────────────────────── */
 

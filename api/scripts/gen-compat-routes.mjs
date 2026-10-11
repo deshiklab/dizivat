@@ -52,6 +52,11 @@ export const NATIVE = [
   // (the one row of `vat_settings`)
   "vat/returns", "vat/returns/[period]", "vat/returns/[period]/notes/[note]", "vat/periods", "vat/compliance",
   "vat/settings",
+  // R5.6: the readers — nothing here stores a row of its own. The Mushak books over one item and a range (6.1,
+  // 6.2, 6.2.1, 6.10), the dashboard, the ⌘K search, the notifications and their mark-as-read, the two service-code
+  // lists and the bulk master-data import.
+  "mushak/[form]", "dashboard", "search", "notifications", "notifications/read", "services", "sale-services",
+  "import",
 ]
 
 const found = []

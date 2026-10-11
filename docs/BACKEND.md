@@ -645,9 +645,43 @@ still `9.1 · 09-2026`, which is what makes the trail for a return readable afte
 - **Upgrade:** the first boot on a database written before this slice moves the returns and the settings out of
   `compat_state`, rewrites the snapshot without them and leaves the tables as the only copy; restoring a pre-R5.6
   backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI.
-- **33 compat route modules are left, 83 native.** What is left after this one is the Mushak books
-  (`mushak/[form]`), then the dashboard, search, notifications, the bulk import and the services — and then
-  `compat_state` and the lock are removed and the API can scale out.
+- **33 compat route modules are left, 83 native.** What is left after this one — the Mushak books, the dashboard,
+  search, notifications, the bulk import and the services — is the next slice (all readers, no table of their own);
+  the R6 VAT registers follow, and then `compat_state` and the lock are removed and the API can scale out.
+
+## R5.6 — the Mushak books and the rest of the readers served from the tables
+
+`api/src/modules/books.ts` serves eight endpoints — `mushak/[form]` (6.1, 6.2, 6.2.1 and 6.10), the dashboard, the ⌘K
+search, the notifications and their mark-as-read, the two service-code lists and the bulk master-data import — and
+none of them stores a row of its own. Each adds up documents that live elsewhere: an item's book every movement that
+touched it, valued the way the form values it; the dashboard the year's invoices and the return's own shortfall; the
+search the two invoice registers, the SKUs and both party books; the notifications the drafts awaiting an approval,
+the audit trail's decisions and the stock below its re-order level; the import the SKUs and the parties it is about to
+create. Every one of those families has a table, so all eight are served from the database — the documents are read
+back by the modules that own them, and the derivation is the mock's own code, re-exported by
+`api/src/compat/entry.ts` (`mushakBook`, `mushakCsvColumns`, `mushak610Book` and `mushak610CsvColumns`,
+`dashboardAnswer`, `searchAnswer` and `notifReadInput` from `_derived.ts`, `notificationsFor` from
+`lib/mock/notifications.ts`, and `bulkImport` with the row rules and the audit entries it writes from `_r62.ts`), so
+the rows, the totals, the deadlines, the hits and the import's issues cannot drift between the two runtimes.
+
+- **No migration, and nothing to adopt.** Seven of the eight are reads over rows that already exist, so this slice
+  adds no schema, no snapshot change and no upgrade path of its own: what they read is what the R5.2–R5.6 migrations
+  already put there.
+- **The rules moved out of the route files.** The range every book shares (which defaults to the financial year to
+  date, and refuses one the wrong way round), the form an item may be asked for (6.2 is finished goods only, 6.2.1 is
+  the traded-goods book), the 404 that points Mushak 9.1 at `/vat/returns/{period}`, the eighteen CSV columns, the
+  dashboard's four deadlines, the five families the search walks and the notification an approval or a deadline
+  becomes are `_derived.ts`'s now; `mushak610` (`_r4.ts`), `notificationsFor` and `bulkImport` (`_r62.ts`) take their
+  documents as data, so the eight route files are a dozen lines each and both runtimes call the same functions.
+- **The two writes save the snapshot the way a compat handler's does.** Marking notifications read writes the user
+  store, and the bulk import creates SKUs and parties through the mirror's arrays — both live inside the snapshot,
+  which a native module's own rows do not — so they take the state lock and persist before they answer, and the item
+  and party write-backs carry what the import created into their tables in the same transaction as everything else.
+- **The in-memory copies stay**, because the R6 VAT registers still read them: the UDs and the bond, the drawback
+  claims, the export proceeds, the late filings and the 9.4 amendments. What changed is that these eight no longer
+  depend on them.
+- **25 compat route modules are left, 91 native.** What is left is the R6 VAT registers, and then `compat_state` and
+  the lock are removed and the API can scale out.
 
 ## Tables
 
@@ -736,7 +770,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 612 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 694 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -965,6 +999,17 @@ restarts, and the same register with its CSV, the same tax periods, the same com
 with its computation and the same note sub-forms are required back — with a return started on the upgraded database
 being a row in `vat_returns`, deleting the draft taking the row with it, the settings write landing in the one row,
 and a second boot adopting nothing again.
+
+And the readers this release ends with. One SKU's Mushak 6.1 book is served with its running balance and exported as a
+CSV with a header and one line per row, and the Mushak 6.10 register with the purchases and the sales above the
+৳2,00,000 limit. **The decisive checks are the ones that move a row in SQL alone, with the in-memory copies left
+stale on purpose**: an SKU's opening counter moves the book's closing balance (the ledger reconciles to the counter,
+and the counter is a column), an invoice's total moves the dashboard's KPIs, the same invoice left as a draft is one
+more approval in the notifications, and its number is what the ⌘K search finds it by. The bulk import creates a
+customer through the mirror, the same row a second time is a duplicate rather than an error, one bad row refuses the
+lot, and the party write-back carries it into `parties` — with one audit event for the party and one for the import
+itself. Marking the notifications read dismisses them, and a restart later they are still read: the ids it takes to
+know that live in the user store, inside the snapshot.
 
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
