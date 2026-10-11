@@ -47,7 +47,8 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | Accounting (R5.6) | `accounting/accounts`, `accounting/accounts/{id}`, `accounting/receipts`, `accounting/receipts/{id}`, `accounting/payments`, `accounting/payments/{id}`, `accounting/open-invoices`, `accounting/statement`, `accounting/config` | **native** — `money_accounts`, `money_docs` + `money_allocations`, `accounting_config` (a settlement writes the invoice's `paid` and `due` with it) |
 | Health | `health` (public) | **native** — liveness + DB round-trip |
 | The NBR VAT documents (R5.6) | `vat/treasury`, `vat/treasury/{id}`, `vat/vds`, `vat/vds/{id}`, `vat/vds/eligible`, `vat/adjustments`, `vat/adjustments/{id}` | **native** — `treasury_deposits` (TR-6), `vds_entries` (Mushak 6.6), `vat_adjustments` (the 9.1 notes no book can derive); an approved certificate settles what it withholds, on the invoice's row |
-| Everything else: the VAT returns and the Mushak books, the compliance centre, the Mushak forms, notifications, dashboard, search, import, the services… | 39 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| The Mushak 9.1 return (R5.6) | `vat/returns`, `vat/returns/{period}`, `vat/returns/{period}/notes/{note}`, `vat/periods`, `vat/compliance`, `vat/settings` | **native** — `vat_returns` (one row per tax period, the period being its id; a submitted one carries the computation it was filed with) and the one row of `vat_settings`; the period lock every other family checks reads them, not the compat snapshot |
+| Everything else: the Mushak books, the Mushak forms, notifications, dashboard, search, import, the services… | 33 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -613,6 +614,41 @@ captured answers were identical.
   period lock, the compliance centre and the Mushak books — then the dashboard, search, notifications, the bulk
   import and the services.
 
+## R5.6 — the Mushak 9.1 return on its own tables
+
+`api/src/modules/returns.ts` serves the return — the register, one period's return with its computation, the note
+sub-forms behind a computation's notes, the tax periods, the compliance centre and the NBR settings — from
+**`vat_returns`** and **`vat_settings`**. The rules are the mock's own, the same way the three VAT families' are:
+what a period may be filed for (in order, and not twice), what a submission needs (the period over, the previous
+return filed, a date that is neither missing nor in the future, and note 58 covering note 50), the acknowledgement
+number it is given and the `late` an original filed after the due date becomes, what a draft may be edited to, why
+a submitted return cannot be deleted, the register's spec and CSV columns, the note sub-forms, the compliance
+answer and the settings' validation — so the responses, error codes and audit events cannot drift. The audit ref is
+still `9.1 · 09-2026`, which is what makes the trail for a return readable after the move.
+
+- **A return is a row per tax period, and the period is its id.** There is no number series and no `process`: the
+  return for September 2026 is `2026-09`, and its `ord` is only the tie-breaker that keeps the register stable.
+  Two checks carry the state a row may be in — a draft holds no snapshot and no acknowledgement, a submitted return
+  holds both plus the date — and only an amended return says why (`amend_reason`).
+- **A submitted return carries the computation it was filed with.** Every note of the Mushak 9.1 is stored with it
+  (`snapshot`, JSONB), so the books, the Mushak forms and the R6.6 amendment applications read the figures as they
+  were filed: the documents the return added up keep moving, the return does not.
+- **The period lock is a column now.** Until this slice every native document read it from the compat snapshot's
+  `returns` array; it is `vat_returns` that says whether a date is in a submitted period, through the same mirror
+  the compat handlers read — so a native document and a compat one are still refused for exactly the same periods,
+  and the R6.6 applications (9.3 late filing, 9.4 amendment) keep reading `db.returns` unchanged.
+- **The NBR settings are one row, by constraint** (`vat_settings`, `id = 1` checked) the way the accounting
+  configuration is: the zone the economic codes are derived from, and the business profile the forms print.
+- **The in-memory copies stay**, because the Mushak books, the compliance centre and the R6.6 applications read
+  them. Every native write goes through to the mirror, and a compat handler that writes through the mock's array is
+  written back.
+- **Upgrade:** the first boot on a database written before this slice moves the returns and the settings out of
+  `compat_state`, rewrites the snapshot without them and leaves the tables as the only copy; restoring a pre-R5.6
+  backup into a fresh database adopts them the same way, and `api_native.py` drills it in CI.
+- **33 compat route modules are left, 83 native.** What is left after this one is the Mushak books
+  (`mushak/[form]`), then the dashboard, search, notifications, the bulk import and the services — and then
+  `compat_state` and the lock are removed and the API can scale out.
+
 ## Tables
 
 | Table | Purpose |
@@ -655,7 +691,9 @@ captured answers were identical.
 | `vds_entries` | **R5.6:** a VDS certificate (Mushak 6.6) — the invoice it was written against, the party as printed, the value and VAT subject to VDS, the amount withheld and what it settled (`settled`), and the treasury challan a purchase certificate was deposited with; the challan block belongs to `purchase` |
 | `vat_adjustments` | **R5.6:** a manual VAT adjustment — the kind and the 9.1 note it lands in (27 / 32 / 38 / 39 / 40), the period, the amount and, for SD on the inputs of exported goods, the purchase line, the export sale and the quantity it covers (JSONB) |
 | `accounting_config` (single row) | **R5.6:** how far the books are closed (`closed_up_to`), whether an advance is allowed and whether a new document pre-allocates the oldest invoices — a control on every money document written after it |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6) |
+| `vat_returns` | **R5.6:** one Mushak 9.1 return per tax period, the period being its id (`ord` only keeps the insertion order stable) — the kind (`original` / `amended` / `full` / `late`, an amended one with its reason), whether there were taxable activities, `draft` or `submitted`, the manual notes (parts 4–5, JSONB) and, once filed, the date, the acknowledgement number, who filed it and **every note of the computation as it was filed** (JSONB); the period lock every other document checks is a row here |
+| `vat_settings` (single row) | **R5.6:** the NBR settings — the zone the economic codes are derived from and the business profile the forms print (JSONB), with who last changed them and when |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -913,6 +951,21 @@ required back row for row — with a receipt deleted before the upgrade staying 
 retired, a receipt written on the upgraded database still settling its invoice on the adopted `sales` row, a second
 boot adopting nothing again, and writes landing in the tables.
 
+And the Mushak 9.1 return, the family this release ends with. **The lock is a row: a period that has a submitted
+return refuses a document dated into it, and the moment a return is deleted the same date is allowed again** — the
+decisive check, because it is the one every other family reads. A return is filed in order and not twice, a period
+that is not over is refused, a submission needs note 58 to cover note 50, and what comes back carries the
+computation it was filed with. The register keeps its facets, its sorts, its ranges and its CSV, the note sub-forms
+behind a filed return's notes answer the documents behind them, and the compliance centre answers for the open
+period and for a filed one. The NBR settings are one row: an administrator's PUT replaces it, an approver is
+refused, and the zone the economic codes come from is validated. Plus the snapshot carrying neither collection, the
+demo's returns and settings seeded into their tables, and **the upgrade drilled the same way**: the database is
+rewritten into its pre-R5.6 shape (the returns and the settings inside `compat_state`, both tables empty), the API
+restarts, and the same register with its CSV, the same tax periods, the same compliance answers, the same return
+with its computation and the same note sub-forms are required back — with a return started on the upgraded database
+being a row in `vat_returns`, deleting the draft taking the row with it, the settings write landing in the one row,
+and a second boot adopting nothing again.
+
 CI (`.github/workflows/backend.yml`, on every push to `r5-nestjs`):
 
 1. Starts a PostgreSQL 16 service, runs the full suite plus `api_native.py`, and checks that the migrations and the compat table are current.
@@ -990,7 +1043,7 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | R5.3 | **done** — transfers and damage (`stock_documents` + `stock_document_lines`), sales (6.3, `sales` + `sale_lines` + `sale_realisations`), purchases incl. imports and services (`purchases` + `purchase_lines`), credit and debit notes (6.7/6.8, `notes` + `note_lines`) |
 | R5.4 | **done** — the derived stock: the opening entries (`opening_entries`) and the production batches (6.4, `batches` + `batch_lines` + `batch_consumption`) are rows, and since every family the branch split and an item's ledger add up is relational now, `stock` and `items/{id}/ledger` are served from those rows by the mock's own derivation. Next: the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting registers |
 | R5.5 | **done** — the rest of production: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`), the production configuration (`production_config`) and the work orders (`work_orders` + `work_order_lines`, whose progress the approved batches' rows are summed into) are rows, and the two registers derived from them — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) — are served from those rows by the mock's own derivation. Production is out of `compat_state` |
-| R5.6 | **in progress** — accounting is done: the accounts (`money_accounts`), the receipts and the payments with their allocations (`money_docs` + `money_allocations`, settling the invoice's `paid` and `due` in the same transaction) and the accounting configuration (`accounting_config`); so are the treasury deposits (`treasury_deposits`), the VDS certificates (`vds_entries`, whose approval settles what it withholds on the invoice's row) and the VAT adjustments (`vat_adjustments`). Next: the Mushak 9.1 returns and the period lock, the compliance centre and the Mushak books — then `compat_state` and the lock are removed and the API can scale out |
+| R5.6 | **in progress** — accounting is done: the accounts (`money_accounts`), the receipts and the payments with their allocations (`money_docs` + `money_allocations`, settling the invoice's `paid` and `due` in the same transaction) and the accounting configuration (`accounting_config`); so are the treasury deposits (`treasury_deposits`), the VDS certificates (`vds_entries`, whose approval settles what it withholds on the invoice's row), the VAT adjustments (`vat_adjustments`) and the Mushak 9.1 return with the period lock, the tax periods and the compliance centre (`vat_returns`, a submitted one carrying the computation it was filed with, and the one row of `vat_settings`). Next: the Mushak books — then `compat_state` and the lock are removed and the API can scale out |
 
 Money columns will be `numeric(18,2)` (as `parties.credit_limit`, the `items` prices and `tariff_lines` already are),
 quantities `numeric(18,3)` (the units allow up to three decimals) and a declaration's coefficients `numeric(18,4)`

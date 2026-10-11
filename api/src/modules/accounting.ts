@@ -108,8 +108,10 @@ export function toMoneyAccount(r: AccountDb): MoneyAccount {
   const a: MoneyAccount = {
     id: r.id, kind: r.kind, provider: r.provider, accountNo: r.accountNo, owner: r.owner,
     serviceCharge: r.serviceCharge, openingBalance: r.openingBalance, openingDate: r.openingDate, active: r.active,
-    createdAt: r.createdAt.toISOString(), history: r.history ?? [],
+    createdAt: r.createdAt.toISOString(),
   }
+  // a seeded account has no trail yet, and the mock omits the field rather than answering an empty one
+  if (r.history != null) a.history = r.history
   if (r.branch != null) a.branch = r.branch
   if (r.address != null) a.address = r.address
   if (r.bankType != null) a.bankType = r.bankType

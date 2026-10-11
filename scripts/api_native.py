@@ -374,6 +374,26 @@ PRE_R56_VAT = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data
   'treasury', {TREASURY_AGG}, 'vds', {VDS_AGG}, 'adjustments', {ADJUSTMENT_AGG}
 )) where key = 'main'"""
 
+# ── R5.6 upgrade drill: the Mushak 9.1 returns and the NBR settings ─────────────────────────────────────────
+# The same for the return: a database written before this slice holds one return per tax period inside
+# compat_state (`returns`, the period being its id) with the NBR settings beside it (`vatSettings`, an object),
+# and no row in either table. Rebuilt from the live tables below — the return carrying the computation it was
+# filed with, optional fields absent rather than null, timestamps in the ISO-8601 the snapshot carries — so the
+# first boot on this code has to adopt them. Nothing here ships either.
+RETURN_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', r.id, 'period', r.period, 'type', r.type, 'amendReason', r.amend_reason, 'activities', r.activities,
+    'status', r.status, 'submissionDate', to_char(r.submission_date, 'YYYY-MM-DD'), 'manual', r.manual,
+    'snapshot', r.snapshot, 'ackNo', r.ack_no, 'submittedBy', r.submitted_by, 'submittedAt', """
+                                  + _ISO.format("r.submitted_at") + """, 'createdAt', """
+                                  + _ISO.format("r.created_at") + """, 'updatedAt', """
+                                  + _ISO.format("r.updated_at") + """, 'history', r.history)""") + ")")
+RETURN_AGG = f"(select coalesce(jsonb_agg({RETURN_DOC} order by r.ord), '[]'::jsonb) from vat_returns r)"
+SETTINGS_DOC = ("(select " + _NO_NULLS.format("""jsonb_build_object('zoneCode', zone_code, 'profile', profile,
+  'updatedAt', """ + _ISO.format("updated_at") + """, 'updatedBy', updated_by)""") + " from vat_settings where id = 1)")
+PRE_R56_RETURNS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'returns', {RETURN_AGG}, 'vatSettings', {SETTINGS_DOC}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -4026,6 +4046,111 @@ def run():
               f"and writes land in the tables on the upgraded database ({vdWrite.status_code})")
         if vdw.get("id"):
             arif.delete(f"{BASE}/vat/adjustments/{vdw['id']}")
+
+        # … and the Mushak 9.1 return itself, the last family this release moved: a database written before it
+        # holds one return per tax period inside compat_state — the period being its id — and the NBR settings
+        # beside it, with `vat_returns` and `vat_settings` empty. The return is the document the period lock every
+        # other family checks comes from, so what has to survive the round trip is not only the register but the
+        # lock, the compliance centre and every note sub-form behind a submitted period's computation.
+        print("\nR5.6: upgrading a pre-R5.6 database moves the returns and the NBR settings into their tables")
+
+        def ret_counts():
+            return (psql("select count(*) from vat_returns"), psql("select count(*) from vat_settings"))
+
+        def ret_registers():
+            filed = [p for p in arif.get(f"{BASE}/vat/periods").json() if p.get("returnId")][0]["period"]
+            return {"returns": arif.get(f"{BASE}/vat/returns", params={"size": 200}).json(),
+                    "returnsCsv": arif.get(f"{BASE}/vat/returns", params={"size": 200, "format": "csv"}).text,
+                    "periods": arif.get(f"{BASE}/vat/periods").json(),
+                    "compliance": arif.get(f"{BASE}/vat/compliance").json(),
+                    "complianceFiled": arif.get(f"{BASE}/vat/compliance", params={"period": filed}).json(),
+                    "settings": arif.get(f"{BASE}/vat/settings").json(),
+                    "view": arif.get(f"{BASE}/vat/returns/{filed}").json(),
+                    "note30": arif.get(f"{BASE}/vat/returns/{filed}/notes/30").json(),
+                    "note58": arif.get(f"{BASE}/vat/returns/{filed}/notes/58").json()}
+
+        rc, rbefore, rboots = ret_counts(), ret_registers(), vd_boots()
+        psql(PRE_R56_RETURNS)
+        psql("delete from vat_returns")
+        psql("delete from vat_settings")
+        check(ret_counts() == ("0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'returns'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'vatSettings'") == "1",
+              f"the database is back in the pre-R5.6 shape ({rc[0]} returns and the settings inside the snapshot, "
+              f"both tables empty)")
+        restart()
+        check(ret_counts() == rc,
+              f"the first boot moved every return into vat_returns and the settings into vat_settings "
+              f"({rc[0]} returns)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'returns'") == "0"
+              and psql("select count(*) from compat_state where data->'db' ? 'vatSettings'") == "0",
+              "…and rewrote the snapshot without them")
+        check(ret_registers() == rbefore,
+              "…and serves the same answers: the register with its CSV, the tax periods, the compliance centre "
+              "for the open period and for a filed one, the NBR settings, one return with its computation, and "
+              "the note sub-forms behind two of them")
+        check(psql("select count(*) from vat_returns r join (select period, submission_date, ack_no, snapshot "
+                   "from vat_returns) x on x.period = r.period where r.status = 'submitted' and r.snapshot is null") == "0"
+              and psql("select count(*) from vat_returns where status = 'submitted' and ack_no is null") == "0",
+              "…with every filed return still carrying the computation it was filed with")
+        # The decisive one: the lock is a row. While the return for a period is submitted, a deposit dated into
+        # that period is refused; put the row's own columns back to a draft in SQL alone — the in-memory copies
+        # left stale on purpose, so only a restart can tell — and the same body is accepted. Nothing else about
+        # the period changed, which is what makes it the table the lock reads and not the snapshot.
+        lockPeriod, lockNo = "2026-08", f"R56-{TAG}-lock"
+        lockBody = {**vdTBody, "challanNo": lockNo, "taxPeriod": lockPeriod}
+        check(arif.post(f"{BASE}/vat/treasury", json=lockBody).json().get("errors", {}).get("taxPeriod")
+              == ["periodLocked"],
+              "the lock reads vat_returns: a deposit in a period whose return is submitted is refused with the "
+              "mock's own 422")
+        lockSnap = psql(f"select snapshot::text from vat_returns where period = '{lockPeriod}'").replace("'", "''")
+        lockAck = psql(f"select ack_no from vat_returns where period = '{lockPeriod}'").replace("'", "''")
+        lockSub = psql(f"select to_char(submission_date, 'YYYY-MM-DD') from vat_returns where period = "
+                       f"'{lockPeriod}'")
+        psql(f"update vat_returns set status = 'draft', snapshot = null, ack_no = null, submission_date = null "
+             f"where period = '{lockPeriod}'")
+        restart()
+        lockFree = arif.post(f"{BASE}/vat/treasury", json=lockBody)
+        check(lockFree.status_code == 201,
+              f"…and the same body is accepted the moment the row stops being a submitted return "
+              f"({lockFree.status_code} {json.dumps(lockFree.json().get('errors'))[:120]})")
+        if lockFree.status_code == 201:
+            arif.delete(f"{BASE}/vat/treasury/{lockFree.json()['id']}")
+        psql(f"""update vat_returns set status = 'submitted', snapshot = '{lockSnap}'::jsonb, ack_no = '{lockAck}',
+                 submission_date = '{lockSub}' where period = '{lockPeriod}'""")
+        restart()
+        check(psql(f"select status from vat_returns where period = '{lockPeriod}'") == "submitted"
+              and arif.post(f"{BASE}/vat/treasury", json=lockBody).json().get("errors", {}).get("taxPeriod")
+              == ["periodLocked"],
+              "…and putting the row back locks the period again")
+        # a return filed on the upgraded database: a draft for the oldest period that has none (a return is filed
+        # in order, so that is the only one the register will take), then a settings write
+        rUnfiled = [p for p in arif.get(f"{BASE}/vat/periods").json() if not p.get("returnId")]
+        if rUnfiled:
+            rOpen = rUnfiled[-1]["period"]
+            rWrite = arif.post(f"{BASE}/vat/returns", json={"period": rOpen})
+            rw = rWrite.json() if rWrite.status_code == 201 else {}
+            check(rWrite.status_code == 201 and rw.get("status") == "draft"
+                  and psql(f"select count(*) from vat_returns where period = '{rOpen}' and status = 'draft'") == "1",
+                  f"a return started on the upgraded database is a row in vat_returns ({rWrite.status_code} "
+                  f"{rw.get('period')})")
+            if rWrite.status_code == 201:
+                arif.delete(f"{BASE}/vat/returns/{rOpen}")
+                check(psql(f"select count(*) from vat_returns where period = '{rOpen}'") == "0",
+                      "…and deleting the draft takes the row with it")
+        else:
+            skipped("a return started on the upgraded database (every tax period has one)")
+        rSet = arif.get(f"{BASE}/vat/settings").json()
+        rSetWrite = admin.put(f"{BASE}/vat/settings", json={"zoneCode": rSet["zoneCode"],
+                                                            "profile": rSet.get("profile")})
+        check(rSetWrite.status_code == 200
+              and psql("select count(*) from vat_settings where id = 1 and updated_by is not null") == "1",
+              f"and the settings write lands in the one row ({rSetWrite.status_code})")
+        rboots_after, rnow = vd_boots(), ret_counts()
+        restart()
+        check(ret_counts() == rnow and (rboots is None or rboots_after == rboots + 1)
+              and (rboots is None or vd_boots() == rboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
 
     else:
         skipped("restart checks (API_RESTART_CMD not set)")

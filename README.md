@@ -601,7 +601,45 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     registers are required back row for row, with a deposit deleted before the upgrade still deleted while its id and
     its number stay retired, a certificate written afterwards settling its purchase on the adopted row, and a second
     boot adopting nothing again). Contract unchanged: 676 checks / 226 endpoints.
-  - **Next in R5.6:** the Mushak 9.1 returns with the period lock, the compliance centre and the Mushak books.
+  - **Next in R5.6:** the Mushak books.
+
+- **R5.6 — Backend: the Mushak 9.1 return on its own tables (branch `r5-nestjs`):** the return the period lock
+  comes from leaves the compat layer and moves into **`vat_returns`** — one row per tax period, the period being its
+  id — with the NBR settings beside it in the one row of **`vat_settings`**, and the tax periods and the compliance
+  centre with it — **33 route modules left, 83 native**. See
+  [docs/BACKEND.md › R5.6](docs/BACKEND.md#r56--the-mushak-91-return-on-its-own-tables).
+  - **A submitted return carries the computation it was filed with.** Every note of the Mushak 9.1 is stored with
+    the row, so the books, the forms and the 9.4 amendment applications read the figures as they were filed: the
+    documents the return added up keep moving, the return does not. Two checks keep the state honest — a draft
+    holds no snapshot and no acknowledgement, a submitted return holds both plus the date — and only an amended
+    return says why.
+  - **The period lock is a column now.** Every native document that used to read it from the compat snapshot's
+    `returns` array reads `vat_returns`, through the same mirror the compat handlers read, so a native document and
+    a compat one are still refused for exactly the same periods — and the R6.6 applications (9.3 late filing, 9.4
+    amendment) keep reading `db.returns` unchanged.
+  - **The rules are the mock's own**, so nothing an answer says can drift: filing in order and not twice, the
+    period having to be over, the previous return filed, a submission date that is neither missing nor in the
+    future, note 58 covering note 50, the acknowledgement number, the `late` an original filed after its due date
+    becomes, why a submitted return cannot be deleted, and every register's spec, CSV columns and facets. The audit
+    ref is still `9.1 · 09-2026`.
+  - **Proved both ways:** 676 contract checks with the six routes served natively, 676 with the mock handlers
+    serving them, and **83 captured answers compared across the two configurations** — the register with its
+    facets, sorts, ranges and CSVs, one return per filed period with its computation, eighteen note sub-forms
+    behind it, the tax periods, the compliance centre for five periods, the NBR settings, the Mushak books, the
+    documents the lock refuses or allows and the R6.6 applications over the filed returns — **0 differences** the
+    slice is responsible for (one remains from the sales table's own rendering, see below).
+  - **Tests:** `api_native.py` 674 checks (+7: **the R5.6 return upgrade drill** — the database is rewritten into
+    its pre-R5.6 shape with the 14 returns and the settings back inside the snapshot and both tables empty, the API
+    restarted, and the same answers are required back: the register with its CSV, the tax periods, the compliance
+    centre for the open period and for a filed one, one return with its computation, the note sub-forms behind two
+    of them, and every filed return still carrying the computation it was filed with; a return started on the
+    upgraded database is a row in `vat_returns` and deleting the draft takes the row with it, the settings write
+    lands in the one row, and a second boot adopts nothing again).
+  - **The two runtimes differ on one answer, and not since this slice:** the dashboard's recent-sales strip is
+    ordered by the `createdAt` *string*, which the demo data set wrote with a `+06:00` offset for some invoices and
+    `Z` for others; the table renders every instant as UTC, so two invoices four minutes apart change places. The
+    same six invoices are there, and the dashboard's period, KPIs, charts, mix, deadlines and low stock are byte
+    for byte the mock's.
 
 - **R5.5 — Backend: the lots and the subcontracting register, served from the tables (branch `r5-nestjs`):**
   `production/lots` and `production/subcontract` leave the compat layer — **55 route modules left, 61 native**, and
@@ -629,8 +667,8 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     branch split, an invoice line moves the lot it draws, and a challan's receipt moves the subcontracting register
     and leaves the lots alone** — because they read the batch's lines, not its totals).
     Contract unchanged: 676 checks / 226 endpoints.
-  - **Next:** accounting and the VAT returns (R5.6), which is what removes `compat_state` and the single-writer
-    lock.
+  - **Next:** accounting and the VAT returns (R5.6) — done — and then the Mushak books, which is what removes
+    `compat_state` and the single-writer lock.
 
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
