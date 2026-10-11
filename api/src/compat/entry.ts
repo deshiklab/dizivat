@@ -120,6 +120,23 @@ export {
 // and hands them to the mock's own derivation: the register's spec, rows, per-branch valuation and CSV columns, and
 // the ledger's sorted rows, running balance and totals. Nothing is stored here, so there is nothing to migrate.
 export { branchCsvColumns, itemLedger, stockRegister } from "@/app/api/v1/_derived"
+// R5.6: the Mushak books, the dashboard and the search, shared the same way — one item's book over a range (6.1 for
+// inputs, 6.2 for finished goods, 6.2.1 for traded goods) with the range rule and the CSV columns the route used to
+// hold itself, 6.10's purchases and sales above the limit, the home screen's KPIs, charts, deadlines and low stock,
+// and the ⌘K palette's one query across the invoice registers, the SKUs and both party books. All three add up
+// documents that live elsewhere, so they store nothing: the native module reads what each needs back from the
+// tables and hands it to the mock's own derivation.
+export {
+  dashboardAnswer, mushak610Book, mushak610CsvColumns, mushakBook, mushakCsvColumns, searchAnswer,
+  type DashboardSource, type SearchSource,
+} from "@/app/api/v1/_derived"
+// R5.6: the NBR service codes, the notifications (built on demand from the drafts awaiting an approval, the audit
+// trail's decisions on the documents the user issued and the stock below its re-order level) and the bulk master-data
+// import with its all-or-nothing rule, shared the same way.
+export { notificationsFor, type NotificationSource } from "@/lib/mock/notifications"
+export { bulkImport, type ImportSource } from "@/app/api/v1/_r62"
+export { SERVICES } from "@/lib/r2"
+export { SALE_SERVICES } from "@/lib/r3"
 // R5.5: the two registers the rest of production is watched by, served the same way — the finished-goods lots (what
 // an approved batch received less what the approved invoices drew on) and the subcontracting register (the
 // contractual batches, what is still at the contractor and for how long). Both are derived, so they store nothing:

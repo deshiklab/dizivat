@@ -167,8 +167,14 @@ function partyPayload(r: Record<string, unknown>) {
  * Validates every row; rows that already exist (same SKU / same BIN or name) are skipped as duplicates, not errors.
  * All-or-nothing: with any issue nothing is created. dryRun only reports.
  */
+/** What a bulk import reads and writes: the SKUs and the two party books. */
+export type ImportSource = { items: Item[]; customers: Party[]; vendors: Party[] }
+
 export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[], dryRun: boolean, actor: User,
-  audit: (e: { entity: "item" | "customer" | "vendor" | "import"; entityId?: string; ref: string; note?: string }) => void): ImportResult {
+  audit: (e: { entity: "item" | "customer" | "vendor" | "import"; entityId?: string; ref: string; note?: string }) => void,
+  /** the collections the rows are checked against and created in — the mock's arrays, or the API's tables */
+  src?: ImportSource): ImportResult {
+  const world = src ?? (db as unknown as ImportSource)
   const issues: ImportIssue[] = []
   const toCreate: (() => void)[] = []
   let duplicates = 0
@@ -184,11 +190,11 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
       if (seen.has(key)) { issues.push({ row, field: "sku", message: "duplicateInFile" }); return }
       seen.add(key)
       if (badUnit(d.unit)) { issues.push({ row, field: "unit", message: "unknownUnit" }); return }
-      if (db.items.some((x) => x.sku.toLowerCase() === key)) { duplicates++; return }
+      if (world.items.some((x) => x.sku.toLowerCase() === key)) { duplicates++; return }
       toCreate.push(() => {
         // the same stored shape the item form produces (R5.2: shared with the native handlers through _items.ts)
         const it = buildItem(d, d.name.split(" ")[0], newItemId(String(i)))
-        db.items.push(it)
+        world.items.push(it)
         audit({ entity: "item", entityId: it.id, ref: `${it.sku} · ${it.name}`, note: "Bulk import" })
       })
     } else {
@@ -201,7 +207,7 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
       const key = bin ? `b:${bin}` : `n:${name}`
       if (seen.has(key) || seen.has(`n:${name}`)) { issues.push({ row, field: bin ? "bin" : "name", message: "duplicateInFile" }); return }
       seen.add(key); seen.add(`n:${name}`)
-      const coll = k === "customer" ? db.customers : db.vendors
+      const coll = k === "customer" ? world.customers : world.vendors
       if (coll.some((p) => (bin && p.bin.replace(/^NID /, "") === bin) || p.name.trim().toUpperCase() === name)) { duplicates++; return }
       toCreate.push(() => {
         const { exporterType, bondLicenseNo, bondLicenseExpiry, associationNo, ...rest } = d
