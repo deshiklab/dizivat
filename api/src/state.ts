@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, Company, CreditNote, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -34,6 +34,7 @@ interface Globals {
     moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
     adjustments: VatAdjustment[]
     uds: UdRecord[]
+    bondUds: BondUd[]
     accountingConfig: AccountingConfig
     returns: VatReturn[]; vatSettings: VatSettings
     trash: TrashEntry[]
@@ -70,6 +71,7 @@ export function restoreGlobals(s: {
   moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]; treasury: TreasuryDeposit[]; vds: VdsEntry[]
   adjustments: VatAdjustment[]
   uds: UdRecord[]
+  bondUds: BondUd[]
   accountingConfig: AccountingConfig
   returns: VatReturn[]; vatSettings: VatSettings
   events: AuditEvent[]
@@ -83,7 +85,7 @@ export function restoreGlobals(s: {
     creditNotes: s.creditNotes, debitNotes: s.debitNotes, openings: s.openings, batches: s.batches,
     boms: s.boms, productionConfig: s.productionConfig, workOrders: s.workOrders,
     moneyAccounts: s.moneyAccounts, moneyDocs: s.moneyDocs, treasury: s.treasury, vds: s.vds,
-    adjustments: s.adjustments, uds: s.uds,
+    adjustments: s.adjustments, uds: s.uds, bondUds: s.bondUds,
     accountingConfig: s.accountingConfig,
     returns: s.returns ?? [], vatSettings: s.vatSettings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
@@ -402,6 +404,23 @@ export const mirror = {
   },
   removeUd(id: string) {
     const list = mirror.uds()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R6.5: our own UDs / UP — the bond register's lot-to-UD links, the drawback view and the bond watch-list read
+   *  them (their own register reads the rows, see bonduds.ts) */
+  bondUds: (): BondUd[] => G.__dzDb!.bondUds,
+  putBondUds(list: BondUd[]) { const a = mirror.bondUds(); a.splice(0, a.length, ...list) },
+  findBondUd: (idOrNo: string) => mirror.bondUds().find((u) => u.id === idOrNo || u.no === idOrNo),
+  putBondUd(u: BondUd) {
+    const list = mirror.bondUds()
+    const cur = list.find((x) => x.id === u.id)
+    if (cur) replaceObject(cur, u)
+    else list.push(u)
+    return cur ?? u
+  },
+  removeBondUd(id: string) {
+    const list = mirror.bondUds()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },

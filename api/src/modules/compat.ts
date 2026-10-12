@@ -33,6 +33,7 @@ import {
   applyVatDocDeltas, commitVatDocDelta, vatDocDelta,
 } from "./vat"
 import { applyUdDelta, commitUdDelta, udDelta } from "./uds"
+import { applyBondUdDelta, bondUdDelta, commitBondUdDelta } from "./bonduds"
 import { applyReturnDeltas, commitReturnDelta, commitVatSettingsDelta, returnDelta, vatSettingsDelta } from "./returns"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
@@ -49,7 +50,7 @@ export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes,
     openings, batches, boms, productionConfig, workOrders, moneyAccounts, moneyDocs, accountingConfig,
-    treasury, vds, adjustments, uds, returns, vatSettings, ...rest } = G.__dzDb!
+    treasury, vds, adjustments, uds, bondUds, returns, vatSettings, ...rest } = G.__dzDb!
   // R5.2/R5.3: a deleted party, sale or purchase is a `deleted_at` row, so the undo buffer keeps the rest only
   const kept = rest as { trash?: TrashEntry[] }
   kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale"
@@ -130,7 +131,8 @@ export class CompatService {
    *  SKUs, and approving a document moves an item's counters; R5.3: a restored backup puts stock documents back and
    *  a bank file posts proceeds onto an export invoice, a restored backup puts purchases back; R5.5: a restored
    *  backup puts price declarations and the production configuration back; R5.6: a restored backup puts the treasury
-   *  deposits, the VDS entries and the VAT adjustments back — all still through the in-memory world). */
+   *  deposits, the VDS entries and the VAT adjustments back, and R6.5 our own UDs / UP — all still through the
+   *  in-memory world). */
   async persist() {
     const json = compatSnapshot()
     const hash = createHash("sha1").update(json).digest("hex")
@@ -140,6 +142,7 @@ export class CompatService {
     const accounted = { accounts: moneyAccountDelta(), docs: moneyDocDelta(), config: accountingConfigDelta() }
     const vatted = vatDocDelta()
     const udded = udDelta()
+    const bonded = bondUdDelta()
     const returned = { returns: returnDelta(), settings: vatSettingsDelta() }
     if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
       && deltaEmpty(stock) && deltaEmpty(sold) && deltaEmpty(bought)
@@ -147,6 +150,7 @@ export class CompatService {
       && deltaEmpty(declared) && deltaEmpty(configured) && deltaEmpty(ordered)
       && deltaEmpty(accounted.accounts) && deltaEmpty(accounted.docs) && deltaEmpty(accounted.config)
       && deltaEmpty(vatted.treasury) && deltaEmpty(vatted.vds) && deltaEmpty(vatted.adjustment) && deltaEmpty(udded)
+      && deltaEmpty(bonded)
       && deltaEmpty(returned.returns) && deltaEmpty(returned.settings)) return
     let refreshed: Awaited<ReturnType<typeof applyWorkOrderDelta>> = []
     await db.transaction(async (tx) => {
@@ -167,6 +171,7 @@ export class CompatService {
       await applyAccountingDeltas(tx, accounted)
       await applyVatDocDeltas(tx, vatted)
       await applyUdDelta(tx, udded)
+      await applyBondUdDelta(tx, bonded)
       await applyReturnDeltas(tx, returned)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
@@ -180,6 +185,7 @@ export class CompatService {
     commitMoneyAccountDelta(accounted.accounts); commitMoneyDocDelta(accounted.docs); commitAccountingConfigDelta(accounted.config)
     commitVatDocDelta(vatted)
     commitUdDelta(udded)
+    commitBondUdDelta(bonded)
     commitReturnDelta(returned.returns); commitVatSettingsDelta(returned.settings)
     if (accounted.config.insert.length || accounted.config.update.length) markAccountingConfig()
     // the batches a compat handler wrote moved these work orders' progress: their rows are the new baseline too

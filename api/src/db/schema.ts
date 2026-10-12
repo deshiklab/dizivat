@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, HistoryEntry, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, VatProfile } from "@/lib/types"
+import type { AuditChange, BondUdGarment, BondUdInput, HistoryEntry, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -1617,4 +1617,84 @@ export const udLines = pgTable("ud_lines", {
   index("ud_lines_item_idx").on(t.itemId),
   check("ud_lines_qty_check", sql`${t.qty} > 0`),
   check("ud_lines_value_check", sql`${t.value} is null or ${t.value} >= 0`),
+])
+
+/**
+ * R6.5 — our own UD (BGMEA / BKMEA) or UP (Bond Commissionerate) for one export order: the bonded inputs it permits
+ * us to import and the garments it exports, and the settlement the Bond Commissionerate records once the order has
+ * shipped (or the UD has expired). There is no delete: an own UD is a permit that was issued, so it lives until it is
+ * settled — and a settlement freezes the statement it was based on.
+ */
+export const bondUds = pgTable("bond_uds", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** the BGMEA / BKMEA UD number or the customs UP number — ours, so unique across the company */
+  no: text("no").notNull(),
+  kind: text("kind", { enum: ["UD", "UP"] }).notNull(),
+  issuer: text("issuer", { enum: ["BGMEA", "BKMEA", "Customs"] }).notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  expiry: date("expiry", { mode: "string" }).notNull(),
+  /** the export LC / sales contract of the order behind the UD, and the foreign buyer */
+  masterLcNo: text("master_lc_no").notNull(),
+  masterLcValue: numeric("master_lc_value", { precision: 18, scale: 2, mode: "number" }),
+  currency: text("currency"),
+  buyer: text("buyer"),
+  note: text("note"),
+  /**
+   * The Bond Commissionerate's settlement, frozen as it was recorded: the statement lines it disposed of (cleared on
+   * duty and / or carried to another UD) and the duty paid — a record of the settlement, not a figure anything adds
+   * up, so it travels with the head as JSONB the way a declaration's amendment certificates do.
+   */
+  settlement: jsonb("settlement").$type<UdSettlement>(),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the UD's own trail: created / edited / settled, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a compat handler that dropped an own UD from the in-memory world (a restored older backup) stamps its row */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one number of ours per permit, while it lives — the mock's array refused the duplicate the same way
+  uniqueIndex("bond_uds_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  index("bond_uds_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register walks the live expiries for the ready state and the expired warning */
+  index("bond_uds_expiry_idx").on(t.expiry),
+  check("bond_uds_kind_check", sql`${t.kind} in ('UD','UP')`),
+  check("bond_uds_issuer_check", sql`${t.issuer} in ('BGMEA','BKMEA','Customs')`),
+  check("bond_uds_expiry_check", sql`${t.expiry} >= ${t.date}`),
+  check("bond_uds_master_lc_value_check", sql`${t.masterLcValue} is null or ${t.masterLcValue} >= 0`),
+])
+
+/** What our own UD permits us to import under bond: one row per input, in the order it was entered. */
+export const bondUdInputs = pgTable("bond_ud_inputs", {
+  udId: text("ud_id").notNull(),
+  /** position on the UD */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.udId, t.ord] }),
+  /** what a settlement's carry target looks up: the open UDs that list the input */
+  index("bond_ud_inputs_item_idx").on(t.itemId),
+  check("bond_ud_inputs_qty_check", sql`${t.qty} > 0`),
+])
+
+/** What the order exports: one row per finished good the UD carries. */
+export const bondUdGarments = pgTable("bond_ud_garments", {
+  udId: text("ud_id").notNull(),
+  /** position on the UD */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.udId, t.ord] }),
+  /** the shipment progress and the over-shipped warning read the finished goods every UD lists */
+  index("bond_ud_garments_item_idx").on(t.itemId),
+  check("bond_ud_garments_qty_check", sql`${t.qty} > 0`),
 ])

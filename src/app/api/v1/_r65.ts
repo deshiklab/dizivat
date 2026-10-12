@@ -1,6 +1,8 @@
 /**
  * R6.5 mock API (RMG) — our own UDs / UP with their bond settlement, and duty-drawback claims (DEDO / Mushak-22).
- * The PostgreSQL build runs the same handlers through the compat layer.
+ * The own UDs' rules are this file's own functions now, shared with the PostgreSQL build through the compat bundle,
+ * so the two runtimes' responses, error codes and audit events cannot drift; the drawback claims still run through
+ * the compat layer unchanged.
  */
 import { TODAY } from "@/lib/company"
 import { ACTION_FROM, claimLines, claimList, claimRow, claimTotals, claimableCheck, type ClaimAction } from "@/lib/drawback"
@@ -9,13 +11,16 @@ import { diff, recordAudit } from "@/lib/mock/audit"
 import { csvResponse, delay, toCSV } from "@/lib/mock/query"
 import { bondUdInput, claimActionInput, claimInput, settleInput } from "@/lib/schemas"
 import { bondUdRegister, bondUdRow, normUd, settleCheck, udStatement } from "@/lib/settlement"
-import type { BondUd, DrawbackClaim, HistoryEntry } from "@/lib/types"
-import { deny, json, problem, withAuth, zodProblem } from "./_lib"
+import type {
+  AuditChange, Bom, BondUd, BondUdGarment, BondUdInput, BondUdRegister, BondUdRow, DrawbackClaim, HistoryEntry, Item, Purchase, Sale,
+} from "@/lib/types"
+import type { User } from "@/lib/auth/roles"
+import { deny, json, problem, ruleResponse, withAuth, zodProblem, type RuleProblem } from "./_lib"
 import { bondRegisterOf } from "./_r64"
 
 type Ctx = { params: Promise<{ id: string }> }
 const invalid = (errors: Record<string, string[]>) => problem(422, "Validation failed", errors)
-const src = () => ({ purchases: db.purchases, sales: db.sales, boms: db.boms, bondUds: db.bondUds })
+const src = () => bondSrc()
 const findUd = async (p: Ctx["params"]) => { const { id } = await p; return db.bondUds.find((u) => u.id === id || normUd(u.no) === normUd(decodeURIComponent(id))) }
 const findClaim = async (p: Ctx["params"]) => { const { id } = await p; return db.drawbackClaims.find((c) => c.id === id || c.no === id) }
 const push = (doc: { history?: HistoryEntry[]; updatedAt?: string }, by: string, action: HistoryEntry["action"], note?: string) => {
@@ -25,28 +30,115 @@ const push = (doc: { history?: HistoryEntry[]; updatedAt?: string }, by: string,
   return at
 }
 
-/* ── own UDs / UP ─────────────────────────────────────────────────────────────────────────────────────────── */
+/* ── own UDs / UP — the rules, shared with the PostgreSQL build ──────────────────────────────────────────── */
 
-type UdData = ReturnType<typeof bondUdInput.parse>
+/** What the own-UD rules read: the imports that come in under a permit, the exports that ship against it, the
+ *  input–output coefficient their consumption is measured with, the SKUs an input or a garment has to be, and the
+ *  permits themselves. */
+export interface BondUdSource { purchases: Purchase[]; sales: Sale[]; boms: Bom[]; items: Item[]; bondUds: BondUd[] }
+/** The mock's own array is the default; the API hands the rules the rows instead. */
+const bondSrc = (): BondUdSource => ({ purchases: db.purchases, sales: db.sales, boms: db.boms, items: db.items, bondUds: db.bondUds })
+
+/** The id the next own UD takes — the mock's own counter, which the API keeps in the snapshot with the rest of `db.seq`. */
+export const newBondUdId = (stamp: string) => `bu${++db.seq.bondUd}-${stamp}`
+
+/** What a write hands back: the UD as it stands, what the register shows, and what the audit trail should say. */
+export type BondUdWrite = RuleProblem | {
+  ud: BondUd; row: BondUdRow
+  action: "created" | "edited" | "approved"; ref: string; changes?: AuditChange[]; note?: string
+}
+
+export type BondUdParsed = ReturnType<typeof bondUdInput.parse>
+export type SettleParsed = ReturnType<typeof settleInput.parse>
+
 /** Items must exist: inputs are raw materials / consumables / packing, garments are finished goods. */
-function udLines(d: UdData): { errors?: Record<string, string[]>; inputs?: BondUd["inputs"]; garments?: BondUd["garments"] } {
+export function bondUdLines(d: BondUdParsed, src: BondUdSource): { errors?: Record<string, string[]>; inputs?: BondUdInput[]; garments?: BondUdGarment[] } {
   const errors: Record<string, string[]> = {}
   const inputs = d.inputs.map((l, i) => {
-    const it = db.items.find((x) => x.id === l.itemId)
+    const it = src.items.find((x) => x.id === l.itemId)
     if (!it || it.group === "Finished Goods") { errors[`inputs.${i}.itemId`] = ["unknownInput"]; return null }
     return { itemId: it.id, name: it.name, hsCode: it.hsCode, uom: it.unit, qty: l.qty }
   })
   const garments = d.garments.map((l, i) => {
-    const it = db.items.find((x) => x.id === l.itemId)
+    const it = src.items.find((x) => x.id === l.itemId)
     if (!it || it.group !== "Finished Goods") { errors[`garments.${i}.itemId`] = ["unknownGarment"]; return null }
     return { itemId: it.id, name: it.name, uom: it.unit, qty: l.qty }
   })
   if (Object.keys(errors).length) return { errors }
-  return { inputs: inputs as BondUd["inputs"], garments: garments as BondUd["garments"] }
+  return { inputs: inputs as BondUdInput[], garments: garments as BondUdGarment[] }
 }
-const udLinked = (no: string) =>
-  db.purchases.some((p) => p.process !== "Cancelled" && normUd(p.boe?.udNo) === normUd(no)) || db.sales.some((s) => s.process !== "Cancelled" && normUd(s.export?.ownUdNo) === normUd(no))
-  || db.bondUds.some((u) => u.settlement?.lines.some((l) => normUd(l.carryTo) === normUd(no)))
+
+/** Does any document quote the number — a Bill of Entry that is not cancelled, an export, or another UD's settlement carrying a balance to it? */
+export const bondUdInUse = (no: string, src: BondUdSource = db) =>
+  src.purchases.some((p) => p.process !== "Cancelled" && normUd(p.boe?.udNo) === normUd(no)) || src.sales.some((s) => s.process !== "Cancelled" && normUd(s.export?.ownUdNo) === normUd(no))
+  || src.bondUds.some((u) => u.settlement?.lines.some((l) => normUd(l.carryTo) === normUd(no)))
+
+/**
+ * Creating one: the number in capitals and unique among our permits, its inputs and garments priced from the SKUs'
+ * own names and units, and the history entry that opens it. Pushed into `src`, which is the mock's array or, in the
+ * API, the rows that carry the collection.
+ */
+export function bondUdCreate(d: BondUdParsed, user: User, today: string, src: BondUdSource = db, stamp = Date.now().toString(36)): BondUdWrite {
+  const no = normUd(d.no)
+  if (src.bondUds.some((u) => normUd(u.no) === no)) return { status: 422, title: "Validation failed", errors: { no: ["duplicate"] } }
+  const l = bondUdLines(d, src)
+  if (l.errors) return { status: 422, title: "Validation failed", errors: l.errors }
+  const at = new Date().toISOString()
+  const ud: BondUd = {
+    id: newBondUdId(stamp), no, kind: d.kind, issuer: d.issuer, date: d.date, expiry: d.expiry, masterLcNo: d.masterLcNo,
+    masterLcValue: d.masterLcValue, currency: d.currency, buyer: d.buyer || undefined, note: d.note || undefined, inputs: l.inputs!, garments: l.garments!,
+    createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
+  }
+  src.bondUds.push(ud)
+  return { ud, row: bondUdRow(ud, src, today), action: "created", ref: ud.no }
+}
+
+/**
+ * Editing one — its number cannot change once a document quotes it. The caller has already refused a settled UD.
+ */
+export function bondUdUpdate(u: BondUd, d: BondUdParsed, user: User, today: string, src: BondUdSource = db): BondUdWrite {
+  const no = normUd(d.no)
+  if (no !== u.no && src.bondUds.some((x) => x.id !== u.id && normUd(x.no) === no)) return { status: 422, title: "Validation failed", errors: { no: ["duplicate"] } }
+  if (no !== u.no && bondUdInUse(u.no, src)) return { status: 422, title: "Validation failed", errors: { no: ["udInUse"] } }
+  const l = bondUdLines(d, src)
+  if (l.errors) return { status: 422, title: "Validation failed", errors: l.errors }
+  const before = structuredClone(u)
+  Object.assign(u, { no, kind: d.kind, issuer: d.issuer, date: d.date, expiry: d.expiry, masterLcNo: d.masterLcNo, masterLcValue: d.masterLcValue, currency: d.currency, buyer: d.buyer || undefined, note: d.note || undefined, inputs: l.inputs!, garments: l.garments! })
+  const changes = diff(before, u, ["no", "kind", "issuer", "date", "expiry", "masterLcNo", "masterLcValue", "buyer", "note"])
+  push(u, user.name, "edited")
+  return { ud: u, row: bondUdRow(u, src, today), action: "edited", ref: u.no, changes }
+}
+
+/**
+ * Recording the Bond Commissionerate's settlement: every left-over balance disposed of in full — cleared on duty
+ * and / or carried to another open UD of ours that lists the input — and the statement frozen with the answer. The
+ * caller has already refused a UD that was settled before.
+ */
+export function bondUdSettle(u: BondUd, d: SettleParsed, user: User, today: string, src: BondUdSource = db): BondUdWrite {
+  const c = settleCheck(bondUdRow(u, src, today), udStatement(u, src).lines, d, src.bondUds, today)
+  if (c.errors) return { status: 422, title: "Validation failed", errors: c.errors }
+  const at = new Date().toISOString()
+  u.settlement = { date: d.date, bondRef: d.bondRef, paymentRef: d.paymentRef || undefined, note: d.note || undefined, lines: c.lines!, dutyPaid: c.dutyPaid!, by: user.name, at }
+  push(u, user.name, "approved", `Settled — ${d.bondRef}`)
+  return { ud: u, row: bondUdRow(u, src, today), action: "approved", ref: u.no, note: `Settled — ${d.bondRef}${c.dutyPaid ? ` · duty ৳ ${c.dutyPaid.toFixed(2)}` : ""}` }
+}
+
+/** The register's CSV: one row per statement line, the settlement's disposal beside the balance it disposed of. */
+export const bondUdCsvColumns = [
+  { key: "no", label: "UD / UP No" }, { key: "kind", label: "Type" }, { key: "issuer", label: "Issued by" }, { key: "date", label: "Date" }, { key: "expiry", label: "Expiry" },
+  { key: "masterLcNo", label: "Export LC / contract" }, { key: "shippedPct", label: "Shipped %" }, { key: "udState", label: "UD status" },
+  { key: "name", label: "Input" }, { key: "uom", label: "Unit" }, { key: "permitted", label: "UD quantity" }, { key: "broughtForward", label: "Brought forward" },
+  { key: "imported", label: "Imported under bond" }, { key: "consumed", label: "Consumed in exports" }, { key: "fromOtherStock", label: "Met from other stock" },
+  { key: "balance", label: "Balance" }, { key: "excessImport", label: "Imported beyond UD" }, { key: "dutyOnBalance", label: "Duty on balance" },
+  { key: "settledOn", label: "Settled on" }, { key: "dutyPaidQty", label: "Cleared on duty" }, { key: "dutyPaid", label: "Duty paid" }, { key: "carryQty", label: "Carried forward" }, { key: "carryTo", label: "Carried to" },
+]
+export const bondUdCsvRows = (reg: BondUdRegister) => reg.rows.flatMap((u) => u.lines.map((l) => {
+  const sl = u.settlement?.lines.find((x) => x.itemId === l.itemId)
+  return { ...l, no: u.no, kind: u.kind, issuer: u.issuer, date: u.date, expiry: u.expiry, masterLcNo: u.masterLcNo, shippedPct: u.shippedPct, udState: u.state,
+    settledOn: u.settlement?.date ?? "", dutyPaidQty: sl?.dutyPaidQty ?? "", carryQty: sl?.carryQty ?? "", carryTo: sl?.carryTo ?? "", dutyPaid: sl?.dutyPaid ?? "" }
+}))
+
+/* ── own UDs / UP — the mock's routes ───────────────────────────────────────────────────────────────────── */
 
 /** GET /vat/bond-uds — register (?state=, ?format=csv: one row per statement line). */
 export const bondUdsGet = withAuth(null, async (req) => {
@@ -54,21 +146,7 @@ export const bondUdsGet = withAuth(null, async (req) => {
   const reg = bondUdRegister(src(), TODAY)
   const state = sp.get("state")
   if (state) reg.rows = reg.rows.filter((r) => r.state === state)
-  if (sp.get("format") === "csv") {
-    const rows = reg.rows.flatMap((u) => u.lines.map((l) => {
-      const sl = u.settlement?.lines.find((x) => x.itemId === l.itemId)
-      return { ...l, no: u.no, kind: u.kind, issuer: u.issuer, date: u.date, expiry: u.expiry, masterLcNo: u.masterLcNo, shippedPct: u.shippedPct, udState: u.state,
-        settledOn: u.settlement?.date ?? "", dutyPaidQty: sl?.dutyPaidQty ?? "", carryQty: sl?.carryQty ?? "", carryTo: sl?.carryTo ?? "", dutyPaid: sl?.dutyPaid ?? "" }
-    }))
-    return csvResponse(toCSV(rows, [
-      { key: "no", label: "UD / UP No" }, { key: "kind", label: "Type" }, { key: "issuer", label: "Issued by" }, { key: "date", label: "Date" }, { key: "expiry", label: "Expiry" },
-      { key: "masterLcNo", label: "Export LC / contract" }, { key: "shippedPct", label: "Shipped %" }, { key: "udState", label: "UD status" },
-      { key: "name", label: "Input" }, { key: "uom", label: "Unit" }, { key: "permitted", label: "UD quantity" }, { key: "broughtForward", label: "Brought forward" },
-      { key: "imported", label: "Imported under bond" }, { key: "consumed", label: "Consumed in exports" }, { key: "fromOtherStock", label: "Met from other stock" },
-      { key: "balance", label: "Balance" }, { key: "excessImport", label: "Imported beyond UD" }, { key: "dutyOnBalance", label: "Duty on balance" },
-      { key: "settledOn", label: "Settled on" }, { key: "dutyPaidQty", label: "Cleared on duty" }, { key: "dutyPaid", label: "Duty paid" }, { key: "carryQty", label: "Carried forward" }, { key: "carryTo", label: "Carried to" },
-    ]), `ud-settlement-${TODAY}.csv`)
-  }
+  if (sp.get("format") === "csv") return csvResponse(toCSV(bondUdCsvRows(reg), bondUdCsvColumns), `ud-settlement-${TODAY}.csv`)
   await delay(80)
   return json(reg)
 })
@@ -77,20 +155,10 @@ export const bondUdsGet = withAuth(null, async (req) => {
 export const bondUdsPost = withAuth("doc.create", async (req, _ctx, user) => {
   const parsed = bondUdInput.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const no = normUd(d.no)
-  if (db.bondUds.some((u) => normUd(u.no) === no)) return invalid({ no: ["duplicate"] })
-  const l = udLines(d)
-  if (l.errors) return invalid(l.errors)
-  const at = new Date().toISOString()
-  const ud: BondUd = {
-    id: `bu${++db.seq.bondUd}-${Date.now().toString(36)}`, no, kind: d.kind, issuer: d.issuer, date: d.date, expiry: d.expiry, masterLcNo: d.masterLcNo,
-    masterLcValue: d.masterLcValue, currency: d.currency, buyer: d.buyer || undefined, note: d.note || undefined, inputs: l.inputs!, garments: l.garments!,
-    createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
-  }
-  db.bondUds.push(ud)
-  recordAudit({ at, actor: user, entity: "bondUd", entityId: ud.id, ref: ud.no, action: "created" })
-  return json(bondUdRow(ud, src(), TODAY), { status: 201 })
+  const w = bondUdCreate(parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ actor: user, entity: "bondUd", entityId: w.ud.id, ref: w.ref, action: "created" })
+  return json(w.row, { status: 201 })
 })
 
 /** GET /vat/bond-uds/:id — statement, shipments, settlement. */
@@ -106,36 +174,23 @@ export const bondUdPut = withAuth<Ctx>("doc.edit", async (req, { params }, user)
   if (u.settlement) return problem(409, "A settled UD cannot be changed.")
   const parsed = bondUdInput.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const no = normUd(d.no)
-  if (no !== u.no && db.bondUds.some((x) => x.id !== u.id && normUd(x.no) === no)) return invalid({ no: ["duplicate"] })
-  if (no !== u.no && udLinked(u.no)) return invalid({ no: ["udInUse"] })
-  const l = udLines(d)
-  if (l.errors) return invalid(l.errors)
-  const before = structuredClone(u)
-  Object.assign(u, { no, kind: d.kind, issuer: d.issuer, date: d.date, expiry: d.expiry, masterLcNo: d.masterLcNo, masterLcValue: d.masterLcValue, currency: d.currency, buyer: d.buyer || undefined, note: d.note || undefined, inputs: l.inputs!, garments: l.garments! })
-  const changes = diff(before, u, ["no", "kind", "issuer", "date", "expiry", "masterLcNo", "masterLcValue", "buyer", "note"])
-  const at = push(u, user.name, "edited")
-  recordAudit({ at, actor: user, entity: "bondUd", entityId: u.id, ref: u.no, action: "edited", changes })
-  return json(bondUdRow(u, src(), TODAY))
+  const w = bondUdUpdate(u, parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ actor: user, entity: "bondUd", entityId: w.ud.id, ref: w.ref, action: "edited", changes: w.changes })
+  return json(w.row)
 })
 
 /** POST /vat/bond-uds/:id/settle — record the Bond Commissionerate's settlement (statement frozen). */
-export const bondUdSettle = withAuth<Ctx>("doc.approve", async (req, { params }, user) => {
+export const bondUdSettleRoute = withAuth<Ctx>("doc.approve", async (req, { params }, user) => {
   const u = await findUd(params)
   if (!u) return problem(404, "UD not found")
   if (u.settlement) return problem(409, `${u.no} was settled on ${u.settlement.date}.`)
   const parsed = settleInput.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const s = src()
-  const c = settleCheck(bondUdRow(u, s, TODAY), udStatement(u, s).lines, d, db.bondUds, TODAY)
-  if (c.errors) return invalid(c.errors)
-  const at = new Date().toISOString()
-  u.settlement = { date: d.date, bondRef: d.bondRef, paymentRef: d.paymentRef || undefined, note: d.note || undefined, lines: c.lines!, dutyPaid: c.dutyPaid!, by: user.name, at }
-  push(u, user.name, "approved", `Settled — ${d.bondRef}`)
-  recordAudit({ at, actor: user, entity: "bondUd", entityId: u.id, ref: u.no, action: "approved", note: `Settled — ${d.bondRef}${c.dutyPaid ? ` · duty ৳ ${c.dutyPaid.toFixed(2)}` : ""}` })
-  return json(bondUdRow(u, s, TODAY))
+  const w = bondUdSettle(u, parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ actor: user, entity: "bondUd", entityId: w.ud.id, ref: w.ref, action: "approved", note: w.note })
+  return json(w.row)
 })
 
 /* ── drawback claims ─────────────────────────────────────────────────────────────────────────────────────── */

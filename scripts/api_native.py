@@ -416,6 +416,29 @@ PRE_R62_UDS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data
   'uds', {UD_AGG}
 )) where key = 'main'"""
 
+# ── R6.5 upgrade drill: our own UDs / UP ────────────────────────────────────────────────────────────────────
+# A database written before this slice holds the own UDs inside compat_state — the head with its inputs and its
+# garments as arrays and the settlement travelling with it, optional fields absent rather than null, timestamps in
+# the ISO-8601 the snapshot carries — and no row in `bond_uds` / `bond_ud_inputs` / `bond_ud_garments`. These
+# statements rebuild that shape from the live tables, so the first boot on this code has to adopt them. Nothing
+# here ships: it is the inverse of the own-UD half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+BOND_INPUTS_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', l.item_id, 'name', l.name, 'hsCode', l.hs_code, 'uom', l.uom, 'qty', l.qty)""")
+    + """ order by l.ord), '[]'::jsonb) from bond_ud_inputs l where l.ud_id = u.id)""")
+BOND_GARMENTS_DOC = ("""(select coalesce(jsonb_agg(""" + _NO_NULLS.format("""jsonb_build_object(
+      'itemId', g.item_id, 'name', g.name, 'uom', g.uom, 'qty', g.qty)""")
+    + """ order by g.ord), '[]'::jsonb) from bond_ud_garments g where g.ud_id = u.id)""")
+BOND_UD_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', u.id, 'no', u.no, 'kind', u.kind, 'issuer', u.issuer, 'date', to_char(u.date, 'YYYY-MM-DD'),
+    'expiry', to_char(u.expiry, 'YYYY-MM-DD'), 'masterLcNo', u.master_lc_no, 'masterLcValue', u.master_lc_value,
+    'currency', u.currency, 'buyer', u.buyer, 'note', u.note, 'settlement', u.settlement, 'inputs', """ + BOND_INPUTS_DOC + """,
+    'garments', """ + BOND_GARMENTS_DOC + """, 'createdBy', u.created_by, 'createdAt', """ + _ISO.format("u.created_at") + """,
+    'updatedAt', """ + _ISO.format("u.updated_at") + """, 'history', u.history)""") + ")")
+BOND_UD_AGG = f"(select coalesce(jsonb_agg({BOND_UD_DOC} order by u.ord), '[]'::jsonb) from bond_uds u where u.deleted_at is null)"
+PRE_R65_BOND_UDS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'bondUds', {BOND_UD_AGG}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -626,14 +649,14 @@ def run():
                "masterLcNo": f"EXP-LC-R6-{TAG}", "buyer": "E2E BUYER", "expiry": "2027-03-31", "lines": [{"itemId": "i21", "qty": 1000}]}
     ud = arif.post(f"{BASE}/vat/uds", json=ud_body)
     check(ud.status_code == 201, f"native (R6.2): a declaration is created for the restart check ({ud.status_code})")
-    # …and the snapshot check below: the declarations are rows of their own now, so what it looks for is one of the
-    # company's own bond UDs — still a compat document, saved with the rest of compat_state
+    # …and the restart check below: own UDs are rows of their own now too (R6.5), so this one is written straight
+    # into `bond_uds` with its inputs and garments
     bu = arif.post(f"{BASE}/vat/bond-uds", json={"kind": "UD", "issuer": "BKMEA", "no": f"BKMEA/UD/2026/R5{TAG}".upper(),
                                                  "date": "2026-08-01", "expiry": "2026-09-01",
                                                  "masterLcNo": f"EXP-LC-R5-{TAG}",
                                                  "inputs": [{"itemId": "i9", "qty": 100}],
                                                  "garments": [{"itemId": "i18", "qty": 300}]})
-    check(bu.status_code == 201, f"compat: own UD created for the snapshot check ({bu.status_code})")
+    check(bu.status_code == 201, f"native (R6.5): own UD created for the restart check ({bu.status_code})")
     unit = arif.post(f"{BASE}/units", json={"code": f"R5{TAG[:3]}", "name": "R5 test unit", "decimals": 1, "active": True})
     check(unit.status_code == 201 and unit.json()["id"].startswith("un"), "native: unit created")
     # R5.2: SKUs and master items are native too. A master item's rename carries its SKUs along (they quote its name),
@@ -683,7 +706,9 @@ def run():
         check(psql(f"select count(*) from parties where name ilike '%R5 Persist Test {TAG}%'") == "1", "R5.2: customers are rows in the parties table")
         check(psql(f"select count(*) from compat_state where data::text ilike '%R5 Persist Test {TAG}%'") == "0", "R5.2: …and no longer inside the compat snapshot")
         check(psql("select count(*) from compat_state where data->'db' ? 'customers' or data->'db' ? 'vendors'") == "0", "R5.2: the snapshot carries no party collection at all")
-        check(psql(f"select count(*) from compat_state where data::text ilike '%R5{TAG}%'") == "1", "compat documents are still saved in compat_state")
+        check(psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'bondUds'") == "0",
+              "compat documents (the drawback claims) are still saved in compat_state — and the own UDs no longer are")
         check(int(psql("select count(*) from parties where kind = 'customer'")) >= 10 and int(psql("select count(*) from parties where kind = 'vendor'")) >= 14,
               "R5.2: the demo customers and vendors were seeded into the table")
         dup = subprocess.run(["psql", DB_URL, "-At", "-c", "insert into parties (id, ord, kind, name, bin, mode, mobile, address) "
@@ -3375,7 +3400,7 @@ def run():
           "R6.4: bonded import keeps duty foregone with nothing payable")
     check(arif.get(f"{BASE}/vat/bond", params={"to": "2030-01-01"}).status_code == 422, "R6.4: range validation (422)")
 
-    # R6.5: own UD settlement + drawback claims (compat), persisted in PostgreSQL
+    # R6.5: own UD settlement on its own tables, drawback claims (compat), persisted in PostgreSQL
     print("R6.5: UD settlement, drawback claims")
     bu = {u["id"]: u for u in arif.get(f"{BASE}/vat/bond-uds").json().get("rows", [])}
     b1, b5 = bu.get("bu1", {}), bu.get("bu5", {})
@@ -3388,6 +3413,41 @@ def run():
     st = arif.post(f"{BASE}/vat/bond-uds/{ud_id}/settle", json={"date": "2026-09-20", "bondRef": f"CBC/N/{TAG}"}) if ud_id else None
     check(ud_id is not None and st is not None and st.status_code == 200 and st.json().get("state") == "settled", "R6.5: an expired UD settles (nothing left over)")
     check(arif.post(f"{BASE}/vat/bond-uds/{ud_id}/settle", json={"date": "2026-09-20", "bondRef": f"CBC/N/{TAG}"}).status_code == 409, "R6.5: a settled UD cannot be settled again (409)")
+    if DB_URL and ud_id:
+        check(psql(f"select count(*) from bond_uds where id = '{ud_id}' and settlement is not null"
+                   f" and settlement->>'bondRef' = 'CBC/N/{TAG}'") == "1"
+              and psql(f"select count(*) from bond_ud_inputs where ud_id = '{ud_id}'") == "1"
+              and psql(f"select count(*) from bond_ud_garments where ud_id = '{ud_id}'") == "1",
+              "R6.5: …and the settled UD is a row of bond_uds, its input a row of bond_ud_inputs, its garment a row of bond_ud_garments, the settlement frozen with it")
+        check(int(psql("select count(*) from bond_uds where settlement is not null")) >= 2
+              and psql(f"select count(*) from audit_events where entity = 'bondUd' and action = 'approved' and ref = '{ud_no}'") == "1",
+              "R6.5: the seeded settlement and this one are both rows, and the settlement is an audit event")
+        dupBu = subprocess.run(["psql", DB_URL, "-At", "-c",
+                                f"insert into bond_uds (id, ord, no, kind, issuer, date, expiry, master_lc_no, created_by, created_at) "
+                                f"select 'buDup{TAG[:6]}', 999999, no, kind, issuer, date, expiry, master_lc_no, created_by, created_at "
+                                f"from bond_uds where id = 'bu1'"], capture_output=True, text=True)
+        check(dupBu.returncode != 0, "R6.5: the database refuses a duplicate UD number (unique index), not just the API")
+        # an edit that only changes the note: the head rewritten, the line rows replaced with the same lines
+        b3 = bu.get("bu3", {})
+        if b3:
+            ebody = {"kind": b3["kind"], "issuer": b3["issuer"], "no": b3["no"], "date": b3["date"], "expiry": b3["expiry"],
+                     "masterLcNo": b3["masterLcNo"], "masterLcValue": b3.get("masterLcValue"), "currency": b3.get("currency", "USD"),
+                     "buyer": b3.get("buyer", ""), "note": f"R6.5 note {TAG}",
+                     "inputs": [{"itemId": l["itemId"], "qty": l["qty"]} for l in b3["inputs"]],
+                     "garments": [{"itemId": g["itemId"], "qty": g["qty"]} for g in b3["garments"]]}
+            buEdit = arif.put(f"{BASE}/vat/bond-uds/bu3", json=ebody)
+            check(buEdit.status_code == 200 and buEdit.json().get("note") == f"R6.5 note {TAG}"
+                  and psql(f"select count(*) from bond_uds where id = 'bu3' and note = 'R6.5 note {TAG}'"
+                           f" and history->-1->>'action' = 'edited'") == "1"
+                  and psql("select count(*) from bond_ud_inputs where ud_id = 'bu3'") == str(len(b3["inputs"])),
+                  f"R6.5: an edit rewrites the head and replaces the line rows ({buEdit.status_code})")
+            bondLots = arif.get(f"{BASE}/vat/bond").json().get("lots", [])
+            check(any(l.get("udId") for l in bondLots),
+                  "R6.5: the bond register (still compat) links its lots to the own UDs the mirror holds")
+        buReg = arif.get(f"{BASE}/vat/bond-uds").json()
+        check(any(r.get("id") == ud_id and r.get("state") == "settled" for r in buReg.get("rows", []))
+              and "settled" in arif.get(f"{BASE}/vat/bond-uds", params={"format": "csv"}).text,
+              "R6.5: the register and its CSV read the rows")
     drafts = arif.get(f"{BASE}/vat/drawback-claims", params={"status": "draft"}).json().get("rows", [])
     claim_id = drafts[0]["id"] if drafts else None
     fr = arif.post(f"{BASE}/vat/drawback-claims/{claim_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"DEDO/N/{TAG}"}) if claim_id else None
@@ -4477,6 +4537,69 @@ def run():
               f"and writes land in the tables on the upgraded database ({udWrite.status_code})")
         if udw.get("id"):
             arif.delete(f"{BASE}/vat/uds/{udw['id']}")
+
+        # … and the second of the R6 registers: a database written before this slice holds our own UDs / UP inside
+        # compat_state — the head with its inputs and garments as arrays, the settlement travelling with it — and
+        # no row in `bond_uds` / `bond_ud_inputs` / `bond_ud_garments`. What has to survive the round trip is the
+        # register with its statements and its totals, one UD frozen as settled, and the in-memory copy the bond
+        # register still links its lots through.
+        print("\nR6.5: upgrading a pre-R6.5 database moves the own UDs into their tables")
+
+        def bu_counts():
+            return (psql("select count(*) from bond_uds where deleted_at is null"),
+                    psql("select count(*) from bond_ud_inputs l join bond_uds u on u.id = l.ud_id where u.deleted_at is null"),
+                    psql("select count(*) from bond_ud_garments g join bond_uds u on u.id = g.ud_id where u.deleted_at is null"),
+                    psql("select count(*) from bond_uds where deleted_at is null and settlement is not null"))
+
+        def bu_registers():
+            return {"uds": arif.get(f"{BASE}/vat/bond-uds").json(),
+                    "udsCsv": arif.get(f"{BASE}/vat/bond-uds", params={"format": "csv"}).text,
+                    "one": arif.get(f"{BASE}/vat/bond-uds/bu1").json(),
+                    "settled": arif.get(f"{BASE}/vat/bond-uds", params={"state": "settled"}).json(),
+                    "bond": arif.get(f"{BASE}/vat/bond").json()}
+
+        def bu_boots():
+            """How many boots adopted the own UDs — one `R6.5 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return sum(1 for line in fh if "R6.5 upgrade:" in line)
+
+        flush_snapshot(arif)  # a UD settled natively never saved the snapshot: the counters have to be in it before the rewind
+        buc, bubefore, buboots = bu_counts(), bu_registers(), bu_boots()
+        psql(PRE_R65_BOND_UDS)
+        psql("delete from bond_ud_garments")
+        psql("delete from bond_ud_inputs")
+        psql("delete from bond_uds")
+        check(bu_counts() == ("0", "0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'bondUds'") == "1",
+              f"the database is back in the pre-R6.5 shape ({buc[0]} own UDs, {buc[1]} inputs, {buc[2]} garments and "
+              f"{buc[3]} settlements inside the snapshot, all three tables empty)")
+        restart()
+        check(bu_counts() == buc,
+              f"the first boot moved every own UD into the tables ({buc[0]} own UDs, {buc[1]} inputs, "
+              f"{buc[2]} garments, {buc[3]} settled)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'bondUds'") == "0",
+              "…and rewrote the snapshot without them")
+        check(bu_registers() == bubefore,
+              "…and serves the same answers: the register with its CSV, one settled UD, the settled state's own "
+              "and the bond register that links its lots through the in-memory copy")
+        buboots_after, bunow = bu_boots(), bu_counts()
+        restart()
+        check(bu_counts() == bunow and (buboots is None or buboots_after == buboots + 1)
+              and (buboots is None or bu_boots() == buboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        buWrite = arif.post(f"{BASE}/vat/bond-uds", json={"kind": "UP", "issuer": "Customs", "no": f"CUS/UP/2026/A{TAG}".upper(),
+                                                          "date": "2026-08-01", "expiry": "2026-09-01",
+                                                          "masterLcNo": f"EXP-LC-A-{TAG}",
+                                                          "inputs": [{"itemId": "i9", "qty": 100}],
+                                                          "garments": [{"itemId": "i18", "qty": 300}]})
+        buw = buWrite.json() if buWrite.status_code == 201 else {}
+        check(buWrite.status_code == 201
+              and psql(f"select count(*) from bond_uds where id = '{buw.get('id')}' and deleted_at is null") == "1"
+              and psql(f"select count(*) from bond_ud_inputs where ud_id = '{buw.get('id')}'") == "1"
+              and psql(f"select count(*) from bond_ud_garments where ud_id = '{buw.get('id')}'") == "1",
+              f"and writes land in the tables on the upgraded database ({buWrite.status_code})")
 
     else:
         skipped("restart checks (API_RESTART_CMD not set)")

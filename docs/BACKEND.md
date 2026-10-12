@@ -716,6 +716,39 @@ the error codes, the amendments and the audit events cannot drift between the tw
 - **22 compat route modules are left, 94 native.** What is left is the rest of the R6 VAT registers, and then
   `compat_state` and the lock are removed and the API can scale out.
 
+## R6.5 — our own UDs / UP on their own tables
+
+`api/src/modules/bonduds.ts` serves `vat/bond-uds` (the register with its statements and totals, `?state=` and its
+CSV), `vat/bond-uds/{id}` (one UD: statement, shipments, warnings, settlement) and the create / edit / settle behind
+them. The rules are the mock's own, re-exported by `api/src/compat/entry.ts` from `_r65.ts` (`bondUdCreate`,
+`bondUdUpdate`, `bondUdSettle`, `bondUdInUse`, `bondUdLines`, `newBondUdId`, `bondUdCsvColumns`, `bondUdCsvRows` —
+the register, the statement and the settlement check are `src/lib/settlement.ts`'s, shared with the pages already) —
+the SKUs every input and garment has to be, the number that is unique among our permits and cannot change once a
+document quotes it, and the settlement that has to dispose of every left-over balance in full — so the rows, the
+error codes, the frozen statements and the audit events cannot drift between the two runtimes.
+
+- **An own UD is a row and each input and garment is a row.** `bond_uds` holds the head (the issuer, the kind, the
+  dates, the export LC / contract, the buyer, the LC value); `bond_ud_inputs` holds what it permits us to import
+  under bond and `bond_ud_garments` what the order exports, in the order they were entered — the same shape as the
+  declarations' `uds` / `ud_lines` beside them.
+- **One number of ours, in the database as well.** A partial unique index on `(no)` covers the live rows, so a race
+  that slips past the application check is a 409, not a 500. An own UD has no delete — a permit that was issued
+  lives until it is settled — but a restored older backup can drop one from the in-memory world, and the write-back
+  answers that by stamping `deleted_at`, which retires its id the way every other family's stamped rows do.
+- **The settlement travels with the head.** What the Bond Commissionerate disposed of — every statement line with
+  the quantity cleared on duty and the quantity carried to another UD, the duty paid, the bond reference — is JSONB
+  on the UD's row, the way a declaration's amendment certificates travel: a record of the settlement, not a figure
+  anything has to add up. The register freezes it: a settled UD serves its settlement's lines, not the live
+  statement.
+- **The in-memory copy stays**, because the bond register — still compat code — links its lots to the own UDs from
+  memory, and the drawback view and the R6.6 proceeds warnings read them too. The module keeps that copy in step on
+  every write, and the write-back adopts whatever a compat handler changes.
+- **A settled UD is refused before its body is parsed** — the mock's own order (404, then 409, then the zod 422s),
+  which the contract suite pins down — and the settle POST answers 200 as the mock did, not Nest's 201.
+- **19 compat route modules are left, 97 native.** What is left is the rest of the R6 VAT registers — the bond
+  register, the drawback claims, the export register, the proceeds, the late filings, the penalty, the SD
+  eligibility and the 9.4 amendments — and then `compat_state` and the lock are removed and the API can scale out.
+
 ## Tables
 
 | Table | Purpose |
@@ -762,6 +795,9 @@ the error codes, the amendments and the audit events cannot drift between the tw
 | `vat_settings` (single row) | **R5.6:** the NBR settings — the zone the economic codes are derived from and the business profile the forms print (JSONB), with who last changed them and when |
 | `uds` | **R6.2:** a Utilization Declaration (BGMEA / BKMEA) or Utilization Permission (customs) of an exporter customer — the number (unique per exporter), the kind, the dates, the exporter as printed, the export LC / contract and the buyer behind it, the LC value in the declaration's own currency, the amendment certificates (JSONB), its history (JSONB); `deleted_at` keeps a deleted declaration's id retired |
 | `ud_lines` | **R6.2:** the inputs a declaration permits — item, name, HS code, unit, the quantity, and the value the declaration allows for it; primary key (declaration, position) |
+| `bond_uds` | **R6.5:** our own UD (BGMEA / BKMEA) or UP (Bond Commissionerate) — the number (unique while it lives), the kind and issuer, the dates, the export LC / contract and the buyer behind it, the LC value, the settlement frozen as it was recorded (JSONB), its history (JSONB); `deleted_at` retires the id of one a restored older backup dropped |
+| `bond_ud_inputs` | **R6.5:** the bonded inputs an own UD permits us to import — item, name, HS code, unit, the quantity; primary key (UD, position) |
+| `bond_ud_garments` | **R6.5:** the finished goods the order exports against an own UD — item, name, unit, the quantity; primary key (UD, position) |
 | `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2) |
 | `meta` | seed version, tariff fiscal year |
 
@@ -794,7 +830,7 @@ npm run build && npx next start -p 3000             # → http://localhost:3000
 | --- | --- |
 | `node api/dist/main.js --reset` | drop everything and re-seed the demo data |
 | `node api/dist/main.js --migrate-only` | apply migrations and exit |
-| `npm --prefix api run typecheck` | type-checks the API **and** the 62 compat route modules |
+| `npm --prefix api run typecheck` | type-checks the API **and** the 19 compat route modules |
 
 ## Tests
 

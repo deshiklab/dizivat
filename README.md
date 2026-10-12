@@ -742,6 +742,38 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     required back, with a declaration deleted before the upgrade still gone and its id still retired).
     Contract unchanged: 676 checks / 226 endpoints.
 
+- **R6.5 — Backend: our own UDs / UP on their own tables (branch `r6-enlistment-rmg`):**
+  `vat/bond-uds`, `vat/bond-uds/{id}` and `vat/bond-uds/{id}/settle` leave the compat layer — **19 compat route
+  modules left, 97 native**. See
+  [docs/BACKEND.md › R6.5](docs/BACKEND.md#r65--our-own-uds--up-on-their-own-tables).
+  - **An own UD is a row and each input and garment is a row.** `bond_uds` holds the head — the issuer, the kind,
+    the dates, the export LC / contract and the buyer behind it, the LC value — and `bond_ud_inputs` /
+    `bond_ud_garments` hold what it permits us to import under bond and what the order exports, in the order they
+    were entered, the same shape as the declarations' `uds` / `ud_lines` beside them.
+  - **One number of ours, in the database as well.** A partial unique index on the number covers the live rows, so
+    two requests cannot take the same UD number. An own UD has no delete — a permit lives until it is settled — but
+    a restored older backup that drops one from memory is answered by a `deleted_at` stamp that retires its id.
+  - **The settlement travels with the head.** What the Bond Commissionerate disposed of — every statement line
+    cleared on duty and / or carried to another UD, the duty paid, the bond reference — is JSONB on the UD's row,
+    the way a declaration's amendment certificates travel: a record of the settlement, not a figure anything has to
+    add up. The register freezes it; a settled UD serves its settlement's lines, not the live statement.
+  - **The rules are the mock's own, taken out of the route files.** `bondUdCreate`, `bondUdUpdate`, `bondUdSettle`
+    with `bondUdInUse`, `bondUdLines`, `newBondUdId` and the register's CSV columns and rows are `_r65.ts`'s now and
+    take the purchases, the exports, the coefficients, the SKUs and the permits as data, so both runtimes call the
+    same functions — the rows, the 422s, the frozen statements and the audit events cannot drift. A settled UD is
+    refused before its body is parsed (the mock's own order), and the settle POST answers 200 as the mock did.
+  - **The two copies are one.** The bond register is still compat code and links its lots to the own UDs from
+    memory, and the drawback view reads it too: settling one natively moves the register at once, which the suite
+    checks, and the write-back adopts whatever a compat handler changes the other way.
+  - **Tests:** `api_native.py` 743 checks (+12: every own UD a row of `bond_uds` with its inputs and
+    garments in their tables and no own UD left in the snapshot, the settlement frozen on the row and its approval
+    an audit event, the database refusing a duplicate number, an edit that rewrites the head and replaces the line
+    rows, the bond register still linking its lots through the in-memory copy, and **an upgrade drill**: the
+    database is rewritten into its pre-R6.5 shape — every own UD with its inputs, its garments and its settlement
+    back inside `compat_state`, all three tables empty — the API restarted, and the same register with its CSV, the
+    same settled UD, the same `?state=` answer and the same bond register are required back, and a second boot
+    adopts nothing again). Contract unchanged: 676 checks / 226 endpoints.
+
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
 All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). ESLint stops components from importing the mock directly. On this branch the same `/api/v1` contract is also served by the **NestJS + PostgreSQL** API in `api/`: build and run with `API_UPSTREAM=http://127.0.0.1:4000` and no component changes are needed (see *Backend (R5)* below).

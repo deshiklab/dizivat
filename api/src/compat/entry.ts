@@ -141,6 +141,12 @@ export { bulkImport, type ImportSource } from "@/app/api/v1/_r62"
 export { udRegister, udCheck, udInUse, udCreate, udUpdate, udRemove, udAnswer, udFitAnswer, udFitInput,
   udCsvColumns, udCsvRows, newUdId } from "@/app/api/v1/_r62"
 export type { UdSource, UdHead, UdWrite } from "@/app/api/v1/_r62"
+// R6.5: our own UDs / UP and their bond settlement — the same rules the mock's routes run, over whichever copy of
+// the documents the caller holds (the register and the settlement statement are src/lib/settlement.ts's, shared
+// with the pages already)
+export { bondUdCreate, bondUdUpdate, bondUdSettle, bondUdInUse, bondUdLines, newBondUdId,
+  bondUdCsvColumns, bondUdCsvRows } from "@/app/api/v1/_r65"
+export type { BondUdSource, BondUdWrite, BondUdParsed, SettleParsed } from "@/app/api/v1/_r65"
 export type { UdParsed } from "@/lib/schemas"
 export { bulkImportInput } from "@/lib/schemas"
 export { SERVICES } from "@/lib/r2"
