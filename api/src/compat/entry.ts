@@ -147,6 +147,10 @@ export type { UdSource, UdHead, UdWrite } from "@/app/api/v1/_r62"
 export { bondUdCreate, bondUdUpdate, bondUdSettle, bondUdInUse, bondUdLines, newBondUdId,
   bondUdCsvColumns, bondUdCsvRows } from "@/app/api/v1/_r65"
 export type { BondUdSource, BondUdWrite, BondUdParsed, SettleParsed } from "@/app/api/v1/_r65"
+// R6.5's second half: the drawback-claim rules, shared the same way — over whichever copy of the drawback view's
+// rows, the claims and the sales the caller holds. The claim itself travels whole (its lines are a frozen copy).
+export { claimCreate, claimRemove, claimAct, newClaimTag, CLAIM_ACTION_PERM, claimCsvColumns, claimCsvRows } from "@/app/api/v1/_r65"
+export type { ClaimSource, ClaimWrite, ClaimParsed, ClaimActionParsed } from "@/app/api/v1/_r65"
 // R6.6: the Mushak 9.3 (late filing) / 9.4 (amended return) rules, shared the same way — over whichever copy of the
 // returns, the applications and the settings the caller holds. An amend step that decreases the tax also returns the
 // decreasing adjustments it posts (notes 32 / 39), which the native module stores beside the application itself.

@@ -36,6 +36,7 @@ import { applyUdDelta, commitUdDelta, udDelta } from "./uds"
 import { applyBondUdDelta, bondUdDelta, commitBondUdDelta } from "./bonduds"
 import { applyReturnAppDeltas, commitLateFilingDelta, commitReturnAmendmentDelta, lateFilingDelta, returnAmendmentDelta } from "./returnapps"
 import { applyPrcBatchDelta, commitPrcBatchDelta, prcBatchDelta } from "./proceeds"
+import { applyClaimDelta, claimDelta, commitClaimDelta } from "./claims"
 import { applyReturnDeltas, commitReturnDelta, commitVatSettingsDelta, returnDelta, vatSettingsDelta } from "./returns"
 
 type Handler = (req: globalThis.Request, ctx: { params: Promise<Record<string, string>> }) => Promise<globalThis.Response> | globalThis.Response
@@ -47,13 +48,13 @@ const HOP = new Set(["connection", "keep-alive", "transfer-encoding", "upgrade",
  *  the sales invoices, the purchases, both note families, the opening stock entries, the production batches, the
  *  price declarations with their configuration, the work orders, the money accounts, the receipts and the payments,
  *  the accounting configuration, the treasury deposits, the VDS entries, the VAT adjustments, (R6.2) the
- *  exporters' declarations, (R6.5) our own UDs / UP, (R6.6) the Mushak 9.3 / 9.4 applications and (R6.6) the
- *  bank-file PRC batches have their own tables). */
+ *  exporters' declarations, (R6.5) our own UDs / UP and drawback claims, (R6.6) the Mushak 9.3 / 9.4 applications
+ *  and (R6.6) the bank-file PRC batches have their own tables). */
 export function compatSnapshot() {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { units, customers, vendors, items, masterItems, transfers, damages, sales, purchases, creditNotes, debitNotes,
     openings, batches, boms, productionConfig, workOrders, moneyAccounts, moneyDocs, accountingConfig,
-    treasury, vds, adjustments, uds, bondUds, lateFilings, returnAmendments, prcBatches, returns, vatSettings, ...rest } = G.__dzDb!
+    treasury, vds, adjustments, uds, bondUds, lateFilings, returnAmendments, prcBatches, drawbackClaims, returns, vatSettings, ...rest } = G.__dzDb!
   // R5.2/R5.3: a deleted party, sale or purchase is a `deleted_at` row, so the undo buffer keeps the rest only
   const kept = rest as { trash?: TrashEntry[] }
   kept.trash = (kept.trash ?? []).filter((t) => t.kind !== "customer" && t.kind !== "vendor" && t.kind !== "sale"
@@ -148,6 +149,7 @@ export class CompatService {
     const bonded = bondUdDelta()
     const applied = { late: lateFilingDelta(), amended: returnAmendmentDelta() }
     const banked = prcBatchDelta()
+    const claimed = claimDelta()
     const returned = { returns: returnDelta(), settings: vatSettingsDelta() }
     if (hash === lastSaved && !this.audit.hasPending() && deltaEmpty(parts) && deltaEmpty(its) && deltaEmpty(masters)
       && deltaEmpty(stock) && deltaEmpty(sold) && deltaEmpty(bought)
@@ -156,7 +158,7 @@ export class CompatService {
       && deltaEmpty(accounted.accounts) && deltaEmpty(accounted.docs) && deltaEmpty(accounted.config)
       && deltaEmpty(vatted.treasury) && deltaEmpty(vatted.vds) && deltaEmpty(vatted.adjustment) && deltaEmpty(udded)
       && deltaEmpty(bonded)
-      && deltaEmpty(applied.late) && deltaEmpty(applied.amended) && deltaEmpty(banked)
+      && deltaEmpty(applied.late) && deltaEmpty(applied.amended) && deltaEmpty(banked) && deltaEmpty(claimed)
       && deltaEmpty(returned.returns) && deltaEmpty(returned.settings)) return
     let refreshed: Awaited<ReturnType<typeof applyWorkOrderDelta>> = []
     await db.transaction(async (tx) => {
@@ -180,6 +182,7 @@ export class CompatService {
       await applyBondUdDelta(tx, bonded)
       await applyReturnAppDeltas(tx, applied.late, applied.amended)
       await applyPrcBatchDelta(tx, banked)
+      await applyClaimDelta(tx, claimed)
       await applyReturnDeltas(tx, returned)
       if (hash !== lastSaved) {
         await tx.insert(compatState).values({ key: "main", data: JSON.parse(json) as unknown })
@@ -194,7 +197,7 @@ export class CompatService {
     commitVatDocDelta(vatted)
     commitUdDelta(udded)
     commitBondUdDelta(bonded)
-    commitLateFilingDelta(applied.late); commitReturnAmendmentDelta(applied.amended); commitPrcBatchDelta(banked)
+    commitLateFilingDelta(applied.late); commitReturnAmendmentDelta(applied.amended); commitPrcBatchDelta(banked); commitClaimDelta(claimed)
     commitReturnDelta(returned.returns); commitVatSettingsDelta(returned.settings)
     if (accounted.config.insert.length || accounted.config.update.length) markAccountingConfig()
     // the batches a compat handler wrote moved these work orders' progress: their rows are the new baseline too

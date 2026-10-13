@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, BondUdGarment, BondUdInput, HistoryEntry, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
+import type { AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -1796,6 +1796,50 @@ export const prcBatches = pgTable("prc_batches", {
   // the register is newest first
   index("prc_batches_created_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
   check("prc_batches_status_check", sql`${t.status} in ('posted','reversed')`),
+])
+
+/**
+ * R6.5 (drawback claims): a duty-drawback claim (DEDO, Mushak-22) over one or more exports — the customs and
+ * regulatory duty the drawback view worked out for each, frozen at creation the way a settlement travels with its
+ * UD, and the claim's own journey: draft → filed (DEDO reference) → sanctioned (possibly less, with the reason) →
+ * paid, or rejected. A deleted draft is stamped, which retires its number — the exports go back on the view.
+ */
+export const drawbackClaims = pgTable("drawback_claims", {
+  id: text("id").primaryKey(),
+  /** insertion order — the register sorts by status then recency */
+  ord: serial("ord").notNull(),
+  /** DBK-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  status: text("status", { enum: ["draft", "filed", "sanctioned", "paid", "rejected"] }).notNull(),
+  method: text("method", { enum: ["actual"] }).notNull(),
+  /** every export the claim takes: the invoice, the bill, the deadline (6 months from export), the duties */
+  lines: jsonb("lines").$type<DrawbackClaimLine[]>().notNull(),
+  cd: numeric("cd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  rd: numeric("rd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  claimed: numeric("claimed", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  filedOn: date("filed_on", { mode: "string" }),
+  dedoRef: text("dedo_ref"),
+  sanctionedOn: date("sanctioned_on", { mode: "string" }),
+  sanctioned: numeric("sanctioned", { precision: 18, scale: 2, mode: "number" }),
+  disallowedReason: text("disallowed_reason"),
+  paidOn: date("paid_on", { mode: "string" }),
+  paid: numeric("paid", { precision: 18, scale: 2, mode: "number" }),
+  payRef: text("pay_ref"),
+  rejectedOn: date("rejected_on", { mode: "string" }),
+  rejectReason: text("reject_reason"),
+  note: text("note"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft — its exports are claimable again, and its number stays retired */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one claim number while it lives
+  uniqueIndex("drawback_claims_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  // the register sorts by status then recency
+  index("drawback_claims_created_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  check("drawback_claims_status_check", sql`${t.status} in ('draft','filed','sanctioned','paid','rejected')`),
 ])
 
 /** What our own UD permits us to import under bond: one row per input, in the order it was entered. */

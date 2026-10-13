@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, DrawbackClaim, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -38,6 +38,7 @@ interface Globals {
     lateFilings: LateFiling[]
     returnAmendments: ReturnAmendment[]
     prcBatches: PrcBatch[]
+    drawbackClaims: DrawbackClaim[]
     accountingConfig: AccountingConfig
     returns: VatReturn[]; vatSettings: VatSettings
     trash: TrashEntry[]
@@ -78,6 +79,7 @@ export function restoreGlobals(s: {
   lateFilings: LateFiling[]
   returnAmendments: ReturnAmendment[]
   prcBatches: PrcBatch[]
+  drawbackClaims: DrawbackClaim[]
   accountingConfig: AccountingConfig
   returns: VatReturn[]; vatSettings: VatSettings
   events: AuditEvent[]
@@ -94,6 +96,7 @@ export function restoreGlobals(s: {
     adjustments: s.adjustments, uds: s.uds, bondUds: s.bondUds,
     lateFilings: s.lateFilings ?? [], returnAmendments: s.returnAmendments ?? [],
     prcBatches: s.prcBatches ?? [],
+    drawbackClaims: s.drawbackClaims ?? [],
     accountingConfig: s.accountingConfig,
     returns: s.returns ?? [], vatSettings: s.vatSettings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
@@ -479,6 +482,23 @@ export const mirror = {
   },
   removePrcBatch(id: string) {
     const list = mirror.prcBatches()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R6.5 (drawback claims): the duty-drawback claims — the register, the bond register's "on a claim" state and
+   *  the proceeds warnings read them (their own rows live in drawback_claims, see claims.ts) */
+  drawbackClaims: (): DrawbackClaim[] => G.__dzDb!.drawbackClaims,
+  putDrawbackClaims(list: DrawbackClaim[]) { const a = mirror.drawbackClaims(); a.splice(0, a.length, ...list) },
+  findDrawbackClaim: (idOrNo: string) => mirror.drawbackClaims().find((x) => x.id === idOrNo || x.no === idOrNo),
+  putDrawbackClaim(c: DrawbackClaim) {
+    const list = mirror.drawbackClaims()
+    const cur = list.find((x) => x.id === c.id)
+    if (cur) replaceObject(cur, c)
+    else list.push(c)
+    return cur ?? c
+  },
+  removeDrawbackClaim(id: string) {
+    const list = mirror.drawbackClaims()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },

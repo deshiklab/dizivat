@@ -8,6 +8,7 @@ Runs through the Next.js frontend (BASE_URL, default http://localhost:3000), whi
 Run on a freshly seeded database (`node api/dist/main.js --reset`); it creates its own users and records.
 """
 import base64, datetime, hashlib, hmac, json, math, os, subprocess, sys, time, uuid
+import re
 import requests
 
 BASE = os.environ.get("BASE_URL", "http://localhost:3000") + "/api/v1"
@@ -18,6 +19,12 @@ SECRET = os.environ.get("SESSION_SECRET")
 API_LOG = os.environ.get("API_LOG")
 ok = fail = skip = 0
 TAG = uuid.uuid4().hex[:6]
+
+
+def natkey(s: str):
+    """The order the API serves SKUs in: the natural (numeric-aware) collation — 'A2' before 'A10' —
+    so the oracle is a numeric-aware key, not the codepoint order (random tags diverge on that one)."""
+    return [(1, int(t)) if t.isdigit() else (0, t) for t in re.split(r"(\d+)", s)]
 
 # ── R5.2 upgrade drill ─────────────────────────────────────────────────────────────────────────────────────────
 # A database written before R5.2 holds its master data inside compat_state (deleted parties in the undo buffer) and
@@ -496,6 +503,34 @@ PRE_R66B_PRC_BATCHES = f"""update compat_state set data = jsonb_set(data, '{{db}
   'prcBatches', {PRC_BATCH_AGG} || jsonb_build_array({DRILL_PB})
 )) where key = 'main'"""
 
+# ── R6.5 upgrade drill: the drawback claims ─────────────────────────────────────────────────────────────────
+# The claims were the last compat documents: a database written before this slice holds them inside
+# compat_state — the frozen lines, the DEDO references and the decision dates travelling with the head,
+# timestamps in the ISO-8601 the snapshot carries — and no row in `drawback_claims`. These statements rebuild
+# that shape from the live tables, so the first boot on this code has to adopt them. Nothing here ships: it is
+# the inverse of the claims half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+CLAIM_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', c.id, 'no', c.no, 'status', c.status, 'method', c.method, 'lines', c.lines,
+    'cd', c.cd, 'rd', c.rd, 'claimed', c.claimed,
+    'filedOn', c.filed_on, 'dedoRef', c.dedo_ref,
+    'sanctionedOn', c.sanctioned_on, 'sanctioned', c.sanctioned, 'disallowedReason', c.disallowed_reason,
+    'paidOn', c.paid_on, 'paid', c.paid, 'payRef', c.pay_ref,
+    'rejectedOn', c.rejected_on, 'rejectReason', c.reject_reason, 'note', c.note,
+    'createdBy', c.created_by, 'createdAt', """ + _ISO.format("c.created_at") + """, 'updatedAt', """ + _ISO.format("c.updated_at") + """, 'history', c.history)""") + ")")
+CLAIM_AGG = (f"(select coalesce(jsonb_agg({CLAIM_DOC} order by c.ord), '[]'::jsonb)"
+             " from drawback_claims c where c.deleted_at is null)")
+# the drill also injects one synthetic DRAFT claim, so the ported write paths run against a claim the old
+# code could have left behind: file it (the date has to sit inside its line's window), then delete a fresh
+# draft — both against rows the adoption moved. Its one line names a sale that does not exist, so the
+# drawback view's claimable totals do not move with it.
+DRILL_CLAIM_ID = "dcdrill1"
+# the drill's draft carries no money (its one line names a sale that does not exist), so the register's
+# totals and the bond view's claimable figure do not move with it — the answers have to compare clean
+DRILL_CLAIM = """'{"id":"dcdrill1","no":"DBK-09269999","status":"draft","method":"actual","lines":[{"saleId":"sdrill0","invoiceNo":"S-DRILL-1","exportDate":"2026-09-01","billNo":"BE-DRILL-1","deemed":false,"customerName":"DRILL EXPORT HOUSE","deadline":"2027-03-01","inputs":[],"cd":0,"rd":0,"total":0}],"cd":0,"rd":0,"claimed":0,"note":"A draft the upgrade drill injected, to be filed and superseded once the table owns the family.","createdBy":"A. Rahman","createdAt":"2026-09-22T09:00:00.000Z","history":[{"at":"2026-09-22T09:00:00.000Z","by":"A. Rahman","action":"created"}]}'::jsonb"""
+PRE_R65B_CLAIMS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'drawbackClaims', {CLAIM_AGG} || jsonb_build_array({DRILL_CLAIM})
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -763,9 +798,9 @@ def run():
         check(psql(f"select count(*) from parties where name ilike '%R5 Persist Test {TAG}%'") == "1", "R5.2: customers are rows in the parties table")
         check(psql(f"select count(*) from compat_state where data::text ilike '%R5 Persist Test {TAG}%'") == "0", "R5.2: …and no longer inside the compat snapshot")
         check(psql("select count(*) from compat_state where data->'db' ? 'customers' or data->'db' ? 'vendors'") == "0", "R5.2: the snapshot carries no party collection at all")
-        check(psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "1"
+        check(psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "0"
               and psql("select count(*) from compat_state where data->'db' ? 'bondUds'") == "0",
-              "compat documents (the drawback claims) are still saved in compat_state — and the own UDs no longer are")
+              "neither the own UDs nor the drawback claims are inside compat_state anymore — both families are rows now")
         check(int(psql("select count(*) from parties where kind = 'customer'")) >= 10 and int(psql("select count(*) from parties where kind = 'vendor'")) >= 14,
               "R5.2: the demo customers and vendors were seeded into the table")
         dup = subprocess.run(["psql", DB_URL, "-At", "-c", "insert into parties (id, ord, kind, name, bin, mode, mobile, address) "
@@ -1739,7 +1774,7 @@ def run():
         return out
 
     check(sorted(dpage) == ["branchValue", "branches", "data", "facets", "page", "size", "total", "totals"]
-          and dpage["total"] == len(drows) and dsku == sorted(dsku),
+          and dpage["total"] == len(drows) and dsku == sorted(dsku, key=natkey),
           f"native (R5.4): /stock answers a page of every SKU — {dpage['total']} rows, sorted by SKU — with the "
           f"stock-holding branches and the value each holds, and nothing else in the body")
     if DB_URL:
@@ -1935,7 +1970,7 @@ def run():
           and len(pdPage["facetLabels"]["item"]) >= 6,
           f"native (R5.5): GET /production/boms answers the page with its facets and the finished goods' names "
           f"({pdPage['total']} declarations)")
-    check([r["sku"] for r in pdRows] == sorted(r["sku"] for r in pdRows)
+    check([r["sku"] for r in pdRows] == sorted((r["sku"] for r in pdRows), key=natkey)
           and all(r["status"] in ("active", "draft", "superseded", "cancelled") and "salePrice" in r for r in pdRows),
           "R5.5: the register is sorted by SKU by default, and every row carries its status and the item's sale price")
     check(sum(pdPage["facets"]["status"].values()) == pdPage["total"]
@@ -3512,6 +3547,20 @@ def run():
     claim_id = drafts[0]["id"] if drafts else None
     fr = arif.post(f"{BASE}/vat/drawback-claims/{claim_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"DEDO/N/{TAG}"}) if claim_id else None
     check(fr is not None and fr.status_code == 200 and fr.json().get("status") == "filed", "R6.5: a draft drawback claim is filed with DEDO")
+    # …and the claims are rows now. The seven seeded ones sit in `drawback_claims` (two refunded, one sanctioned
+    # mid-way, two filed, one rejected, one draft the suites may have filed already — only the terminal statuses
+    # are ours to assert), the one just filed beside them with the DEDO reference it was filed under, and the
+    # audit trail carries both the seeded journeys and the filing.
+    check(psql("select count(*) from drawback_claims where id in ('dc1', 'dc2', 'dc3', 'dc4', 'dc5', 'dc6', 'dc7') and deleted_at is null") == "7"
+          and psql("select status from drawback_claims where id = 'dc2'") == "paid"
+          and psql("select status from drawback_claims where id = 'dc4'") == "rejected",
+          "R6.5: the seeded drawback claims are rows in drawback_claims (two refunded, one rejected)")
+    check(claim_id is not None
+          and psql(f"select count(*) from drawback_claims where id = '{claim_id}' and status = 'filed' and filed_on = '2026-09-25' and dedo_ref = 'DEDO/N/{TAG}'") == "1",
+          "R6.5: the filed claim is a row too, with the DEDO reference it was filed under")
+    check(psql("select count(*) from audit_events where entity = 'drawbackClaim' and ref in ('DBK-11250001', 'DBK-04260004')") >= "2"
+          and claim_id is not None and psql(f"select count(*) from audit_events where entity = 'drawbackClaim' and ref = (select no from drawback_claims where id = '{claim_id}') and action = 'submitted'") >= "1",
+          "R6.5: the audit trail carries the seeded claims and the filing")
 
     # R6.6: bank PRC file batches + Mushak 9.3 / 9.4 applications (compat), persisted in PostgreSQL
     print("R6.6: PRC batches, return applications")
@@ -4879,6 +4928,75 @@ def run():
               and psql(f"select count(*) from prc_batches where id = '{pvw.get('id')}' and deleted_at is null") == "1"
               and psql(f"select count(*) from sale_realisations where batch_id = '{pvw.get('id')}'") == "1",
               f"and writes land in the table on the upgraded database ({pvWrite.status_code if pvWrite is not None else '-'})")
+
+        # …and the drawback claims — the last compat documents. A database written before the port holds them
+        # inside compat_state and no rows in `drawback_claims`. What has to survive the round trip is the
+        # register with its totals and its CSV, one claim by number (paid, with its history), the bond view's
+        # "on a claim" state that reads them through the mirror, and the write paths against the drill's own
+        # synthetic draft.
+        print("\nR6.5: upgrading a pre-port database moves the drawback claims into their table")
+
+        def cl_counts():
+            return (psql("select count(*) from drawback_claims where deleted_at is null"),
+                    psql("select count(*) from audit_events where entity = 'drawbackClaim'"))
+
+        def cl_registers():
+            """The claim surface — with the drill's own draft filtered out, so the sides compare."""
+            reg = arif.get(f"{BASE}/vat/drawback-claims").json()
+            reg["rows"] = [r for r in reg.get("rows", []) if r.get("id") != DRILL_CLAIM_ID]
+            filed = arif.get(f"{BASE}/vat/drawback-claims", params={"status": "filed"}).json()
+            filed["rows"] = [r for r in filed.get("rows", []) if r.get("id") != DRILL_CLAIM_ID]
+            return {"reg": reg, "filed": filed,
+                    "csv": "\n".join(l for l in arif.get(f"{BASE}/vat/drawback-claims", params={"format": "csv"}).text.splitlines() if "DBK-09269999" not in l),
+                    "one": arif.get(f"{BASE}/vat/drawback-claims/DBK-11250001").json(),
+                    "bond": arif.get(f"{BASE}/vat/bond", params={"view": "drawback"}).json()}
+
+        def cl_boots():
+            """How many boots adopted the claims — one `R6.5 upgrade:` line mentioning them each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return sum(1 for line in fh if "R6.5 upgrade:" in line and "drawback claims" in line)
+
+        flush_snapshot(arif)  # a claim filed natively never saved the snapshot: the counters have to be in it before the rewind
+        clc, clbefore, clboots = cl_counts(), cl_registers(), cl_boots()
+        psql(PRE_R65B_CLAIMS)
+        psql("delete from drawback_claims")
+        check(cl_counts() == ("0", clc[1])
+              and psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "1",
+              f"the database is back in the pre-port shape ({clc[0]} drawback claims inside the snapshot, the "
+              f"table empty, one synthetic draft beside them, the audit trail untouched where it was)")
+        restart()
+        check(cl_counts() == (str(int(clc[0]) + 1), clc[1]),
+              f"the first boot moved every claim into the table ({clc[0]} claims + the drill's own draft)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "0",
+              "…and rewrote the snapshot without them")
+        check(cl_registers() == clbefore,
+              "…and serves the same answers: the register and its totals, the filed filter, the CSV, the paid "
+              "claim by number and the bond view's drawback state that reads the claims through the mirror")
+        clboots_after, clnow = cl_boots(), cl_counts()
+        restart()
+        check(cl_counts() == clnow and (clboots is None or clboots_after == clboots + 1)
+              and (clboots is None or cl_boots() == clboots_after),
+              "a second boot adopts nothing again — the table is the only copy from then on")
+        # the synthetic draft came along: file it (its line's window is open), then delete a fresh draft —
+        # both write paths against a claim the old code could have left behind
+        drFile = arif.post(f"{BASE}/vat/drawback-claims/{DRILL_CLAIM_ID}/action", json={"action": "file", "date": "2026-09-25", "ref": "DEDO/DRILL/1"})
+        check(drFile.status_code == 200 and drFile.json().get("status") == "filed"
+              and psql(f"select count(*) from drawback_claims where id = '{DRILL_CLAIM_ID}' and status = 'filed' and dedo_ref = 'DEDO/DRILL/1' and history->-1->>'action' = 'submitted'") == "1",
+              "and the drill's draft runs the ported write paths: filed with the DEDO reference, stamped on the row")
+        clRows = arif.get(f"{BASE}/vat/bond", params={"view": "drawback"}).json().get("drawback", {}).get("rows", [])
+        clFree = next((r["saleId"] for r in clRows if r.get("state") != "lapsed" and not r.get("claim")), None)
+        clWrite = arif.post(f"{BASE}/vat/drawback-claims", json={"saleIds": [clFree]}) if clFree else None
+        clw = clWrite.json() if clWrite is not None and clWrite.status_code == 201 else {}
+        check(clWrite is not None and clWrite.status_code == 201
+              and psql(f"select count(*) from drawback_claims where id = '{clw.get('id')}' and deleted_at is null") == "1",
+              f"and writes land in the table on the upgraded database ({clWrite.status_code if clWrite is not None else '-'})")
+        clDel = arif.delete(f"{BASE}/vat/drawback-claims/{clw.get('id')}") if clw.get("id") else None
+        check(clDel is not None and clDel.status_code == 200
+              and psql(f"select count(*) from drawback_claims where id = '{clw.get('id')}' and deleted_at is not null") == "1"
+              and all(r.get("id") != clw.get("id") for r in arif.get(f"{BASE}/vat/drawback-claims").json().get("rows", [])),
+              "…and a deleted draft is stamped, not removed — the register no longer lists it, and its exports are claimable again")
 
     else:
         skipped("restart checks (API_RESTART_CMD not set)")

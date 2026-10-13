@@ -50,7 +50,8 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | The Mushak 9.1 return (R5.6) | `vat/returns`, `vat/returns/{period}`, `vat/returns/{period}/notes/{note}`, `vat/periods`, `vat/compliance`, `vat/settings` | **native** — `vat_returns` (one row per tax period, the period being its id; a submitted one carries the computation it was filed with) and the one row of `vat_settings`; the period lock every other family checks reads them, not the compat snapshot |
 | The exporters' Utilization Declarations (R6.2) | `vat/uds`, `vat/uds/{id}`, `vat/uds/fit` | **native** — `uds` + `ud_lines` (the amendment certificates travel with the head as JSONB); one declaration number per exporter is a unique index, and a delete stamps `deleted_at` so the id stays retired |
 | The export-proceeds register (R6.6) | `vat/proceeds`, `vat/proceeds/sample`, `vat/proceeds/match`, `vat/proceeds/batches`, `vat/proceeds/batches/{id}`, `vat/proceeds/batches/{id}/reverse` | **native** — `prc_batches` (the bank file's lines, allocations and history as JSONB, the number unique while it lives); the realisations themselves are rows of `sale_realisations` on the invoices, written with the batch in one transaction |
-| Everything else: the bond register, the drawback claims, the export register, the penalty quote, the SD-eligible inputs | 7 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| The drawback claims (R6.5) | `vat/drawback-claims`, `vat/drawback-claims/{id}`, `vat/drawback-claims/{id}/action` | **native** — `drawback_claims` (the frozen export lines, the DEDO reference and the decision dates travel with the head; the number unique while it lives, a deleted draft stamped) |
+| Everything else: the bond register, the export register, the penalty quote, the SD-eligible inputs | 4 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -821,6 +822,42 @@ the two runtimes.
   export register, the penalty quote and the SD-eligible inputs — and then `compat_state` and the lock are
   removed and the API can scale out.
 
+## R6.5 — the drawback claims on their own table
+
+`api/src/modules/claims.ts` serves `vat/drawback-claims` (the register with its status totals, `?status=` and
+its CSV), `vat/drawback-claims/{id}` (one claim, by id or number, and the delete of a draft) and
+`vat/drawback-claims/{id}/action` (file / sanction / pay / reject). The rules are the mock's own, re-exported
+by `api/src/compat/entry.ts` from `_r65.ts` (`claimCreate`, `claimAct`, `claimRemove`, `CLAIM_ACTION_PERM`,
+`newClaimTag` with `ClaimWrite`) — the six-month claim window, the export that cannot be on two active claims,
+the DEDO reference a filing carries, the sanction that needs a reason when it allows less than was claimed,
+the payment that cannot exceed the sanction — with the register rows and the action states shared with the
+pages (`claimList`, `claimRow`, `ACTION_FROM` in `src/lib/drawback.ts`) — so the rows, the error codes and the
+audit events cannot drift between the two runtimes.
+
+- **A claim is a row.** `drawback_claims` holds the head (the number `DBK-MMYY####`, the status, the DEDO
+  reference, the decision dates and amounts, the rejection reason) with the export lines frozen at creation as
+  JSONB — the CD + RD each export claimed, its deadline, the inputs the drawback view had linked — and the
+  history, the way every document family's head carries its own. What a line claimed is a record of the claim,
+  not a figure anything re-adds.
+- **One number while it lives, in the database as well.** A partial unique index on `(no)` covers the live
+  rows, so a race that slips past the application check is a 409, not a 500. The number comes from
+  `db.seq.claim` — reconciled at every boot to the highest number the rows (stamped ones included) have seen,
+  so a stale snapshot cannot hand out a number twice.
+- **A delete stamps `deleted_at`.** Only a draft can be deleted — the mock answered 409 for anything else, and
+  the module keeps that — and the row is stamped rather than removed, which retires its id the way every other
+  family's deletes do. A rejection frees its exports the same way a delete does: the drawback view counts only
+  claims that are not rejected, so the export is claimable again the moment either happens.
+- **The drawback view still reads the claims — through the mirror.** `vat/bond?view=drawback` is still the
+  compat bond route, but the claim rows land in the in-memory `db.drawbackClaims` with every write
+  (`markClaims` / `forgetClaim` in the module's write-back), so the view's "on a claim" state and its claimable
+  total move the moment a claim is filed, paid or rejected — which the suite checks from both sides.
+- **The permission is the mock's own.** Filing is `doc.create` — the applicant's own step — while sanction,
+  pay and reject need `doc.approve`, and the from-state each action needs comes from `ACTION_FROM`, so a
+  sanction aimed at a draft is the mock's 409, not a 500.
+- **4 compat route modules are left, 112 native.** What is left is the bond register, the export register, the
+  penalty quote and the SD-eligible inputs — and then `compat_state` and the lock are removed and the API can
+  scale out.
+
 ## Tables
 
 | Table | Purpose |
@@ -871,6 +908,7 @@ the two runtimes.
 | `bond_ud_inputs` | **R6.5:** the bonded inputs an own UD permits us to import — item, name, HS code, unit, the quantity; primary key (UD, position) |
 | `bond_ud_garments` | **R6.5:** the finished goods the order exports against an own UD — item, name, unit, the quantity; primary key (UD, position) |
 | `late_filings` | **R6.6:** a Mushak 9.3 late-return application (s.65) — the number (unique while it lives), the period, the reason, the dates, the reference it was filed under, the decision, its history (JSONB); `deleted_at` retires the id of a deleted draft |
+| `drawback_claims` | **R6.5:** a drawback claim — the number (`DBK-…`, unique while it lives), the status, the export lines frozen at creation with their CD + RD (JSONB), the DEDO reference, the sanction and refund dates and amounts, the rejection reason, the history (JSONB) |
 | `prc_batches` | **R6.6:** a bank PRC file posted against the export-proceeds register — the number (`PB-…`, unique while it lives), the file name, the lines with their allocations as JSONB, the per-currency totals, the skipped lines, the reversal date and reason, its history (JSONB) |
 | `return_amendments` | **R6.6:** a Mushak 9.4 amendment application (s.66) — the number (unique while it lives), the period, the revision, the corrections as JSONB (note, column, as-filed, corrected, explanation), the frozen computation the amended return was built from, the filing and decision references, the adjust period of its decreasing adjustment, its history (JSONB); `deleted_at` retires the id of a deleted draft |
 | `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2, no own UDs since R6.5, no late filings, return amendments or PRC batches since R6.6) |

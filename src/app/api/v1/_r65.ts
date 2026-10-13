@@ -1,8 +1,7 @@
 /**
  * R6.5 mock API (RMG) — our own UDs / UP with their bond settlement, and duty-drawback claims (DEDO / Mushak-22).
- * The own UDs' rules are this file's own functions now, shared with the PostgreSQL build through the compat bundle,
- * so the two runtimes' responses, error codes and audit events cannot drift; the drawback claims still run through
- * the compat layer unchanged.
+ * Both families' rules are this file's own functions now, shared with the PostgreSQL build through the compat
+ * bundle, so the two runtimes' responses, error codes and audit events cannot drift.
  */
 import { TODAY } from "@/lib/company"
 import { ACTION_FROM, claimLines, claimList, claimRow, claimTotals, claimableCheck, type ClaimAction } from "@/lib/drawback"
@@ -12,14 +11,13 @@ import { csvResponse, delay, toCSV } from "@/lib/mock/query"
 import { bondUdInput, claimActionInput, claimInput, settleInput } from "@/lib/schemas"
 import { bondUdRegister, bondUdRow, normUd, settleCheck, udStatement } from "@/lib/settlement"
 import type {
-  AuditChange, Bom, BondUd, BondUdGarment, BondUdInput, BondUdRegister, BondUdRow, DrawbackClaim, HistoryEntry, Item, Purchase, Sale,
+  AuditChange, Bom, BondUd, BondUdGarment, BondUdInput, BondUdRegister, BondUdRow, DrawbackClaim, DrawbackClaimList, DrawbackClaimRow, DrawbackRow, HistoryEntry, Item, Purchase, Sale,
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { deny, json, problem, ruleResponse, withAuth, zodProblem, type RuleProblem } from "./_lib"
 import { bondRegisterOf } from "./_r64"
 
 type Ctx = { params: Promise<{ id: string }> }
-const invalid = (errors: Record<string, string[]>) => problem(422, "Validation failed", errors)
 const src = () => bondSrc()
 const findUd = async (p: Ctx["params"]) => { const { id } = await p; return db.bondUds.find((u) => u.id === id || normUd(u.no) === normUd(decodeURIComponent(id))) }
 const findClaim = async (p: Ctx["params"]) => { const { id } = await p; return db.drawbackClaims.find((c) => c.id === id || c.no === id) }
@@ -193,78 +191,66 @@ export const bondUdSettleRoute = withAuth<Ctx>("doc.approve", async (req, { para
   return json(w.row)
 })
 
-/* ── drawback claims ─────────────────────────────────────────────────────────────────────────────────────── */
+/* ── drawback claims — the rules, shared with the PostgreSQL build ───────────────────────────────────────── */
 
-/** Next DBK-MMYY#### (MMYY of today; the counter runs across months and is never reused). */
-const nextClaimNo = () => `DBK-${TODAY.slice(5, 7)}${TODAY.slice(2, 4)}${String(++db.seq.claim).padStart(4, "0")}`
+/** What the claim rules read: the drawback view's rows (the exports a claim can take, frozen into its lines),
+ *  the claims themselves (an export cannot be claimed twice), and the sales (each line's export proceeds). */
+export interface ClaimSource { rows: DrawbackRow[]; claims: DrawbackClaim[]; sales: Sale[] }
+/** The mock's own arrays are the default; the API hands the rules the rows instead. */
+const claimSrc = (claims: DrawbackClaim[] = db.drawbackClaims): ClaimSource => ({ rows: bondRegisterOf().drawback.rows, claims, sales: db.sales })
 
-/** GET /vat/drawback-claims — ?status=, ?format=csv (one row per export). */
-export const claimsGet = withAuth(null, async (req) => {
-  const sp = new URL(req.url).searchParams
-  const list = claimList(db.drawbackClaims, TODAY, sp.get("status") || undefined, db.sales)
-  if (sp.get("format") === "csv") {
-    const rows = list.rows.flatMap((c) => c.lines.map((l) => ({ ...l, no: c.no, status: c.status, claimed: c.claimed, filedOn: c.filedOn ?? "", dedoRef: c.dedoRef ?? "", sanctioned: c.sanctioned ?? "", paid: c.paid ?? "", paidOn: c.paidOn ?? "" })))
-    return csvResponse(toCSV(rows, [
-      { key: "no", label: "Claim" }, { key: "status", label: "Status" }, { key: "invoiceNo", label: "Export invoice" }, { key: "exportDate", label: "Export date" }, { key: "billNo", label: "Bill of export" },
-      { key: "customerName", label: "Buyer / exporter" }, { key: "cd", label: "CD" }, { key: "rd", label: "RD" }, { key: "total", label: "Export total" }, { key: "deadline", label: "Claim by" },
-      { key: "claimed", label: "Claimed" }, { key: "filedOn", label: "Filed on" }, { key: "dedoRef", label: "DEDO ref" }, { key: "sanctioned", label: "Sanctioned" }, { key: "paid", label: "Refunded" }, { key: "paidOn", label: "Refunded on" },
-    ]), `drawback-claims-${TODAY}.csv`)
-  }
-  await delay(80)
-  return json(list)
-})
+export type ClaimParsed = ReturnType<typeof claimInput.parse>
+export type ClaimActionParsed = ReturnType<typeof claimActionInput.parse>
 
-/** POST /vat/drawback-claims — draft claim over open exports from the drawback view. */
-export const claimsPost = withAuth("doc.create", async (req, _ctx, user) => {
-  const parsed = claimInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const rows = bondRegisterOf().drawback.rows
-  const bad = claimableCheck(d.saleIds, rows, db.drawbackClaims)
-  if (bad) return invalid(bad)
-  const lines = claimLines(d.saleIds.map((id) => rows.find((r) => r.saleId === id)!))
-  const at = new Date().toISOString()
-  const claim: DrawbackClaim = {
-    id: `dc${db.seq.claim + 1}-${Date.now().toString(36)}`, no: nextClaimNo(), status: "draft", method: "actual", lines, ...claimTotals(lines),
-    note: d.note || undefined, createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
-  }
-  db.drawbackClaims.push(claim)
-  recordAudit({ at, actor: user, entity: "drawbackClaim", entityId: claim.id, ref: claim.no, action: "created", note: `${lines.length} export(s) · ৳ ${claim.claimed.toFixed(2)}` })
-  return json(claimRow(claim, TODAY, db.sales), { status: 201 })
-})
+/** The id and the number the next claim takes — the mock's own counter, which the API keeps in the snapshot with the rest of `db.seq`. */
+export const newClaimTag = (stamp: string) => {
+  const n = ++db.seq.claim
+  return { id: `dc${n}-${stamp}`, no: `DBK-${TODAY.slice(5, 7)}${TODAY.slice(2, 4)}${String(n).padStart(4, "0")}` }
+}
 
-export const claimGet = withAuth<Ctx>(null, async (_req, { params }) => {
-  const c = await findClaim(params)
-  return c ? json(claimRow(c, TODAY, db.sales)) : problem(404, "Claim not found")
-})
+/** What a write hands back: the claim as it stands, what the register shows, and what the audit trail should say. */
+export type ClaimWrite = RuleProblem | {
+  claim: DrawbackClaim; row: DrawbackClaimRow
+  action: HistoryEntry["action"]; ref: string; at: string; note?: string
+}
 
-/** DELETE /vat/drawback-claims/:id — drafts only (the number lives on in the audit trail). */
-export const claimDelete = withAuth<Ctx>("doc.delete", async (_req, { params }, user) => {
-  const c = await findClaim(params)
-  if (!c) return problem(404, "Claim not found")
-  if (c.status !== "draft") return problem(409, `Only a draft claim can be deleted — ${c.no} is ${c.status}.`)
-  db.drawbackClaims.splice(db.drawbackClaims.indexOf(c), 1)
-  recordAudit({ actor: user, entity: "drawbackClaim", entityId: c.id, ref: c.no, action: "deleted" })
-  return json({ ok: true, id: c.id })
-})
-
-const ACTION_PERM: Record<ClaimAction, "doc.create" | "doc.approve"> = { file: "doc.create", sanction: "doc.approve", pay: "doc.approve", reject: "doc.approve" }
+/** Which permission each action step needs — the applicant files; the other three are the office's. */
+export const CLAIM_ACTION_PERM: Record<ClaimAction, "doc.create" | "doc.approve"> = { file: "doc.create", sanction: "doc.approve", pay: "doc.approve", reject: "doc.approve" }
 
 /**
- * POST /vat/drawback-claims/:id/action — {action, date, ref?, amount?, reason?}
- *  file: draft → filed (date inside every export's 6-month window); sanction: filed → sanctioned (amount ≤ claimed,
- *  reason when less); pay: sanctioned → paid (amount ≤ sanctioned, default the sanction); reject: filed → rejected (reason).
+ * Creating one: every export must still be claimable — on the drawback view, inside its six-month window, not on
+ * an active claim — and the amounts are frozen at creation. Pushed into `src`, which is the mock's array or, in
+ * the API, the rows that carry the collection.
  */
-export const claimAction = withAuth<Ctx>("doc.create", async (req, { params }, user) => {
-  const c = await findClaim(params)
-  if (!c) return problem(404, "Claim not found")
-  const parsed = claimActionInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  if (ACTION_PERM[d.action] === "doc.approve") { const no = deny(user, "doc.approve"); if (no) return no }
-  if (!ACTION_FROM[d.action].includes(c.status)) return problem(409, `Cannot ${d.action} a ${c.status} claim (${c.no}).`)
+export function claimCreate(d: ClaimParsed, user: User, today: string, src: ClaimSource = claimSrc(), stamp = Date.now().toString(36)): ClaimWrite {
+  const bad = claimableCheck(d.saleIds, src.rows, src.claims)
+  if (bad) return { status: 422, title: "Validation failed", errors: bad }
+  const lines = claimLines(d.saleIds.map((id) => src.rows.find((r) => r.saleId === id)!))
+  const at = new Date().toISOString()
+  const tag = newClaimTag(stamp)
+  const claim: DrawbackClaim = {
+    id: tag.id, no: tag.no, status: "draft", method: "actual", lines, ...claimTotals(lines),
+    note: d.note || undefined, createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
+  }
+  src.claims.push(claim)
+  return { claim, row: claimRow(claim, today, src.sales), action: "created", ref: claim.no, at, note: `${lines.length} export(s) · ৳ ${claim.claimed.toFixed(2)}` }
+}
+
+/** Removing a draft — only a draft (the number lives on in the audit trail either way). */
+export function claimRemove(c: DrawbackClaim, today: string, src: ClaimSource = claimSrc()): ClaimWrite {
+  if (c.status !== "draft") return { status: 409, title: `Only a draft claim can be deleted — ${c.no} is ${c.status}.` }
+  return { claim: c, row: claimRow(c, today, src.sales), action: "deleted", ref: c.no, at: new Date().toISOString() }
+}
+
+/**
+ * One action step — {action, date, ref?, amount?, reason?}. file: draft → filed (date inside every export's
+ * 6-month window); sanction: filed → sanctioned (amount ≤ claimed, reason when less); pay: sanctioned → paid
+ * (amount ≤ sanctioned, default the sanction); reject: filed → rejected (reason). The permission and the
+ * from-state are the caller's to check first, the way the mock's route did.
+ */
+export function claimAct(c: DrawbackClaim, d: ClaimActionParsed, user: User, today: string, src: ClaimSource = claimSrc()): ClaimWrite {
   const errors: Record<string, string[]> = {}
-  if (d.date > TODAY) errors.date = ["afterToday"]
+  if (d.date > today) errors.date = ["afterToday"]
   // filing is bounded by the exports' windows (below); later steps cannot precede the previous one
   const prev = d.action === "sanction" || d.action === "reject" ? c.filedOn : d.action === "pay" ? c.sanctionedOn : undefined
   if (!errors.date && prev && d.date < prev) errors.date = ["beforePrevious"]
@@ -289,9 +275,72 @@ export const claimAction = withAuth<Ctx>("doc.create", async (req, { params }, u
     if (!d.reason) errors.reason = ["required"]
     if (!Object.keys(errors).length) { c.status = "rejected"; c.rejectedOn = d.date; c.rejectReason = d.reason; note = d.reason }
   }
-  if (Object.keys(errors).length) return invalid(errors)
+  if (Object.keys(errors).length) return { status: 422, title: "Validation failed", errors }
   const action: HistoryEntry["action"] = d.action === "file" ? "submitted" : d.action === "reject" ? "cancelled" : d.action === "pay" ? "edited" : "approved"
   const at = push(c, user.name, action, note)
-  recordAudit({ at, actor: user, entity: "drawbackClaim", entityId: c.id, ref: c.no, action, note })
-  return json(claimRow(c, TODAY, db.sales))
+  return { claim: c, row: claimRow(c, today, src.sales), action, ref: c.no, at, note }
+}
+
+/** The register's CSV: one row per export, the claim's own state beside the export's. */
+export const claimCsvColumns = [
+  { key: "no", label: "Claim" }, { key: "status", label: "Status" }, { key: "invoiceNo", label: "Export invoice" }, { key: "exportDate", label: "Export date" }, { key: "billNo", label: "Bill of export" },
+  { key: "customerName", label: "Buyer / exporter" }, { key: "cd", label: "CD" }, { key: "rd", label: "RD" }, { key: "total", label: "Export total" }, { key: "deadline", label: "Claim by" },
+  { key: "claimed", label: "Claimed" }, { key: "filedOn", label: "Filed on" }, { key: "dedoRef", label: "DEDO ref" }, { key: "sanctioned", label: "Sanctioned" }, { key: "paid", label: "Refunded" }, { key: "paidOn", label: "Refunded on" },
+]
+export const claimCsvRows = (list: DrawbackClaimList) => list.rows.flatMap((c) => c.lines.map((l) => ({ ...l, no: c.no, status: c.status, claimed: c.claimed, filedOn: c.filedOn ?? "", dedoRef: c.dedoRef ?? "", sanctioned: c.sanctioned ?? "", paid: c.paid ?? "", paidOn: c.paidOn ?? "" })))
+
+/* ── drawback claims — the mock's routes ────────────────────────────────────────────────────────────────── */
+
+/** GET /vat/drawback-claims — ?status=, ?format=csv (one row per export). */
+export const claimsGet = withAuth(null, async (req) => {
+  const sp = new URL(req.url).searchParams
+  const list = claimList(db.drawbackClaims, TODAY, sp.get("status") || undefined, db.sales)
+  if (sp.get("format") === "csv") return csvResponse(toCSV(claimCsvRows(list), claimCsvColumns), `drawback-claims-${TODAY}.csv`)
+  await delay(80)
+  return json(list)
+})
+
+/** POST /vat/drawback-claims — draft claim over open exports from the drawback view. */
+export const claimsPost = withAuth("doc.create", async (req, _ctx, user) => {
+  const parsed = claimInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const w = claimCreate(parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ at: w.at, actor: user, entity: "drawbackClaim", entityId: w.claim.id, ref: w.ref, action: "created", note: w.note })
+  return json(w.row, { status: 201 })
+})
+
+export const claimGet = withAuth<Ctx>(null, async (_req, { params }) => {
+  const c = await findClaim(params)
+  return c ? json(claimRow(c, TODAY, db.sales)) : problem(404, "Claim not found")
+})
+
+/** DELETE /vat/drawback-claims/:id — drafts only (the number lives on in the audit trail). */
+export const claimDelete = withAuth<Ctx>("doc.delete", async (_req, { params }, user) => {
+  const c = await findClaim(params)
+  if (!c) return problem(404, "Claim not found")
+  const w = claimRemove(c, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  db.drawbackClaims.splice(db.drawbackClaims.indexOf(c), 1)
+  recordAudit({ actor: user, entity: "drawbackClaim", entityId: c.id, ref: w.ref, action: "deleted" })
+  return json({ ok: true, id: c.id })
+})
+
+/**
+ * POST /vat/drawback-claims/:id/action — {action, date, ref?, amount?, reason?}
+ *  file: draft → filed (date inside every export's 6-month window); sanction: filed → sanctioned (amount ≤ claimed,
+ *  reason when less); pay: sanctioned → paid (amount ≤ sanctioned, default the sanction); reject: filed → rejected (reason).
+ */
+export const claimAction = withAuth<Ctx>("doc.create", async (req, { params }, user) => {
+  const c = await findClaim(params)
+  if (!c) return problem(404, "Claim not found")
+  const parsed = claimActionInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const d = parsed.data
+  if (CLAIM_ACTION_PERM[d.action] === "doc.approve") { const no = deny(user, "doc.approve"); if (no) return no }
+  if (!ACTION_FROM[d.action].includes(c.status)) return problem(409, `Cannot ${d.action} a ${c.status} claim (${c.no}).`)
+  const w = claimAct(c, d, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ at: w.at, actor: user, entity: "drawbackClaim", entityId: c.id, ref: w.ref, action: w.action, note: w.note })
+  return json(w.row)
 })

@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 PIDFILE=${API_PIDFILE:-/tmp/dizivat-api.pid}
 LOG=${API_LOG:-/tmp/dizivat-api.log}
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-  PID=$(cat "$PIDFILE"); kill "$PID"
-  while kill -0 "$PID" 2>/dev/null; do sleep 0.2; done
+  PID=$(cat "$PIDFILE"); kill "$PID" 2>/dev/null || true   # it may exit between the check and the kill
+  for _ in $(seq 1 100); do kill -0 "$PID" 2>/dev/null || break; sleep 0.1; done
 fi
 nohup node --enable-source-maps dist/main.js >> "$LOG" 2>&1 < /dev/null &
 echo $! > "$PIDFILE"

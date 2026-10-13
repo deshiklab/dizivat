@@ -55,6 +55,8 @@ export const NATIVE = [
   // R6.6 (proceeds): the export-proceeds register with its matcher and bank-file sample, and the batches
   "vat/proceeds", "vat/proceeds/sample", "vat/proceeds/match",
   "vat/proceeds/batches", "vat/proceeds/batches/[id]", "vat/proceeds/batches/[id]/reverse",
+  // R6.5's second half: the duty-drawback claims (DEDO, Mushak-22) with their action steps
+  "vat/drawback-claims", "vat/drawback-claims/[id]", "vat/drawback-claims/[id]/action",
   // R5.6: the Mushak 9.1 return (`vat_returns`, one row per tax period) with the note sub-forms behind its
   // computation, the tax periods it can be filed for, the compliance centre over one of them, and the NBR settings
   // (the one row of `vat_settings`)
