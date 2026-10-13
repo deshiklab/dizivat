@@ -62,6 +62,10 @@ export const NATIVE = [
   // (the one row of `vat_settings`)
   "vat/returns", "vat/returns/[period]", "vat/returns/[period]/notes/[note]", "vat/periods", "vat/compliance",
   "vat/settings",
+  // R6's last four readers — the bond register with its BoE ageing and drawback view, the RMG export register,
+  // the late-payment penalty and the SD-eligible inputs. Nothing here stores a row of its own: each adds up
+  // documents other modules own, through the mirror, with the mock's own computation.
+  "vat/bond", "vat/exports", "vat/penalty", "vat/sd-eligible",
   // R5.6: the readers — nothing here stores a row of its own. The Mushak books over one item and a range (6.1,
   // 6.2, 6.2.1, 6.10), the dashboard, the ⌘K search, the notifications and their mark-as-read, the two service-code
   // lists and the bulk master-data import.

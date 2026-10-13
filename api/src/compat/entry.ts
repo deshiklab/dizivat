@@ -211,3 +211,12 @@ export {
   type ComplianceAnswer, type ReturnFields, type ReturnSource, type SubFormAnswer,
 } from "@/app/api/v1/_r4"
 export { branchLabels, postStock, stockShortfall } from "@/lib/mock/db"
+// R6 (the last four readers): the bond register's computation (the mock passes its own db, the native module the
+// mirror's copies of the same collections) with its three CSV views, and the penalty quote / exposure the
+// compliance centre's calculator serves — shared so the registers, the columns and the 422s cannot drift.
+export {
+  BOND_DRAWBACK_CSV, BOND_LOTS_CSV, BOND_REGISTER_CSV, bondCsvName, bondRegisterFrom, drawbackCsvRows, type BondWorld,
+} from "@/app/api/v1/_r64"
+export {
+  penaltyBasisOf, penaltyExposureOf, penaltyQuoteOf, type PenaltySource,
+} from "@/app/api/v1/_r63"

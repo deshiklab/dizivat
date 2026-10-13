@@ -615,14 +615,16 @@ def flush_snapshot(s):
     a deleted draft's id in production (boot lifts `db.seq` from the highest id each table has seen). A drill that
     rewinds those tables into their pre-release shape therefore has to flush the snapshot first, or the database it
     pretends to be — one the old code wrote, saving after every request — would hold a counter the real one never
-    lost. Read-only: a GET changes nothing, it just runs the compat path's persist(). Which route is still compat
-    moves as the port does (R6.6 left the penalty, the SD-eligible list and the export proceeds, so the first of
-    these that answers is the one that flushes).
+    lost. Which write still saves the snapshot moves as the port does: the compat routes are all native now, so it
+    is the notifications' mark-as-read — a write the user store needs, marking nothing read.
     """
-    for path in ("/vat/penalty", "/vat/sd-eligible", "/vat/proceeds"):
-        if s.get(f"{BASE}{path}").status_code == 200:
-            return
-    raise AssertionError("no compat route left for the drills to flush the snapshot with")
+    # the last compat routes (the penalty and the SD-eligible list) went native with the four readers, so no
+    # read flushes anymore — but the notifications' mark-as-read still saves the snapshot (the user store lives
+    # in it). The id names no notification, so nothing is marked: the save is all that happens.
+    r = s.post(f"{BASE}/notifications/read", json={"ids": ["flush"]})
+    if r.status_code == 200:
+        return
+    raise AssertionError(f"no way left to flush the snapshot: /notifications/read answered {r.status_code}")
 
 
 def token_of(s):
@@ -665,7 +667,7 @@ def run():
     print("health")
     h = requests.get(f"{BASE}/health").json()
     check(h.get("ok") and h["db"]["ok"], f"health: API up, database reachable ({h['db']['ms']} ms)")
-    check(h["modules"]["native"] >= 7 and h["modules"]["compatRoutes"] > 0, f"health: {h['modules']['native']} native modules, {h['modules']['compatRoutes']} compat routes")
+    check(h["modules"]["native"] >= 7 and h["modules"]["compatRoutes"] == 0, f"health: {h['modules']['native']} native modules, {h['modules']['compatRoutes']} compat routes — the table is empty, every route is native")
 
     print("sign-out is real (server-side sessions)")
     s = session("kamal")
@@ -3360,8 +3362,8 @@ def run():
     udExports = arif.get(f"{BASE}/vat/exports").json()
     check(udClosed.status_code == 200 and udExports["totals"]["atRisk"]["count"] == udExpBefore + 1
           and "udBalance" in [m for r in udExports["rows"] if r["id"] == "s226" for m in r["missing"]],
-          f"R6.2: closing a declaration natively is seen at once by the export register, which is still compat "
-          f"code reading the in-memory copy ({udExpBefore} → {udExports['totals']['atRisk']['count']} at risk)")
+          f"R6.2: closing a declaration natively is seen at once by the export register — the four readers included — "
+          f"reading the in-memory copy ({udExpBefore} → {udExports['totals']['atRisk']['count']} at risk)")
     arif.put(f"{BASE}/vat/uds/{udUsed['id']}", json={**udBody2, "buyer": udUsed.get("buyer", ""),
         "note": udUsed.get("note", ""), "masterLcValue": udUsed.get("masterLcValue"), "currency": udUsed.get("currency", "USD"),
         "status": "active", "amendReason": "", "amendDate": "",
@@ -3410,7 +3412,7 @@ def run():
     check(r.status_code == 201 and r.json()["user"].get("accessUntil") == str(dhaka + datetime.timedelta(days=7)), "R6.2: officer created with access-until date")
     off = r.json()
     o = session(oname, off["tempPassword"])
-    check(o.get(f"{BASE}/vat/exports").status_code == 200 and o.get(f"{BASE}/audit", params={"size": 2}).status_code == 200, "R6.2: officer can read (compat + native)")
+    check(o.get(f"{BASE}/vat/exports").status_code == 200 and o.get(f"{BASE}/audit", params={"size": 2}).status_code == 200, "R6.2: officer can read (the registers and the audit trail)")
     check(o.post(f"{BASE}/units", json={"code": "ZZ", "name": "x", "decimals": 0}).status_code == 403, "R6.2: officer cannot write")
     # a native endpoint writes the officer's access event without waiting for it (the state lock is not re-entrant,
     # so it cannot be part of the request), while a compat endpoint writes it before it answers — so the trail is
@@ -3453,7 +3455,7 @@ def run():
         dup = subprocess.run(["psql", DB_URL, "-At", "-c", f"insert into backups (kind, slot, by, size, sha256, tables, data) select 'scheduled', slot, 'x', 1, 'x', '{{}}', '\\x00' from backups where kind = 'scheduled' limit 1"], capture_output=True, text=True)
         check(dup.returncode != 0, "R6.2: only one scheduled backup per slot (unique index)")
 
-    # R6.3: RMG demo company, SD on exported inputs + penalty (compat), restore drill into a fresh database
+    # R6.3: RMG demo company, SD on exported inputs + penalty, restore drill into a fresh database
     print("R6.3: RMG company, note 40, penalty, restore drill")
     co = arif.get(f"{BASE}/company").json()
     check("KANCHANJHARA" in co.get("name", "").upper() and co.get("bin") == "004937518-0102", f"R6.3: demo company is {co.get('name')}")
@@ -3483,7 +3485,7 @@ def run():
     else:
         skipped("restore drill (DATABASE_URL not set)")
 
-    # R6.4: bond consumption register + drawback (compat), bonded import fields persisted in PostgreSQL
+    # R6.4: bond consumption register + drawback, bonded import fields persisted in PostgreSQL
     print("R6.4: bond register, BoE ageing, drawback")
     bond = arif.get(f"{BASE}/vat/bond").json()
     lots = {(l["boeNo"], l["itemId"]): l for l in bond.get("lots", [])}
@@ -3495,7 +3497,31 @@ def run():
           "R6.4: bonded import keeps duty foregone with nothing payable")
     check(arif.get(f"{BASE}/vat/bond", params={"to": "2030-01-01"}).status_code == 422, "R6.4: range validation (422)")
 
-    # R6.5: own UD settlement on its own tables, drawback claims (compat), persisted in PostgreSQL
+    # the four readers are native now (the last of the compat table): the bond register's three CSVs, the export
+    # register's CSV and filters, the penalty's what-if validations and the SD list's exclude all answer straight
+    # from the mirror, with the mock's own rules
+    check(all(arif.get(f"{BASE}/vat/bond", params={"format": "csv", "view": v}).status_code == 200
+              and arif.get(f"{BASE}/vat/bond", params={"format": "csv", "view": v}).headers.get("content-type", "").startswith("text/csv")
+              for v in ("register", "lots", "drawback")),
+          "R6: the bond register's three CSVs answer (register, BoE lots, drawback)")
+    exCsv = arif.get(f"{BASE}/vat/exports", params={"format": "csv"})
+    exDeemed = arif.get(f"{BASE}/vat/exports", params={"kind": "deemed"}).json()
+    check(exCsv.status_code == 200 and "Invoice (Mushak 6.3)" in exCsv.text
+          and len(exDeemed.get("rows", [])) > 0 and all(r.get("kind") == "deemed" for r in exDeemed.get("rows", []))
+          and exDeemed.get("totals", {}).get("direct", {}).get("count", 0) > 0,
+          "R6: the export register's CSV answers and its kind filter narrows the rows, the range's totals intact")
+    penExp = arif.get(f"{BASE}/vat/penalty").json()
+    check(penExp.get("asOf") == "2026-09-25" and len(penExp.get("rows", [])) >= 10
+          and arif.get(f"{BASE}/vat/penalty", params={"period": "2019-01"}).status_code == 422
+          and arif.get(f"{BASE}/vat/penalty", params={"period": "2026-08", "vat": "-5"}).status_code == 422
+          and arif.get(f"{BASE}/vat/penalty", params={"period": "2026-08", "paidOn": "2026-07-01"}).status_code == 422,
+          "R6: the penalty exposure answers for every period, and the what-if's 422s are the mock's own")
+    sdRows = arif.get(f"{BASE}/vat/sd-eligible").json().get("rows", [])
+    sdExcl = next((r.get("id") for r in sdRows if r.get("id")), None)
+    check(len(sdRows) >= 1 and (sdExcl is None or arif.get(f"{BASE}/vat/sd-eligible", params={"exclude": sdExcl}).status_code == 200),
+          "R6: the SD-eligible list answers with its exclude parameter (the claim being edited)")
+
+    # R6.5: own UD settlement and drawback claims on their own tables, persisted in PostgreSQL
     print("R6.5: UD settlement, drawback claims")
     bu = {u["id"]: u for u in arif.get(f"{BASE}/vat/bond-uds").json().get("rows", [])}
     b1, b5 = bu.get("bu1", {}), bu.get("bu5", {})

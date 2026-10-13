@@ -51,7 +51,7 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | The exporters' Utilization Declarations (R6.2) | `vat/uds`, `vat/uds/{id}`, `vat/uds/fit` | **native** — `uds` + `ud_lines` (the amendment certificates travel with the head as JSONB); one declaration number per exporter is a unique index, and a delete stamps `deleted_at` so the id stays retired |
 | The export-proceeds register (R6.6) | `vat/proceeds`, `vat/proceeds/sample`, `vat/proceeds/match`, `vat/proceeds/batches`, `vat/proceeds/batches/{id}`, `vat/proceeds/batches/{id}/reverse` | **native** — `prc_batches` (the bank file's lines, allocations and history as JSONB, the number unique while it lives); the realisations themselves are rows of `sale_realisations` on the invoices, written with the batch in one transaction |
 | The drawback claims (R6.5) | `vat/drawback-claims`, `vat/drawback-claims/{id}`, `vat/drawback-claims/{id}/action` | **native** — `drawback_claims` (the frozen export lines, the DEDO reference and the decision dates travel with the head; the number unique while it lives, a deleted draft stamped) |
-| Everything else: the bond register, the export register, the penalty quote, the SD-eligible inputs | 4 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| The last four readers (R6): the bond register, the RMG export register, the penalty quote, the SD-eligible inputs | `vat/bond`, `vat/exports`, `vat/penalty`, `vat/sd-eligible` | **native** — no tables of their own: each adds up documents other modules own, read through the mirror, with the mock's own computation — and with these four the compat route table is empty |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -77,10 +77,11 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
    - Migrations run first.
    - **First start:** the demo data set is seeded into PostgreSQL (the same data the mock and the Pages demo use): 6 users with scrypt hashes, company, units, tariff, about 1,160 audit events, and the document state.
    - **Later starts:** everything is restored from PostgreSQL *before* the compat bundle loads.
-2. **Per request**
-   - Nest authenticates the request from the `sessions` table and runs the mock handler with that user (`api/src/compat/session-user.shim.ts`).
-   - When the handler changes state, the JSONB snapshot and any new audit events are saved in one transaction.
-   - A process-wide lock serialises compat requests.
+2. **Per request** (historical, since the four readers went native: no route is served through this path anymore)
+   - Nest authenticated the request from the `sessions` table and ran the mock handler with that user (`api/src/compat/session-user.shim.ts`).
+   - The path is still walked by the writes that carry compat state of their own — the notifications' read ids
+     and the bulk import's creations — through the same persist step.
+   - A process-wide lock serialises those requests.
 3. **Write-through** (both directions)
    - Native modules own users, company, units, (R5.2) the parties, items and master items, (R5.3) the stock documents, the sales invoices, the purchases and both note families, and (R5.4) the opening stock entries and the production batches in PostgreSQL — and, since the last R5.4 slice, the branch split and an item's ledger, which are derived from those rows rather than stored.
    - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table, and an invoice quotes a customer the `parties` table holds.
@@ -857,6 +858,36 @@ audit events cannot drift between the two runtimes.
 - **4 compat route modules are left, 112 native.** What is left is the bond register, the export register, the
   penalty quote and the SD-eligible inputs — and then `compat_state` and the lock are removed and the API can
   scale out.
+
+## R6 — the last four readers: the compat route table is empty
+
+`api/src/modules/registers.ts` serves `vat/bond` (the consumption register with its statements and totals, its
+BoE ageing and its drawback view — three CSVs), `vat/exports` (the RMG export & deemed-export register with its
+kind / risk / proceeds filters and its CSV), `vat/penalty` (every period's exposure, and one period's quote with
+its what-if overrides) and `vat/sd-eligible` (the SD-paid purchase lines a 9.1 note-40 claim may still draw on).
+Nothing here stores a row of its own: each register adds up documents other modules own — the purchases, the
+invoices, the BOMs, the openings, the own UDs and the drawback claims for the bond register; the invoices, the
+buyers and the exporters' declarations for the export register; the returns' own computation world for the
+penalty; the purchase lines and the exports they rode for the SD list. The mirror holds in-memory copies of all
+of them, and the computation is the mock's own — `bondRegisterFrom` and the three CSV column sets lifted into
+`_r64.ts`, `penaltyExposureOf` / `penaltyQuoteOf` lifted into `_r63.ts`, `exportRegisterOf` lifted into
+`src/lib/rmg.ts`, `sdEligible` already pure in `src/lib/sd-export.ts` — called with the mirror's copies of the
+same collections the mock passes its own db, so the rows, the totals, the columns and the 422s cannot drift
+between the two runtimes.
+
+- **The range rules are the mock's own.** The bond register's `from` / `to` carry the day validation, the
+  `to ≤ today` cap and the `from ≤ to` order, each with its own error code; the export register defaults its
+  range from go-live to today; the penalty's quote validates its period against the returns' own span and its
+  overrides against the same `min0` / `date` / `beforePeriodEnd` codes.
+- **The writes these registers react to still land in one step.** Filing a drawback claim, settling a UD,
+  closing a declaration or posting a PRC batch moves the bond view, the export register's at-risk count and the
+  proceeds filters the moment it commits — the mirror is updated in the same transaction as the rows, which the
+  suite checks from both sides.
+- **What is left of the compat layer is state, not routes.** The user store (preferences, the notifications'
+  read ids), the sequence counters and the undo buffers still live inside `compat_state`, saved by the writes
+  that touch them; the lock that serialises them stays until the finale moves those too.
+- **0 compat route modules are left, 116 native.** Every route is served by a native module; the compat table
+  (`api/src/compat/routes.gen.ts`) is empty, and CI still fails if it goes stale.
 
 ## Tables
 

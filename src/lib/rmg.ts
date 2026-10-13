@@ -5,7 +5,8 @@
  * Bill of Export. Deemed export: a local supply to a 100 % export-oriented factory is zero-rated (note 2) only when
  * all five conditions of NBR's clarification of 9 October 2025 hold — otherwise VAT at 15 % applies.
  */
-import type { SubconProcess, BondRow, ExportInfo, Party, ProceedsState, Sale, UdAmendment, UdBblc, UdRecord, UdRow, UdState } from "./types"
+import { round2 } from "./vat"
+import type { SubconProcess, BondRow, ExportInfo, ExportRegister, ExportRegisterRow, Party, ProceedsState, Sale, UdAmendment, UdBblc, UdRecord, UdRow, UdState } from "./types"
 
 export const EXPORT_CURRENCIES = ["USD", "EUR", "GBP", "BDT"] as const
 
@@ -61,6 +62,52 @@ export const fcToBdt = (e: Partial<ExportInfo>) => (e.fcValue && e.exchangeRate 
 
 /** Default register start: 1 July of the previous fiscal year (Bangladesh FY runs July–June). */
 export const registerFrom = (today: string) => `${Number(today.slice(0, 4)) - (today.slice(5, 7) >= "07" ? 1 : 2)}-07-01`
+
+/* ── R6: the export & deemed-export register (pure — both runtimes build it from their own source) ──── */
+
+/** What the register reads: the invoices (their export legs), the buyers and the exporters' declarations. */
+export interface ExportSource { sales: Sale[]; customers: Party[]; uds: UdRecord[] }
+/** The filters the register answers: the range is required (the caller defaults it); the rest narrow the rows. */
+export interface ExportQuery { kind?: string; risk?: boolean; proceeds?: string }
+
+/** Every zero-rated export invoice in the range, sorted, with the range's totals (which the filters do not narrow). */
+export function exportRegisterOf(src: ExportSource, from: string, to: string, today: string): { rows: ExportRegisterRow[]; totals: ExportRegister["totals"] } {
+  const all: ExportRegisterRow[] = src.sales
+    .filter((s) => s.export && s.process !== "Cancelled" && s.issueDate >= from && s.issueDate <= to)
+    .map((s) => {
+      const e = s.export!
+      const buyer = src.customers.find((c) => c.id === s.customerId)
+      const c = exportCompliance(s, buyer, udFitForSale(s, src.uds, src.sales))!
+      const p = proceedsOf(e, s.issueDate, today)
+      return {
+        id: s.id, date: s.issueDate, invoiceNo: s.invoiceNo, customer: s.customerName, bin: s.customerBin, kind: c.kind, process: s.process,
+        lcNo: e.lcNo, lcDate: e.lcDate, udNo: e.udNo, expNo: e.expNo, billNo: e.billNo || undefined, country: e.country || undefined,
+        currency: e.currency, fcValue: e.fcValue, exchangeRate: e.exchangeRate, value: s.subtotal, complete: c.complete, missing: c.missing,
+        realisedFc: p.realisedFc, outstandingFc: p.outstandingFc, proceedsDue: p.due, proceeds: p.state,
+      }
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.invoiceNo.localeCompare(b.invoiceNo))
+  // outstanding proceeds valued in BDT at the invoice exchange rate
+  const sumOut = (rows: ExportRegisterRow[]) => ({ count: rows.length, value: round2(rows.reduce((t, r) => t + (r.fcValue ? fcToBdt({ fcValue: r.outstandingFc, exchangeRate: r.exchangeRate }) : 0), 0)) })
+  const sum = (rows: ExportRegisterRow[]) => ({ count: rows.length, value: round2(rows.reduce((t, r) => t + r.value, 0)) })
+  const totals = { direct: sum(all.filter((r) => r.kind === "direct")), deemed: sum(all.filter((r) => r.kind === "deemed")), atRisk: sum(all.filter((r) => !r.complete)),
+    unrealised: sumOut(all.filter((r) => r.outstandingFc > 0)), overdue: sumOut(all.filter((r) => r.proceeds === "overdue")) }
+  return { rows: all, totals }
+}
+
+/** The rows a query keeps — the totals stay the range's own. */
+export const exportRegisterRows = (rows: ExportRegisterRow[], q: ExportQuery) =>
+  rows.filter((r) => (!q.kind || r.kind === q.kind) && (!q.risk || !r.complete) && (!q.proceeds || (q.proceeds === "open" ? r.outstandingFc > 0 : r.proceeds === q.proceeds)))
+
+/** The register's CSV columns, shared so the two runtimes cannot drift. */
+export const EXPORT_CSV_COLUMNS: { key: string; label: string; get?: (r: ExportRegisterRow) => string }[] = [
+  { key: "date", label: "Date" }, { key: "invoiceNo", label: "Invoice (Mushak 6.3)" }, { key: "kind", label: "Type" },
+  { key: "customer", label: "Customer" }, { key: "bin", label: "BIN" }, { key: "lcNo", label: "LC / BBLC No" }, { key: "lcDate", label: "LC date" },
+  { key: "udNo", label: "UD / UP No" }, { key: "expNo", label: "EXP No" }, { key: "billNo", label: "Bill of Export" }, { key: "country", label: "Destination" },
+  { key: "currency", label: "Currency" }, { key: "fcValue", label: "FC value" }, { key: "exchangeRate", label: "Rate" }, { key: "value", label: "Value (BDT)" },
+  { key: "complete", label: "Zero-rating conditions", get: (r) => (r.complete ? "Complete" : "At risk") }, { key: "missing", label: "Missing", get: (r) => r.missing.join(" | ") },
+  { key: "realisedFc", label: "Realised (FC)" }, { key: "outstandingFc", label: "Outstanding (FC)" }, { key: "proceedsDue", label: "Proceeds due" }, { key: "proceeds", label: "Proceeds" },
+]
 
 /* ── R6.2 — UD / UP register ─────────────────────────────────────────────────────────────────────────── */
 
