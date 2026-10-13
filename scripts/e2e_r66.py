@@ -18,11 +18,19 @@ API = BASE + "/api/v1"
 TODAY = "2026-09-25"
 RUN = str(int(time.time()))[-5:]
 results, failures = [], []
+def annotate(level, title, msg):
+    """A GitHub workflow-command annotation: the runner's log and artifact blobs are not reachable from everywhere,
+    but the annotations of a check run are — so a failure in CI is readable without them."""
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    esc = lambda t: str(t).replace("%", "%25").replace("\n", "%0A").replace("\r", "%0A")
+    print(f"::{level} title={esc(title)}::{esc(msg)}")
 def ok(m): results.append(("PASS", m)); print("PASS", m)
 def fail(section, e):
     import traceback
     msg = f"section {section}: {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
     failures.append(msg); print("FAIL", msg); traceback.print_exc(limit=1)
+    annotate("error", f"e2e_r66 failed (section {section})", msg)
 def watch(pg, errs):
     pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
     pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" and "status of 4" not in m.text else None)
@@ -452,10 +460,13 @@ async def main():
         except Exception as e: fail(8, e)
 
         bad = [e for e in errs if "favicon" not in e]
-        if bad: failures.append(f"browser errors: {bad[:3]}"); print("FAIL browser errors", bad[:5])
+        if bad:
+            failures.append(f"browser errors: {bad[:3]}"); print("FAIL browser errors", bad[:5])
+            annotate("error", "e2e_r66 failed (browser errors)", "; ".join(bad[:3]))
         await br.close()
     print(f"\n{len(results)} passed, {len(failures)} failed")
     for f in failures: print("  -", f)
+    if failures: annotate("error", f"e2e_r66: {len(failures)} failed of {len(results) + len(failures)}", " | ".join(failures[:6]))
     raise SystemExit(1 if failures else 0)
 
 asyncio.run(main())

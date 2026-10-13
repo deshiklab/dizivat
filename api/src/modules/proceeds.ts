@@ -218,7 +218,7 @@ export class ProceedsController {
   }
 
   /** Match the rows of a bank file to export invoices — nothing is saved. */
-  @Post("match") @Authed("doc.edit")
+  @Post("match") @HttpCode(200) @Authed("doc.edit")
   async match(@Req() req: AuthedRequest, @Res() res: Response) {
     const parsed = prcMatchInput.safeParse(jsonBody(req))
     if (!parsed.success) throw new Problem(422, "Validation failed", zodErrors(parsed.error as ZodError))
