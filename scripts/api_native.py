@@ -2349,7 +2349,10 @@ def run():
                        " and qty = 40 and received = 0 and remaining = 40") == "1",
               "R5.5: it is a row in work_orders with the goods it asks for beside it")
     wkAudit = arif.get(f"{BASE}/audit", params={"entity": "workOrder", "entityId": wkNewId, "size": 20}).json()["data"]
-    check([e["action"] for e in wkAudit] == ["approved", "created"] and all(e["ref"] == wkNewNo for e in wkAudit),
+    # (a create+approve in one request can stamp both steps inside the same millisecond, where newest-first is a tie)
+    check(len(wkAudit) == 2 and sorted(e["action"] for e in wkAudit) == ["approved", "created"]
+          and all(e["ref"] == wkNewNo for e in wkAudit)
+          and wkAudit[0]["at"] >= wkAudit[1]["at"],
           "R5.5: …and the audit trail records both steps against its number")
     wkView = session("auditor")  # a viewer reads everything and writes nothing
     check(wkView.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created"}).status_code == 403
@@ -3512,9 +3515,12 @@ def run():
     # …and both families are rows now. The seeded applications sit in `late_filings` (one refused, one filed and
     # deemed allowed), the application just filed in `return_amendments` with its reference, and a draft that is
     # deleted is stamped — not removed — so its id retires with it, the way the mock's ever-forward counter had.
-    check(psql("select count(*) from late_filings where deleted_at is null") == "2"
-          and psql("select count(*) from late_filings where status = 'rejected'") == "1"
-          and psql("select period from late_filings where status = 'filed'") == "2026-09",
+    # (the seeded rows are asserted by id, not by count or status: the e2e suites that run before this one in CI
+    #  leave their own applications in the same database — they reject the seeded 09-2026 filing and approve one
+    #  of their own — so only the rows' identity is ours to assert)
+    check(psql("select count(*) from late_filings where id in ('lf1', 'lf2') and deleted_at is null") == "2"
+          and psql("select no || ' ' || period from late_filings where id = 'lf1'") == "LF-01260001 2025-12"
+          and psql("select no || ' ' || period from late_filings where id = 'lf2'") == "LF-09260002 2026-09",
           "R6.6: the seeded 9.3 applications are rows in late_filings (one refused, one filed for 09-2026)")
     check(am_id is not None and psql(f"select status from return_amendments where id = '{am_id}'") == "filed"
           and psql(f"select filed_ref from return_amendments where id = '{am_id}'") == f"NBR/N/{TAG}",
