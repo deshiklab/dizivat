@@ -3551,7 +3551,9 @@ def run():
     # mid-way, two filed, one rejected, one draft the suites may have filed already — only the terminal statuses
     # are ours to assert), the one just filed beside them with the DEDO reference it was filed under, and the
     # audit trail carries both the seeded journeys and the filing.
-    check(psql("select count(*) from drawback_claims where id in ('dc1', 'dc2', 'dc3', 'dc4', 'dc5', 'dc6', 'dc7') and deleted_at is null") == "7"
+    # (the e2e suites run before this one on the CI database and delete the seeded draft — a delete is a
+    # stamp, so the seven are counted as rows, stamped or not; the two statuses asserted are terminal)
+    check(psql("select count(*) from drawback_claims where id in ('dc1', 'dc2', 'dc3', 'dc4', 'dc5', 'dc6', 'dc7')") == "7"
           and psql("select status from drawback_claims where id = 'dc2'") == "paid"
           and psql("select status from drawback_claims where id = 'dc4'") == "rejected",
           "R6.5: the seeded drawback claims are rows in drawback_claims (two refunded, one rejected)")
