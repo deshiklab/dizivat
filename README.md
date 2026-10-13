@@ -807,6 +807,35 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     effect, once decreasing so the s.66 adjustment posts) — identical but for ids and timestamps. Contract
     unchanged: 676 checks / 226 endpoints.
 
+- **R6.6 — Backend: the export-proceeds register on its own table (branch `r6-enlistment-rmg`):** `vat/proceeds`
+  (the register with both of its CSVs), `vat/proceeds/sample`, `vat/proceeds/match`, `vat/proceeds/batches`,
+  `vat/proceeds/batches/{id}` and `vat/proceeds/batches/{id}/reverse` leave the compat layer — **7 compat route
+  modules left, 109 native**. See
+  [docs/BACKEND.md › R6.6](docs/BACKEND.md#r66--the-export-proceeds-register-on-its-own-table).
+  - **A batch is a row.** `prc_batches` holds the bank file as it was posted — the lines with their allocations,
+    the per-currency totals and the history as JSONB, the number unique while it lives — and the realisations its
+    allocations took are rows of `sale_realisations` on the invoices, written with the batch in one transaction;
+    a reversal removes exactly the ones its `realisationId`s name.
+  - **The invoices are baselined, not marked.** The create / reverse rules mutate the sales in place and return
+    the ones they touched; the module does not re-mark them inside the transaction — the shared `saleDelta`
+    picks the mutations up against the boot's baseline, and a failed posting puts every touched sale back and
+    leaves nothing behind but a gap in the number sequence.
+  - **The rules are the mock's own, taken out of the route files.** `prcBatchCreate`, `prcBatchReverse` and
+    `newPrcBatchTag` with the open CSV columns and the PRC matcher are `_r66.ts`'s now and take the sales as
+    data, so both runtimes call the same functions — the register, the 422s and the audit events cannot drift.
+  - **Tests:** `api_native.py` 766 checks (+9: the seeded batches as rows with the reversed one stamped, the
+    posted batch beside them with the realisation its allocation took in `sale_realisations`, the audit trail,
+    the reversal's stamp / removed realisations / history after a restart, and **an upgrade drill**: the
+    database is rewritten into its pre-port shape — every batch back inside `compat_state`, the table empty,
+    the realisations untouched where they already were — the API restarted, and the same overview, both CSVs,
+    the register, the reversed batch by number and the realisations on its invoice are required back with the
+    snapshot rewritten without them, a second boot adopting nothing again, the drill's synthetic batch reversed
+    by the ported write path and a fresh posting landing in the table). An A/B run holds the mock and the
+    PostgreSQL API answer-for-answer on the same seed: 22 requests — the overview, both CSVs, the register, one
+    batch by number, the matcher, and a post → fetch → reverse lifecycle with the realisation landing on the
+    invoice and leaving again, plus the duplicate-PRC and re-reversal refusals — identical but for the new
+    batch's random id and the two clocks. Contract unchanged: 676 checks / 226 endpoints.
+
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
 All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). ESLint stops components from importing the mock directly. On this branch the same `/api/v1` contract is also served by the **NestJS + PostgreSQL** API in `api/`: build and run with `API_UPSTREAM=http://127.0.0.1:4000` and no component changes are needed (see *Backend (R5)* below).

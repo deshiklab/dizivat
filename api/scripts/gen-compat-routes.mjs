@@ -52,6 +52,9 @@ export const NATIVE = [
   "vat/bond-uds", "vat/bond-uds/[id]", "vat/bond-uds/[id]/settle",
   "vat/late-filings", "vat/late-filings/[id]", "vat/late-filings/[id]/action",
   "vat/return-amendments", "vat/return-amendments/[id]", "vat/return-amendments/[id]/action",
+  // R6.6 (proceeds): the export-proceeds register with its matcher and bank-file sample, and the batches
+  "vat/proceeds", "vat/proceeds/sample", "vat/proceeds/match",
+  "vat/proceeds/batches", "vat/proceeds/batches/[id]", "vat/proceeds/batches/[id]/reverse",
   // R5.6: the Mushak 9.1 return (`vat_returns`, one row per tax period) with the note sub-forms behind its
   // computation, the tax periods it can be filed for, the compliance centre over one of them, and the NBR settings
   // (the one row of `vat_settings`)

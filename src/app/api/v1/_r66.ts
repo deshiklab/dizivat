@@ -11,7 +11,8 @@ import { periodLabel, periodOf } from "@/lib/r4"
 import { AMEND_YEARS, amendEffect, amendmentRow, applyCorrections, fieldsOf, lateFilingRow, lateLimits, latestComputation, noteValue } from "@/lib/return-apps"
 import { addMonths } from "@/lib/sd-export"
 import { amendActionInput, amendmentInput, lateActionInput, lateFilingInput, prcMatchInput, prcPostInput, prcReverseInput } from "@/lib/schemas"
-import type { AuditChange, HistoryEntry, LateFiling, PrcBatch, Realisation, ReturnAmendment, VatAdjustment, VatReturn, VatSettings } from "@/lib/types"
+import type { z } from "zod"
+import type { AuditAction, AuditChange, AuditEntity, HistoryEntry, LateFiling, PrcBatch, Realisation, ReturnAmendment, Sale, VatAdjustment, VatReturn, VatSettings } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
 import { deny, json, problem, ruleResponse, withAuth, zodProblem, type RuleProblem } from "./_lib"
@@ -19,7 +20,6 @@ import { FIRST_RETURN } from "@/lib/mock/seed-r4"
 import { nextNo } from "./_r4"
 
 type Ctx = { params: Promise<{ id: string }> }
-const invalid = (errors: Record<string, string[]>) => problem(422, "Validation failed", errors)
 const push = (doc: { history?: HistoryEntry[]; updatedAt?: string }, by: string, action: HistoryEntry["action"], note?: string) => {
   const at = new Date().toISOString()
   doc.history = [...(doc.history ?? []), { at, by, action, note }]
@@ -31,17 +31,89 @@ const CURRENT = periodOf(TODAY)
 
 /* ── export proceeds (PRC file) ───────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * What the proceeds rules read and write: the invoices (their proceeds entries and history) and the batches
+ * themselves. The mock's own arrays are the default; the API hands the rules the rows instead.
+ */
+export interface PrcSource { sales: Sale[]; prcBatches: PrcBatch[] }
+const prcSrc = (): PrcSource => ({ sales: db.sales, prcBatches: db.prcBatches })
+/** What a posted batch changed, for the caller to record: the audit trail entries the mock's route wrote itself. */
+export type PrcAudit = { entity: AuditEntity; entityId: string; ref: string; action: AuditAction; note: string }
+/** The next batch's id and number — the counter runs across months and is never reused. */
+export const newPrcBatchTag = (stamp: string) => { const n = ++db.seq.prcBatch; return { id: `pb${n}-${stamp}`, no: `PB-${mmyy()}${String(n).padStart(4, "0")}` } }
+
+/** POST /vat/proceeds/batches — the confirmed allocations become proceeds entries on the invoices and a batch row. */
+export function prcBatchCreate(d: z.infer<typeof prcPostInput>, user: User, src: PrcSource, at: string, stamp: string): { batch: PrcBatch; touched: Sale[]; at: string; audit: PrcAudit[] } | RuleProblem {
+  const bad = postCheck(d.rows, src.sales, TODAY)
+  if (bad) return { status: 422, title: "Validation failed", errors: bad }
+  const { id, no } = newPrcBatchTag(stamp)
+  const open = new Map(openExports(src.sales, TODAY).map((o) => [o.saleId, o]))
+  const lines: PrcBatch["lines"] = []
+  const audit: PrcAudit[] = []
+  const touched = new Map<string, Sale>()
+  d.rows.filter((r) => r.allocations.length).forEach((r) => {
+    const prc = r.prcNo.trim().toUpperCase(), currency = r.currency.toUpperCase()
+    const allocations = r.allocations.map((a, j) => {
+      const sale = src.sales.find((s) => s.id === a.saleId)!
+      const fc = round2(a.fcAmount)
+      const rz: Realisation = { id: `prc-${sale.id}-${id}-${r.line}-${j}`, date: r.date, bank: r.bank || "—", prcNo: prc, fcAmount: fc, rate: r.rate, bdt: round2(fc * r.rate), note: `Bank file ${d.fileName} · line ${r.line}`, by: user.name, at, batchId: id }
+      ;(sale.export!.realisations ??= []).push(rz)
+      ;(sale.history ??= []).push({ at, by: user.name, action: "edited", note: `Proceeds realised: ${currency} ${fc} (PRC ${prc}, batch ${no})` })
+      touched.set(sale.id, sale)
+      audit.push({ entity: "sale", entityId: sale.id, ref: sale.invoiceNo, action: "realised", note: `${currency} ${fc} @ ${r.rate} · PRC ${prc} · ${no}` })
+      return { saleId: sale.id, invoiceNo: sale.invoiceNo, customer: open.get(sale.id)?.customer ?? sale.customerName, fcAmount: fc, basis: a.basis, realisationId: rz.id }
+    })
+    lines.push({ line: r.line, prcNo: prc, date: r.date, bank: r.bank || "—", currency, fcAmount: r.fcAmount, rate: r.rate, bdt: round2(allocations.reduce((a, x) => a + x.fcAmount, 0) * r.rate),
+      expNo: r.expNo || undefined, lcNo: r.lcNo || undefined, invoiceRef: r.invoiceRef || undefined, remitter: r.remitter || undefined, allocations })
+  })
+  const cur = new Map<string, number>()
+  for (const l of lines) cur.set(l.currency, round2((cur.get(l.currency) ?? 0) + l.allocations.reduce((a, x) => a + x.fcAmount, 0)))
+  const batch: PrcBatch = {
+    id, no, fileName: d.fileName, status: "posted", lines, skipped: d.skipped + d.rows.filter((r) => !r.allocations.length).length,
+    invoices: new Set(lines.flatMap((l) => l.allocations.map((a) => a.saleId))).size, fcTotals: [...cur].map(([currency, fc]) => ({ currency, fc })),
+    bdt: round2(lines.reduce((a, l) => a + l.bdt, 0)), createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created", note: `${lines.length} PRC(s) posted from the bank file` }],
+  }
+  src.prcBatches.push(batch)
+  audit.push({ entity: "prcBatch", entityId: id, ref: `${no} · ${d.fileName}`, action: "imported", note: `${lines.length} PRC(s) → ${batch.invoices} invoice(s) · ৳ ${batch.bdt.toFixed(2)}` })
+  return { batch, touched: [...touched.values()], at, audit }
+}
+
+/** POST /vat/proceeds/batches/:id/reverse — remove every proceeds entry the batch posted. */
+export function prcBatchReverse(b: PrcBatch, d: z.infer<typeof prcReverseInput>, user: User, src: PrcSource, at: string): { batch: PrcBatch; touched: Sale[]; removed: number; at: string; audit: PrcAudit[] } | RuleProblem {
+  if (d.date > TODAY) return { status: 422, title: "Validation failed", errors: { date: ["afterToday"] } }
+  if (d.date < b.createdAt.slice(0, 10) && d.date < (b.lines[0]?.date ?? d.date)) return { status: 422, title: "Validation failed", errors: { date: ["beforePosted"] } }
+  let removed = 0
+  const touched = new Map<string, Sale>()
+  const audit: PrcAudit[] = []
+  for (const l of b.lines) for (const a of l.allocations) {
+    const sale = src.sales.find((s) => s.id === a.saleId)
+    const list = sale?.export?.realisations
+    const i = list?.findIndex((r) => r.id === a.realisationId) ?? -1
+    if (!sale || !list || i < 0) continue
+    list.splice(i, 1)
+    removed++
+    ;(sale.history ??= []).push({ at, by: user.name, action: "edited", note: `Proceeds entry removed: PRC ${l.prcNo} (batch ${b.no} reversed)` })
+    touched.set(sale.id, sale)
+    audit.push({ entity: "sale", entityId: sale.id, ref: sale.invoiceNo, action: "deleted", note: `Realisation PRC ${l.prcNo} (${l.currency} ${a.fcAmount}) removed — ${b.no} reversed` })
+  }
+  b.status = "reversed"; b.reversedOn = d.date; b.reverseReason = d.reason
+  push(b, user.name, "cancelled", `Reversed — ${d.reason}`)
+  audit.push({ entity: "prcBatch", entityId: b.id, ref: `${b.no} · ${b.fileName}`, action: "cancelled", note: `${removed} realisation(s) removed — ${d.reason}` })
+  return { batch: b, touched: [...touched.values()], removed, at, audit }
+}
+
+/** The open list's CSV columns (the register prints the same lot). */
+export const proceedsOpenCsvColumns = [
+  { key: "invoiceNo", label: "Invoice" }, { key: "date", label: "Invoice date" }, { key: "customer", label: "Buyer / exporter" }, { key: "lcNo", label: "LC / BB-LC" },
+  { key: "expNo", label: "EXP No" }, { key: "currency", label: "Currency" }, { key: "fcValue", label: "FC value" }, { key: "outstandingFc", label: "Outstanding (FC)" },
+  { key: "due", label: "Realise by" }, { key: "daysLeft", label: "Days left" }, { key: "state", label: "State" },
+]
+
 /** GET /vat/proceeds — open exports with ageing, realised this FY, batches (?format=csv: the open list). */
 export const proceedsGet = withAuth(null, async (req) => {
   const sp = new URL(req.url).searchParams
   const o = proceedsOverview(db.sales, db.prcBatches, TODAY)
-  if (sp.get("format") === "csv") {
-    return csvResponse(toCSV(o.open, [
-      { key: "invoiceNo", label: "Invoice" }, { key: "date", label: "Invoice date" }, { key: "customer", label: "Buyer / exporter" }, { key: "lcNo", label: "LC / BB-LC" },
-      { key: "expNo", label: "EXP No" }, { key: "currency", label: "Currency" }, { key: "fcValue", label: "FC value" }, { key: "outstandingFc", label: "Outstanding (FC)" },
-      { key: "due", label: "Realise by" }, { key: "daysLeft", label: "Days left" }, { key: "state", label: "State" },
-    ]), `export-proceeds-open-${TODAY}.csv`)
-  }
+  if (sp.get("format") === "csv") return csvResponse(toCSV(o.open, proceedsOpenCsvColumns), `export-proceeds-open-${TODAY}.csv`)
   await delay(80)
   return json(o)
 })
@@ -67,38 +139,10 @@ export const batchesGet = withAuth(null, async () => {
 export const batchesPost = withAuth("doc.edit", async (req, _ctx, user) => {
   const parsed = prcPostInput.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const bad = postCheck(d.rows, db.sales, TODAY)
-  if (bad) return invalid(bad)
-  const at = new Date().toISOString()
-  const id = `pb${++db.seq.prcBatch}-${Date.now().toString(36)}`
-  const no = `PB-${mmyy()}${String(db.seq.prcBatch).padStart(4, "0")}`
-  const open = new Map(openExports(db.sales, TODAY).map((o) => [o.saleId, o]))
-  const lines: PrcBatch["lines"] = []
-  d.rows.filter((r) => r.allocations.length).forEach((r) => {
-    const prc = r.prcNo.trim().toUpperCase(), currency = r.currency.toUpperCase()
-    const allocations = r.allocations.map((a, j) => {
-      const sale = db.sales.find((s) => s.id === a.saleId)!
-      const fc = round2(a.fcAmount)
-      const rz: Realisation = { id: `prc-${sale.id}-${id}-${r.line}-${j}`, date: r.date, bank: r.bank || "—", prcNo: prc, fcAmount: fc, rate: r.rate, bdt: round2(fc * r.rate), note: `Bank file ${d.fileName} · line ${r.line}`, by: user.name, at, batchId: id }
-      ;(sale.export!.realisations ??= []).push(rz)
-      ;(sale.history ??= []).push({ at, by: user.name, action: "edited", note: `Proceeds realised: ${currency} ${fc} (PRC ${prc}, batch ${no})` })
-      recordAudit({ at, actor: user, entity: "sale", entityId: sale.id, ref: sale.invoiceNo, action: "realised", note: `${currency} ${fc} @ ${r.rate} · PRC ${prc} · ${no}` })
-      return { saleId: sale.id, invoiceNo: sale.invoiceNo, customer: open.get(sale.id)?.customer ?? sale.customerName, fcAmount: fc, basis: a.basis, realisationId: rz.id }
-    })
-    lines.push({ line: r.line, prcNo: prc, date: r.date, bank: r.bank || "—", currency, fcAmount: r.fcAmount, rate: r.rate, bdt: round2(allocations.reduce((a, x) => a + x.fcAmount, 0) * r.rate),
-      expNo: r.expNo || undefined, lcNo: r.lcNo || undefined, invoiceRef: r.invoiceRef || undefined, remitter: r.remitter || undefined, allocations })
-  })
-  const cur = new Map<string, number>()
-  for (const l of lines) cur.set(l.currency, round2((cur.get(l.currency) ?? 0) + l.allocations.reduce((a, x) => a + x.fcAmount, 0)))
-  const batch: PrcBatch = {
-    id, no, fileName: d.fileName, status: "posted", lines, skipped: d.skipped + d.rows.filter((r) => !r.allocations.length).length,
-    invoices: new Set(lines.flatMap((l) => l.allocations.map((a) => a.saleId))).size, fcTotals: [...cur].map(([currency, fc]) => ({ currency, fc })),
-    bdt: round2(lines.reduce((a, l) => a + l.bdt, 0)), createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created", note: `${lines.length} PRC(s) posted from the bank file` }],
-  }
-  db.prcBatches.push(batch)
-  recordAudit({ at, actor: user, entity: "prcBatch", entityId: id, ref: `${no} · ${d.fileName}`, action: "imported", note: `${lines.length} PRC(s) → ${batch.invoices} invoice(s) · ৳ ${batch.bdt.toFixed(2)}` })
-  return json(batch, { status: 201 })
+  const w = prcBatchCreate(parsed.data, user, prcSrc(), new Date().toISOString(), Date.now().toString(36))
+  if ("status" in w) return ruleResponse(w)
+  for (const a of w.audit) recordAudit({ at: w.at, actor: user, ...a })
+  return json(w.batch, { status: 201 })
 })
 
 const findBatch = async (p: Ctx["params"]) => { const { id } = await p; return db.prcBatches.find((b) => b.id === id || b.no === id) }
@@ -114,25 +158,10 @@ export const batchReverse = withAuth<Ctx>("doc.approve", async (req, { params },
   if (b.status === "reversed") return problem(409, `${b.no} was reversed on ${b.reversedOn}.`)
   const parsed = prcReverseInput.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  if (d.date > TODAY) return invalid({ date: ["afterToday"] })
-  if (d.date < b.createdAt.slice(0, 10) && d.date < (b.lines[0]?.date ?? d.date)) return invalid({ date: ["beforePosted"] })
-  const at = new Date().toISOString()
-  let removed = 0
-  for (const l of b.lines) for (const a of l.allocations) {
-    const sale = db.sales.find((s) => s.id === a.saleId)
-    const list = sale?.export?.realisations
-    const i = list?.findIndex((r) => r.id === a.realisationId) ?? -1
-    if (!sale || !list || i < 0) continue
-    list.splice(i, 1)
-    removed++
-    ;(sale.history ??= []).push({ at, by: user.name, action: "edited", note: `Proceeds entry removed: PRC ${l.prcNo} (batch ${b.no} reversed)` })
-    recordAudit({ at, actor: user, entity: "sale", entityId: sale.id, ref: sale.invoiceNo, action: "deleted", note: `Realisation PRC ${l.prcNo} (${l.currency} ${a.fcAmount}) removed — ${b.no} reversed` })
-  }
-  b.status = "reversed"; b.reversedOn = d.date; b.reverseReason = d.reason
-  push(b, user.name, "cancelled", `Reversed — ${d.reason}`)
-  recordAudit({ at, actor: user, entity: "prcBatch", entityId: b.id, ref: `${b.no} · ${b.fileName}`, action: "cancelled", note: `${removed} realisation(s) removed — ${d.reason}` })
-  return json(b)
+  const w = prcBatchReverse(b, parsed.data, user, prcSrc(), new Date().toISOString())
+  if ("status" in w) return ruleResponse(w)
+  for (const a of w.audit) recordAudit({ at: w.at, actor: user, ...a })
+  return json(w.batch)
 })
 
 /* ── Mushak 9.3 — late filing ─────────────────────────────────────────────────────────────────────────────── */

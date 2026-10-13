@@ -95,7 +95,7 @@ async function freePort(): Promise<number> {
   })
 }
 
-async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number; treasury: number; vds: number; adjustments: number; uds: number; bondUds: number; lateFilings: number; returnAmendments: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
+async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number; treasury: number; vds: number; adjustments: number; uds: number; bondUds: number; lateFilings: number; returnAmendments: number; prcBatches: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
   const port = await freePort()
   const child: ChildProcess = spawn(process.execPath, [join(__dirname, "main.js")], {
     env: { ...process.env, DATABASE_URL: target, API_PORT: String(port), API_HOST: "127.0.0.1", BACKUPS: "off", DEMO_RESEED: "off", SESSION_SECRET: randomBytes(24).toString("hex") },
@@ -149,7 +149,12 @@ async function bootCheck(target: string, admin: { username: string; password: st
     const am = await amReg.json() as { rows?: unknown[] }
     if ((am.rows?.length ?? -1) !== docs.returnAmendments)
       return { ok: false, detail: `GET /vat/return-amendments answered ${am.rows?.length ?? 0} applications ≠ ${docs.returnAmendments} in the backup` }
-    log(`  signed in as ${admin.username}; /sales lists all ${docs.sales} invoices, /purchases all ${docs.purchases}, /production/batches all ${docs.batches}, /production/boms all ${docs.boms} declarations, /production/work-orders all ${docs.workOrders}, /vat/treasury all ${docs.treasury} deposits, /vat/vds all ${docs.vds} certificates, /vat/adjustments all ${docs.adjustments} and /vat/uds all ${docs.uds} declarations and /vat/bond-uds all ${docs.bondUds} own UDs, /vat/late-filings all ${docs.lateFilings} 9.3 applications and /vat/return-amendments all ${docs.returnAmendments} 9.4 applications`)
+    const pbReg = await fetch(`${base}/vat/proceeds/batches`, { headers: { cookie } })
+    if (!pbReg.ok) return { ok: false, detail: `GET /vat/proceeds/batches failed: HTTP ${pbReg.status}` }
+    const pb = await pbReg.json() as { rows?: unknown[] }
+    if ((pb.rows?.length ?? -1) !== docs.prcBatches)
+      return { ok: false, detail: `GET /vat/proceeds/batches answered ${pb.rows?.length ?? 0} batches ≠ ${docs.prcBatches} in the backup` }
+    log(`  signed in as ${admin.username}; /sales lists all ${docs.sales} invoices, /purchases all ${docs.purchases}, /production/batches all ${docs.batches}, /production/boms all ${docs.boms} declarations, /production/work-orders all ${docs.workOrders}, /vat/treasury all ${docs.treasury} deposits, /vat/vds all ${docs.vds} certificates, /vat/adjustments all ${docs.adjustments} and /vat/uds all ${docs.uds} declarations and /vat/bond-uds all ${docs.bondUds} own UDs, /vat/late-filings all ${docs.lateFilings} 9.3 applications, /vat/return-amendments all ${docs.returnAmendments} 9.4 applications and /vat/proceeds/batches all ${docs.prcBatches} PRC batches`)
     return { ok: true, detail: "health, sign-in and documents ok" }
   } finally {
     child.kill("SIGTERM")
@@ -273,6 +278,7 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
         adjustments: live("vat_adjustments", "adjustments"), uds: live("uds", "uds"),
         bondUds: live("bond_uds", "bondUds"),
         lateFilings: live("late_filings", "lateFilings"), returnAmendments: live("return_amendments", "returnAmendments"),
+        prcBatches: live("prc_batches", "prcBatches"),
       }, log)
     boot = r.ok ? "ok" : "failed"
     if (!r.ok) mismatches.push(`boot: ${r.detail}`)

@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, BondUdGarment, BondUdInput, HistoryEntry, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
+import type { AuditChange, BondUdGarment, BondUdInput, HistoryEntry, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -1759,6 +1759,43 @@ export const returnAmendments = pgTable("return_amendments", {
   index("return_amendments_status_idx").on(t.status),
   check("return_amendments_status_check", sql`${t.status} in ('draft','filed','approved','rejected','amended')`),
   check("return_amendments_revision_check", sql`${t.revision} >= 1`),
+])
+
+/**
+ * R6.6 (proceeds): a bank-file PRC batch — the file it was posted from, every line with its allocations (the
+ * proceeds entries it posted, by their ids, so a reversal can take them back out), the totals it computed and the
+ * history of its reversal. The lines are a frozen record of what was posted, the way a settlement travels with its
+ * UD — the live proceeds entries themselves are `sale_realisations` rows.
+ */
+export const prcBatches = pgTable("prc_batches", {
+  id: text("id").primaryKey(),
+  /** insertion order — the register is newest first, with ties keeping the order they were posted in */
+  ord: serial("ord").notNull(),
+  /** PB-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  fileName: text("file_name").notNull(),
+  status: text("status", { enum: ["posted", "reversed"] }).notNull(),
+  /** every line of the file that was posted: its PRC, the allocations (invoice, FC amount, basis, realisation id) */
+  lines: jsonb("lines").$type<PrcBatchLine[]>().notNull(),
+  /** rows of the file left out (unmatched / duplicates / not ticked) */
+  skipped: integer("skipped").notNull(),
+  invoices: integer("invoices").notNull(),
+  fcTotals: jsonb("fc_totals").$type<{ currency: string; fc: number }[]>().notNull(),
+  bdt: numeric("bdt", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  reversedOn: date("reversed_on", { mode: "string" }),
+  reverseReason: text("reverse_reason"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a restored older backup that drops a batch from the in-memory world retires its row the same way */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one batch number while it lives
+  uniqueIndex("prc_batches_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  // the register is newest first
+  index("prc_batches_created_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  check("prc_batches_status_check", sql`${t.status} in ('posted','reversed')`),
 ])
 
 /** What our own UD permits us to import under bond: one row per input, in the order it was entered. */

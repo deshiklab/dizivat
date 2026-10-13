@@ -49,7 +49,8 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | The NBR VAT documents (R5.6) | `vat/treasury`, `vat/treasury/{id}`, `vat/vds`, `vat/vds/{id}`, `vat/vds/eligible`, `vat/adjustments`, `vat/adjustments/{id}` | **native** — `treasury_deposits` (TR-6), `vds_entries` (Mushak 6.6), `vat_adjustments` (the 9.1 notes no book can derive); an approved certificate settles what it withholds, on the invoice's row |
 | The Mushak 9.1 return (R5.6) | `vat/returns`, `vat/returns/{period}`, `vat/returns/{period}/notes/{note}`, `vat/periods`, `vat/compliance`, `vat/settings` | **native** — `vat_returns` (one row per tax period, the period being its id; a submitted one carries the computation it was filed with) and the one row of `vat_settings`; the period lock every other family checks reads them, not the compat snapshot |
 | The exporters' Utilization Declarations (R6.2) | `vat/uds`, `vat/uds/{id}`, `vat/uds/fit` | **native** — `uds` + `ud_lines` (the amendment certificates travel with the head as JSONB); one declaration number per exporter is a unique index, and a delete stamps `deleted_at` so the id stays retired |
-| Everything else: the Mushak books, the Mushak forms, notifications, dashboard, search, import, the services… | 22 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
+| The export-proceeds register (R6.6) | `vat/proceeds`, `vat/proceeds/sample`, `vat/proceeds/match`, `vat/proceeds/batches`, `vat/proceeds/batches/{id}`, `vat/proceeds/batches/{id}/reverse` | **native** — `prc_batches` (the bank file's lines, allocations and history as JSONB, the number unique while it lives); the realisations themselves are rows of `sale_realisations` on the invoices, written with the batch in one transaction |
+| Everything else: the bond register, the drawback claims, the export register, the penalty quote, the SD-eligible inputs | 7 route modules | **compat** — the mock handlers run unchanged; state saved to `compat_state` (JSONB) after every write |
 
 `api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
 (`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
@@ -784,6 +785,42 @@ error codes, the frozen effects and the audit events cannot drift between the tw
   register, the drawback claims, the export register, the proceeds, the penalty and the SD eligibility — and
   then `compat_state` and the lock are removed and the API can scale out.
 
+## R6.6 — the export-proceeds register on its own table
+
+`api/src/modules/proceeds.ts` serves `vat/proceeds` (the register: outstanding, overdue and due-soon tiles, the
+open invoices with their ageing and their PRCs, the batches, both of its CSVs), `vat/proceeds/sample` (the
+bank-file template), `vat/proceeds/match` (a file's rows matched against the open invoices before posting),
+`vat/proceeds/batches` (the posted batches), `vat/proceeds/batches/{id}` (one batch, by id or number) and
+`vat/proceeds/batches/{id}/reverse`. The rules are the mock's own, re-exported by `api/src/compat/entry.ts` from
+`_r66.ts` (`prcBatchCreate`, `prcBatchReverse`, `newPrcBatchTag` with the open CSV columns and the PRC matcher) —
+the 0.5 % realisation tolerance, the 120-day limit an invoice ages against, the fiscal-year realised total, the
+duplicate a re-imported PRC is refused as — so the register, the 422s and the audit events cannot drift between
+the two runtimes.
+
+- **A batch is a row.** `prc_batches` holds the file as it was posted: the lines with their allocations as JSONB
+  (the invoice each part was matched to, the basis, who by), the per-currency totals, the skipped lines, the
+  history, and — after a reversal — the date and the reason. The realisations the allocations took are rows of
+  `sale_realisations` on the invoices they belong to, written with the batch in one transaction; a reversal
+  removes exactly the ones its `realisationId`s name. The number (`PB-…`) is a partial unique index over the
+  live rows, so a race past the in-memory check is a 409, not a 500.
+- **The invoices are baselined, not marked.** `prcBatchCreate` / `prcBatchReverse` mutate the sales in place and
+  return the ones they touched; the module does *not* re-mark them inside the transaction — the boot and every
+  earlier write already baselined them, so the shared `saleDelta` picks the mutations up by diffing against that
+  baseline. On success the new baseline is committed after the transaction; on failure each touched sale is put
+  back from its pre-call copy and the batch is dropped from the mirror, so a refused posting leaves nothing
+  behind but (like every number-issuing family) a gap in the sequence.
+- **The clock is the app's, not the server's.** The register's `asOf` is the fixed `TODAY` the whole app runs
+  on, the ageing buckets and the overdue tiles are computed against it, and the CSV filename stamps it — exactly
+  as the mock routes do. Only a posting's own `createdAt` is the real clock.
+- **The effects still land where they always did.** A posting's realisations move the invoice's outstanding
+  foreign currency (the own-UD and drawback views, still compat code, read them the moment they land), the
+  audit events for the batch and every allocation are recorded after the commit, and the number comes from
+  `db.seq.prcBatch` — reconciled at every boot to the highest number the rows have seen, so a stale snapshot
+  cannot hand out a number twice.
+- **7 compat route modules are left, 109 native.** What is left is the bond register, the drawback claims, the
+  export register, the penalty quote and the SD-eligible inputs — and then `compat_state` and the lock are
+  removed and the API can scale out.
+
 ## Tables
 
 | Table | Purpose |
@@ -834,8 +871,9 @@ error codes, the frozen effects and the audit events cannot drift between the tw
 | `bond_ud_inputs` | **R6.5:** the bonded inputs an own UD permits us to import — item, name, HS code, unit, the quantity; primary key (UD, position) |
 | `bond_ud_garments` | **R6.5:** the finished goods the order exports against an own UD — item, name, unit, the quantity; primary key (UD, position) |
 | `late_filings` | **R6.6:** a Mushak 9.3 late-return application (s.65) — the number (unique while it lives), the period, the reason, the dates, the reference it was filed under, the decision, its history (JSONB); `deleted_at` retires the id of a deleted draft |
+| `prc_batches` | **R6.6:** a bank PRC file posted against the export-proceeds register — the number (`PB-…`, unique while it lives), the file name, the lines with their allocations as JSONB, the per-currency totals, the skipped lines, the reversal date and reason, its history (JSONB) |
 | `return_amendments` | **R6.6:** a Mushak 9.4 amendment application (s.66) — the number (unique while it lives), the period, the revision, the corrections as JSONB (note, column, as-filed, corrected, explanation), the frozen computation the amended return was built from, the filing and decision references, the adjust period of its decreasing adjustment, its history (JSONB); `deleted_at` retires the id of a deleted draft |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2, no own UDs since R6.5, no late filings or return amendments since R6.6) |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2, no own UDs since R6.5, no late filings, return amendments or PRC batches since R6.6) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the

@@ -153,6 +153,10 @@ export type { BondUdSource, BondUdWrite, BondUdParsed, SettleParsed } from "@/ap
 export { lfCheck, lfCreate, lfUpdate, lfRemove, lfAction, amCheck, amCreate, amUpdate, amRemove, amAction,
   lfRef, amRef, lfCsvColumns, lfCsvRows, amCsvColumns, amCsvRows } from "@/app/api/v1/_r66"
 export type { LateSource, AmendSource, LfWrite, AmWrite, LfData, LateActionData, AmData, AmendActionData } from "@/app/api/v1/_r66"
+// R6.6 (proceeds): the bank-file batch rules — the confirmed allocations become proceeds entries on the invoices and
+// a batch row; a reversal removes them again. The caller records the audit entries the write carries.
+export { prcBatchCreate, prcBatchReverse, newPrcBatchTag, proceedsOpenCsvColumns } from "@/app/api/v1/_r66"
+export type { PrcSource, PrcAudit } from "@/app/api/v1/_r66"
 export type { UdParsed } from "@/lib/schemas"
 export { bulkImportInput } from "@/lib/schemas"
 export { SERVICES } from "@/lib/r2"

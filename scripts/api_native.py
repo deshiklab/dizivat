@@ -474,6 +474,28 @@ PRE_R66_RETURN_APPS = f"""update compat_state set data = jsonb_set(data, '{{db}}
   'returnAmendments', {AMENDMENT_AGG}
 )) where key = 'main'"""
 
+# ── R6.6 upgrade drill: the bank PRC batches ─────────────────────────────────────────────────────────────────
+# The same story for the proceeds register: a database written before the port holds the batches inside
+# compat_state — realisations travelling on the sales, timestamps in the ISO-8601 the snapshot carries — and no
+# row in `prc_batches`. (The realisations are already rows in `sale_realisations` by then: the compat write-back
+# had been syncing them since R6.6's first half, so the drill only moves the batches themselves.) Nothing here
+# ships either: it is the inverse of the batches half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+PRC_BATCH_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', p.id, 'no', p.no, 'fileName', p.file_name, 'status', p.status, 'lines', p.lines, 'skipped', p.skipped,
+    'invoices', p.invoices, 'fcTotals', p.fc_totals, 'bdt', p.bdt, 'reversedOn', p.reversed_on,
+    'reverseReason', p.reverse_reason, 'createdBy', p.created_by,
+    'createdAt', """ + _ISO.format("p.created_at") + """, 'updatedAt', """ + _ISO.format("p.updated_at") + """, 'history', p.history)""") + ")")
+PRC_BATCH_AGG = (f"(select coalesce(jsonb_agg({PRC_BATCH_DOC} order by p.ord), '[]'::jsonb)"
+                 " from prc_batches p where p.deleted_at is null)")
+# the drill also injects one synthetic POSTED batch, so the ported write paths run against a batch the old code
+# could have left behind: fetch it by id, then reverse it (its one line carries no allocations, so the reversal
+# has nothing to remove — it just stamps the row the way the mock's ever-forward history had)
+DRILL_PB_ID = "pbdrill1"
+DRILL_PB = f"""'{{"id":"{DRILL_PB_ID}","no":"PB-09269999","fileName":"drill.csv","status":"posted","lines":[{{"line":2,"date":"2026-09-25","prcNo":"PRC/DRILL/1","currency":"USD","fcAmount":1,"rate":122,"allocations":[]}}],"skipped":0,"invoices":0,"fcTotals":{{"USD":1}},"bdt":122,"createdBy":"A. Rahman","createdAt":"2026-09-25T09:00:00.000Z","history":[{{"at":"2026-09-25T09:00:00.000Z","by":"A. Rahman","action":"created"}}]}}'::jsonb"""
+PRE_R66B_PRC_BATCHES = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'prcBatches', {PRC_BATCH_AGG} || jsonb_build_array({DRILL_PB})
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -3502,6 +3524,22 @@ def run():
     pb_id = pb.json().get("id") if pb is not None and pb.status_code == 201 else None
     check(pb_id is not None, f"R6.6: a bank-file batch posts (HTTP {pb.status_code if pb is not None else '-'})")
     check(arif.post(f"{BASE}/vat/proceeds/match", json={"rows": [{"line": 2, "date": "2026-09-25", "prcNo": prc_no, "currency": "USD", "fcAmount": 1, "rate": 122}]}).json().get("rows", [{}])[0].get("state") == "duplicate", "R6.6: the posted PRC is a duplicate on re-import")
+    # …and the register is rows now. The seeded batches sit in `prc_batches` (three posted, one reversed — the
+    # suite's own postings add more, so only these four ids are ours to assert), the batch just posted beside
+    # them with the realisation its allocation took, and the audit trail carries both the seeded reversals and
+    # the posting (asserted by identity, not by count: every run of this suite leaves its own events behind).
+    check(psql("select count(*) from prc_batches where id in ('pb1', 'pb2', 'pb3', 'pb4') and deleted_at is null") == "4"
+          and psql("select status from prc_batches where id = 'pb4'") == "reversed"
+          and psql("select status from prc_batches where id = 'pb1'") == "posted",
+          "R6.6: the seeded PRC batches are rows in prc_batches (three posted, PB-09260004 reversed)")
+    check(pb_id is not None
+          and psql(f"select count(*) from prc_batches where id = '{pb_id}' and file_name = 'native-{TAG}.csv' and status = 'posted' and invoices = 1") == "1"
+          and psql(f"select count(*) from sale_realisations where batch_id = '{pb_id}' and prc_no = '{prc_no}' and fc_amount = 1") == "1",
+          "R6.6: the posted batch is a row too, with the realisation its allocation took in sale_realisations")
+    check(psql("select count(*) from audit_events where entity = 'prcBatch' and ref like 'PB-05260001 ·%' and action = 'created'") >= "1"
+          and psql("select count(*) from audit_events where entity = 'prcBatch' and ref like 'PB-09260004 ·%' and action = 'cancelled'") >= "1"
+          and pb_id is not None and psql(f"select count(*) from audit_events where entity = 'prcBatch' and ref = (select no || ' · ' || file_name from prc_batches where id = '{pb_id}') and action = 'imported'") >= "1",
+          "R6.6: the audit trail carries the seeded batches and the posting")
     lfs = arif.get(f"{BASE}/vat/late-filings").json()
     check({"lf1", "lf2"} <= {r["id"] for r in lfs.get("rows", [])}, "R6.6: seeded Mushak 9.3 applications served")
     am_id = None
@@ -3669,6 +3707,10 @@ def run():
               "R6.6: the amended return and the decreasing adjustment it posted survive a restart")
         rv = arif.post(f"{BASE}/vat/proceeds/batches/{pb_id}/reverse", json={"date": "2026-09-25", "reason": f"Native reversal {TAG}"}) if pb_id else None
         check(rv is not None and rv.status_code == 200 and rv.json().get("status") == "reversed", "R6.6: the batch reverses after a restart")
+        check(pb_id is not None
+              and psql(f"select count(*) from prc_batches where id = '{pb_id}' and status = 'reversed' and reversed_on = '2026-09-25' and reverse_reason = 'Native reversal {TAG}' and history->-1->>'action' = 'cancelled'") == "1"
+              and psql(f"select count(*) from sale_realisations where batch_id = '{pb_id}'") == "0",
+              "R6.6: …and the reversal is stamped on the row, its realisations are gone and the history carries the cancellation")
         bl = admin.get(f"{BASE}/backups").json()
         check(any(x["id"] == bid for x in bl.get("rows", [])), "R6.2: backups survive a restart")
         v2 = arif.get(f"{BASE}/audit/verify").json()
@@ -4766,6 +4808,77 @@ def run():
         check(raWrite.status_code == 201
               and psql(f"select count(*) from return_amendments where id = '{raw.get('id')}' and deleted_at is null") == "1",
               f"and writes land in the tables on the upgraded database ({raWrite.status_code})")
+
+        # …and the proceeds register: a database written before the port holds the bank PRC batches inside
+        # compat_state and no rows in `prc_batches`. What has to survive the round trip is the register with its
+        # overview, both of its CSVs, one batch by number (reversed, with its lines and history), the realisations
+        # on the invoices, and the write paths against the drill's own synthetic batch.
+        print("\nR6.6: upgrading a pre-R6.6 database moves the PRC batches into their table")
+
+        def pv_counts():
+            return (psql("select count(*) from prc_batches where deleted_at is null"),
+                    psql("select count(*) from sale_realisations where batch_id is not null"))
+
+        def pv_registers():
+            """The proceeds surface — with the drill's own batch filtered out, so the sides compare (the
+            before-side cannot have it; the after-side must not depend on it)."""
+            ov = arif.get(f"{BASE}/vat/proceeds").json()
+            ov["batches"] = [b for b in ov.get("batches", []) if b.get("id") != DRILL_PB_ID]
+            bs = arif.get(f"{BASE}/vat/proceeds/batches").json()
+            bs["rows"] = [r for r in bs.get("rows", []) if r.get("id") != DRILL_PB_ID]
+            sid = psql("select sale_id from sale_realisations where batch_id = 'pb1' limit 1")
+            return {"ov": ov,
+                    "ovCsv": arif.get(f"{BASE}/vat/proceeds", params={"format": "csv"}).text,
+                    "sample": arif.get(f"{BASE}/vat/proceeds/sample").text,
+                    "bs": bs,
+                    "one": arif.get(f"{BASE}/vat/proceeds/batches/PB-09260004").json(),
+                    "invoice": arif.get(f"{BASE}/sales/{sid}").json() if sid else None}
+
+        def pv_boots():
+            """How many boots adopted the batches — one `R6.6 upgrade:` line mentioning them each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return sum(1 for line in fh if "R6.6 upgrade:" in line and "PRC batches" in line)
+
+        flush_snapshot(arif)  # a batch posted natively never saved the snapshot: the counters have to be in it before the rewind
+        pvc, pvbefore, pvboots = pv_counts(), pv_registers(), pv_boots()
+        psql(PRE_R66B_PRC_BATCHES)
+        psql("delete from prc_batches")
+        check(pv_counts() == ("0", pvc[1])
+              and psql("select count(*) from compat_state where data->'db' ? 'prcBatches'") == "1",
+              f"the database is back in the pre-port shape ({pvc[0]} PRC batches inside the snapshot, the table "
+              f"empty, one synthetic batch beside them, the realisations untouched where they already were)")
+        restart()
+        check(pv_counts() == (str(int(pvc[0]) + 1), pvc[1]),
+              f"the first boot moved every batch into the table ({pvc[0]} batches + the drill's own, "
+              f"{pvc[1]} realisations kept where they were)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'prcBatches'") == "0",
+              "…and rewrote the snapshot without them")
+        check(pv_registers() == pvbefore,
+              "…and serves the same answers: the overview, both CSVs, the register, the reversed batch by "
+              "number and the realisations on its invoice")
+        pvboots_after, pvnow = pv_boots(), pv_counts()
+        restart()
+        check(pv_counts() == pvnow and (pvboots is None or pvboots_after == pvboots + 1)
+              and (pvboots is None or pv_boots() == pvboots_after),
+              "a second boot adopts nothing again — the table is the only copy from then on")
+        # the synthetic batch came along: fetch it by id, then reverse it — both write paths against a batch the
+        # old code could have left behind (its one line has no allocations, so the reversal only stamps the row)
+        drGet = arif.get(f"{BASE}/vat/proceeds/batches/{DRILL_PB_ID}")
+        drRv = arif.post(f"{BASE}/vat/proceeds/batches/{DRILL_PB_ID}/reverse", json={"date": "2026-09-25", "reason": "Upgrade drill"})
+        check(drGet.status_code == 200 and drGet.json().get("no") == "PB-09269999" and drGet.json().get("status") == "posted"
+              and drRv.status_code == 200 and drRv.json().get("status") == "reversed"
+              and psql(f"select count(*) from prc_batches where id = '{DRILL_PB_ID}' and status = 'reversed' and reversed_on = '2026-09-25' and history->-1->>'action' = 'cancelled'") == "1",
+              "and the drill's batch runs the ported write paths: fetched by id, reversed and stamped")
+        tgt2 = next((o for o in arif.get(f"{BASE}/vat/proceeds").json().get("open", []) if o.get("outstandingFc", 0) >= 2), None)
+        pvWrite = arif.post(f"{BASE}/vat/proceeds/batches", json={"fileName": f"drill-{TAG}.csv", "rows": [{"line": 2, "date": "2026-09-25", "prcNo": f"PRC/DRILLW/{TAG}", "currency": tgt2["currency"], "fcAmount": 1, "rate": tgt2["rate"],
+                                                            "allocations": [{"saleId": tgt2["saleId"], "fcAmount": 1, "basis": "manual"}]}]}) if tgt2 else None
+        pvw = pvWrite.json() if pvWrite is not None and pvWrite.status_code == 201 else {}
+        check(pvWrite is not None and pvWrite.status_code == 201
+              and psql(f"select count(*) from prc_batches where id = '{pvw.get('id')}' and deleted_at is null") == "1"
+              and psql(f"select count(*) from sale_realisations where batch_id = '{pvw.get('id')}'") == "1",
+              f"and writes land in the table on the upgraded database ({pvWrite.status_code if pvWrite is not None else '-'})")
 
     else:
         skipped("restart checks (API_RESTART_CMD not set)")

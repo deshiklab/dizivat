@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, ReturnAmendment, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -37,6 +37,7 @@ interface Globals {
     bondUds: BondUd[]
     lateFilings: LateFiling[]
     returnAmendments: ReturnAmendment[]
+    prcBatches: PrcBatch[]
     accountingConfig: AccountingConfig
     returns: VatReturn[]; vatSettings: VatSettings
     trash: TrashEntry[]
@@ -76,6 +77,7 @@ export function restoreGlobals(s: {
   bondUds: BondUd[]
   lateFilings: LateFiling[]
   returnAmendments: ReturnAmendment[]
+  prcBatches: PrcBatch[]
   accountingConfig: AccountingConfig
   returns: VatReturn[]; vatSettings: VatSettings
   events: AuditEvent[]
@@ -91,6 +93,7 @@ export function restoreGlobals(s: {
     moneyAccounts: s.moneyAccounts, moneyDocs: s.moneyDocs, treasury: s.treasury, vds: s.vds,
     adjustments: s.adjustments, uds: s.uds, bondUds: s.bondUds,
     lateFilings: s.lateFilings ?? [], returnAmendments: s.returnAmendments ?? [],
+    prcBatches: s.prcBatches ?? [],
     accountingConfig: s.accountingConfig,
     returns: s.returns ?? [], vatSettings: s.vatSettings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
@@ -459,6 +462,23 @@ export const mirror = {
   },
   removeReturnAmendment(id: string) {
     const list = mirror.returnAmendments()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R6.6 (proceeds): the bank-file PRC batches — the register and the reversal read them (their own rows live in
+   *  prc_batches, see proceeds.ts) */
+  prcBatches: (): PrcBatch[] => G.__dzDb!.prcBatches,
+  putPrcBatches(list: PrcBatch[]) { const a = mirror.prcBatches(); a.splice(0, a.length, ...list) },
+  findPrcBatch: (idOrNo: string) => mirror.prcBatches().find((x) => x.id === idOrNo || x.no === idOrNo),
+  putPrcBatch(b: PrcBatch) {
+    const list = mirror.prcBatches()
+    const cur = list.find((x) => x.id === b.id)
+    if (cur) replaceObject(cur, b)
+    else list.push(b)
+    return cur ?? b
+  },
+  removePrcBatch(id: string) {
+    const list = mirror.prcBatches()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },
