@@ -50,6 +50,8 @@ export const NATIVE = [
   // R6.2: the exporters' Utilization Declarations — `uds`, with the inputs each permits in `ud_lines`
   "vat/uds", "vat/uds/[id]", "vat/uds/fit",
   "vat/bond-uds", "vat/bond-uds/[id]", "vat/bond-uds/[id]/settle",
+  "vat/late-filings", "vat/late-filings/[id]", "vat/late-filings/[id]/action",
+  "vat/return-amendments", "vat/return-amendments/[id]", "vat/return-amendments/[id]/action",
   // R5.6: the Mushak 9.1 return (`vat_returns`, one row per tax period) with the note sub-forms behind its
   // computation, the tax periods it can be filed for, the compliance centre over one of them, and the NBR settings
   // (the one row of `vat_settings`)

@@ -439,6 +439,41 @@ PRE_R65_BOND_UDS = f"""update compat_state set data = jsonb_set(data, '{{db}}', 
   'bondUds', {BOND_UD_AGG}
 )) where key = 'main'"""
 
+# ── R6.6 upgrade drill: the Mushak 9.3 / 9.4 applications ───────────────────────────────────────────────────
+# A database written before this slice holds both families inside compat_state — the corrections and the amended
+# return travelling with the application, optional fields absent rather than null, timestamps in the ISO-8601 the
+# snapshot carries — and no row in `late_filings` / `return_amendments`. These statements rebuild that shape from
+# the live tables, so the first boot on this code has to adopt them. Nothing here ships: it is the inverse of the
+# applications half of `adoptCompatRows()` in api/src/boot.ts, for the test only.
+LATE_FILING_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', l.id, 'no', l.no, 'period', l.period, 'reasonKind', l.reason_kind, 'reason', l.reason,
+    'requestedDate', to_char(l.requested_date, 'YYYY-MM-DD'), 'status', l.status,
+    'filedOn', to_char(l.filed_on, 'YYYY-MM-DD'), 'filedRef', l.filed_ref,
+    'decidedOn', to_char(l.decided_on, 'YYYY-MM-DD'), 'commissionerRef', l.commissioner_ref,
+    'grantedDate', to_char(l.granted_date, 'YYYY-MM-DD'), 'rejectReason', l.reject_reason, 'createdBy', l.created_by,
+    'createdAt', """ + _ISO.format("l.created_at") + """, 'updatedAt', """ + _ISO.format("l.updated_at") + """, 'history', l.history)""") + ")")
+LATE_FILING_AGG = (f"(select coalesce(jsonb_agg({LATE_FILING_DOC} order by l.ord), '[]'::jsonb)"
+                   " from late_filings l where l.deleted_at is null)")
+AMENDMENT_DOC = ("(" + _NO_NULLS.format("""jsonb_build_object(
+    'id', r.id, 'no', r.no, 'period', r.period, 'reasonKind', r.reason_kind, 'description', r.description,
+    'corrections', r.corrections, 'noAudit', r.no_audit, 'revision', r.revision, 'status', r.status,
+    'filedOn', to_char(r.filed_on, 'YYYY-MM-DD'), 'filedRef', r.filed_ref,
+    'decidedOn', to_char(r.decided_on, 'YYYY-MM-DD'), 'commissionerRef', r.commissioner_ref,
+    'rejectReason', r.reject_reason, 'adjustPeriod', r.adjust_period, 'amended', r.amended, 'createdBy', r.created_by,
+    'createdAt', """ + _ISO.format("r.created_at") + """, 'updatedAt', """ + _ISO.format("r.updated_at") + """, 'history', r.history)""") + ")")
+AMENDMENT_AGG = (f"(select coalesce(jsonb_agg({AMENDMENT_DOC} order by r.ord), '[]'::jsonb)"
+                 " from return_amendments r where r.deleted_at is null)")
+# the drill also injects one synthetic DRAFT application, so the ported write paths run against a draft the
+# old code could have left behind: edit it, try to file it, then delete it (a period whose return is already
+# submitted — the mock would have refused to create it, but adoption moves rows, and the index only keeps one
+# live application per period; lf1 is rejected, so 2025-12 is free)
+DRILL_LF_ID = "lfdrill1"
+DRILL_LF = f"""'{{"id":"{DRILL_LF_ID}","no":"LF-01269999","period":"2025-12","reasonKind":"other","reason":"A draft the upgrade drill injected, to be edited and deleted once the tables own the family.","requestedDate":"2026-01-20","status":"draft","createdBy":"A. Rahman","createdAt":"2026-01-10T09:00:00.000Z","history":[{{"at":"2026-01-10T09:00:00.000Z","by":"A. Rahman","action":"created"}}]}}'::jsonb"""
+PRE_R66_RETURN_APPS = f"""update compat_state set data = jsonb_set(data, '{{db}}', (data->'db') || jsonb_build_object(
+  'lateFilings', {LATE_FILING_AGG} || jsonb_build_array({DRILL_LF}),
+  'returnAmendments', {AMENDMENT_AGG}
+)) where key = 'main'"""
+
 # ── R5.3 upgrade drill: the credit and debit notes ───────────────────────────────────────────────────────────
 # A database written before the notes had tables holds both families inside compat_state. These statements rebuild
 # that shape from the live tables — one table with a `kind`, so the two documents' own field names (saleId /
@@ -524,10 +559,10 @@ def flush_snapshot(s):
     rewinds those tables into their pre-release shape therefore has to flush the snapshot first, or the database it
     pretends to be — one the old code wrote, saving after every request — would hold a counter the real one never
     lost. Read-only: a GET changes nothing, it just runs the compat path's persist(). Which route is still compat
-    moves as the port does (R6.2 left the drawback claims and the export proceeds, so the first of these that
-    answers is the one that flushes).
+    moves as the port does (R6.6 left the penalty, the SD-eligible list and the export proceeds, so the first of
+    these that answers is the one that flushes).
     """
-    for path in ("/vat/penalty", "/vat/sd-eligible", "/vat/return-amendments", "/vat/proceeds"):
+    for path in ("/vat/penalty", "/vat/sd-eligible", "/vat/proceeds"):
         if s.get(f"{BASE}{path}").status_code == 200:
             return
     raise AssertionError("no compat route left for the drills to flush the snapshot with")
@@ -3474,6 +3509,52 @@ def run():
     fr = arif.post(f"{BASE}/vat/return-amendments/{am_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"NBR/N/{TAG}"}) if am_id else None
     check(fr is not None and fr.status_code == 200 and fr.json().get("status") == "filed", "R6.6: a Mushak 9.4 application is created and filed")
 
+    # …and both families are rows now. The seeded applications sit in `late_filings` (one refused, one filed and
+    # deemed allowed), the application just filed in `return_amendments` with its reference, and a draft that is
+    # deleted is stamped — not removed — so its id retires with it, the way the mock's ever-forward counter had.
+    check(psql("select count(*) from late_filings where deleted_at is null") == "2"
+          and psql("select count(*) from late_filings where status = 'rejected'") == "1"
+          and psql("select period from late_filings where status = 'filed'") == "2026-09",
+          "R6.6: the seeded 9.3 applications are rows in late_filings (one refused, one filed for 09-2026)")
+    check(am_id is not None and psql(f"select status from return_amendments where id = '{am_id}'") == "filed"
+          and psql(f"select filed_ref from return_amendments where id = '{am_id}'") == f"NBR/N/{TAG}",
+          "R6.6: the filed 9.4 application is a row too, with the NBR reference it was filed under")
+    dd_id = None
+    for per in ("2026-05", "2026-02", "2026-01"):
+        r = arif.post(f"{BASE}/vat/return-amendments", json={"period": per, "reasonKind": "clerical", "description": f"Native check {TAG} — a draft to delete", "noAudit": True,
+                                                             "corrections": [{"note": 1, "field": "value", "to": 999999.99, "explanation": "Draft to delete"}]})
+        if r.status_code == 201: dd_id = r.json()["id"]; break
+    dd = arif.delete(f"{BASE}/vat/return-amendments/{dd_id}") if dd_id else None
+    check(dd is not None and dd.status_code == 200
+          and psql(f"select count(*) from return_amendments where id = '{dd_id}' and deleted_at is not null") == "1"
+          and all(r.get("id") != dd_id for r in arif.get(f"{BASE}/vat/return-amendments").json().get("rows", [])),
+          "R6.6: a deleted 9.4 draft is stamped, not removed — the register no longer lists it, and its id retires with it")
+    # the fourth action step files the amended return itself. An increase would need the treasury deposit of the
+    # difference + interest; a decrease posts the decreasing adjustment (note 32, s.55 read with s.66) in the period
+    # the Commissioner allowed — a row of the adjustments family, written beside the application in one transaction.
+    dec_id = None
+    for per in ("2026-04", "2026-02", "2026-01"):
+        r = arif.post(f"{BASE}/vat/return-amendments", json={"period": per, "reasonKind": "overpaid", "description": f"Native check {TAG} — VAT over-declared on a cancelled challan", "noAudit": True,
+                                                             "corrections": [{"note": 4, "field": "vat", "to": 1234.56, "explanation": "Cancelled challan, VAT reversed"}]})
+        if r.status_code == 201: dec_id = r.json()["id"]; break
+    dec = dec_ref = None
+    if dec_id:
+        arif.post(f"{BASE}/vat/return-amendments/{dec_id}/action", json={"action": "file", "date": "2026-09-25", "ref": f"CVAT/DEC/{TAG}"})
+        dec_ref = f"CVAT/DEC/{TAG}"
+        ap = arif.post(f"{BASE}/vat/return-amendments/{dec_id}/action", json={"action": "approve", "date": "2026-09-25", "ref": f"CVAT/AMEND/{TAG}", "adjustPeriod": "2026-09"})
+        am_step = arif.post(f"{BASE}/vat/return-amendments/{dec_id}/action", json={"action": "amend", "date": "2026-09-25"})
+        dec = am_step.json() if am_step.status_code == 200 else {}
+    adj_ids = (dec.get("amended") or {}).get("adjustmentIds") or []
+    check(dec.get("status") == "amended" and dec.get("effect", {}).get("direction") == "decrease" and len(adj_ids) >= 1,
+          "R6.6: a decreasing 9.4 application is approved and files its amended return")
+    check(dec_id is not None and psql(f"select count(*) from return_amendments where id = '{dec_id}' and amended->'adjustmentIds' is not null") == "1"
+          and psql(f"select count(*) from vat_adjustments a join return_amendments r on r.id = '{dec_id}' where a.id in (select jsonb_array_elements_text(r.amended->'adjustmentIds')) and a.note = 32 and a.kind = 'otherDecrease' and a.tax_period = '2026-09'") >= "1",
+          "R6.6: the decrease posts its decreasing adjustment (note 32) in the allowed period — a row of the adjustments family")
+    check(dec_id is not None and psql(f"""select count(*) from audit_events where entity = 'adjustment' and ref in (
+                 select a.no from vat_adjustments a where a.id in (
+                   select jsonb_array_elements_text(r.amended->'adjustmentIds') from return_amendments r where r.id = '{dec_id}'))""") >= "1",
+          "R6.6: …and the audit trail carries the adjustment the application posted")
+
     # R5.6: the readers — the Mushak books, the dashboard, the ⌘K search, the notifications, the two service-code
     # lists and the bulk import. None of them stores a row of its own: each adds up documents that live in the
     # tables, so the decisive checks are the ones that move a row in SQL alone — the in-memory copies left stale on
@@ -3575,6 +3656,11 @@ def run():
         a_after = arif.get(f"{BASE}/vat/return-amendments/{am_id}").json() if am_id else {}
         check(b_after.get("status") == "posted" and b_after.get("lines", [{}])[0].get("prcNo") == prc_no and a_after.get("status") == "filed" and a_after.get("filedRef") == f"NBR/N/{TAG}",
               "R6.6: PRC batch and filed 9.4 application survive a restart")
+        dec_after = arif.get(f"{BASE}/vat/return-amendments/{dec_id}").json() if dec_id else {}
+        dec_adj = ((dec_after.get("amended") or {}).get("adjustmentIds") or [None])[0]
+        check(dec_after.get("status") == "amended" and dec_adj is not None
+              and psql(f"select count(*) from vat_adjustments where id = '{dec_adj}' and note = 32 and tax_period = '2026-09' and amount > 0") == "1",
+              "R6.6: the amended return and the decreasing adjustment it posted survive a restart")
         rv = arif.post(f"{BASE}/vat/proceeds/batches/{pb_id}/reverse", json={"date": "2026-09-25", "reason": f"Native reversal {TAG}"}) if pb_id else None
         check(rv is not None and rv.status_code == 200 and rv.json().get("status") == "reversed", "R6.6: the batch reverses after a restart")
         bl = admin.get(f"{BASE}/backups").json()
@@ -4600,6 +4686,80 @@ def run():
               and psql(f"select count(*) from bond_ud_inputs where ud_id = '{buw.get('id')}'") == "1"
               and psql(f"select count(*) from bond_ud_garments where ud_id = '{buw.get('id')}'") == "1",
               f"and writes land in the tables on the upgraded database ({buWrite.status_code})")
+
+        # …and the R6.6 pair: a database written before this slice holds the Mushak 9.3 / 9.4 applications inside
+        # compat_state and no rows in `late_filings` / `return_amendments`. What has to survive the round trip is
+        # both registers with their CSVs and totals, one application frozen as amended with the adjustment its
+        # decrease posted, and the return view that reads the applications through the mirror.
+        print("\nR6.6: upgrading a pre-R6.6 database moves the 9.3 / 9.4 applications into their tables")
+
+        def ra_counts():
+            return (psql("select count(*) from late_filings where deleted_at is null"),
+                    psql("select count(*) from return_amendments where deleted_at is null"),
+                    psql("select count(*) from return_amendments where status = 'amended' and amended->'adjustmentIds' is not null"))
+
+        def ra_registers():
+            """Both registers, the CSVs and one of each — with the drill's own draft filtered out, so the sides
+            compare (the before-side cannot have it; the after-side must not depend on it)."""
+            lf = arif.get(f"{BASE}/vat/late-filings").json()
+            lf["rows"] = [r for r in lf.get("rows", []) if r.get("id") != DRILL_LF_ID]
+            am = arif.get(f"{BASE}/vat/return-amendments").json()
+            return {"lf": lf,
+                    "lfOne": arif.get(f"{BASE}/vat/late-filings/lf1").json(),
+                    "am": am,
+                    "amCsv": arif.get(f"{BASE}/vat/return-amendments", params={"format": "csv"}).text,
+                    "amOne": arif.get(f"{BASE}/vat/return-amendments/{dec_id}").json() if dec_id else None,
+                    "compliance": arif.get(f"{BASE}/vat/compliance", params={"period": "2026-08"}).json()}
+
+        def ra_boots():
+            """How many boots adopted the applications — one `R6.6 upgrade:` line each."""
+            if not API_LOG or not os.path.exists(API_LOG):
+                return None
+            with open(API_LOG, encoding="utf-8", errors="replace") as fh:
+                return sum(1 for line in fh if "R6.6 upgrade:" in line)
+
+        flush_snapshot(arif)  # an application filed natively never saved the snapshot: the counters have to be in it before the rewind
+        rac, rabefore, raboots = ra_counts(), ra_registers(), ra_boots()
+        psql(PRE_R66_RETURN_APPS)
+        psql("delete from return_amendments")
+        psql("delete from late_filings")
+        check(ra_counts() == ("0", "0", "0")
+              and psql("select count(*) from compat_state where data->'db' ? 'lateFilings'") == "1"
+              and psql("select count(*) from compat_state where data->'db' ? 'returnAmendments'") == "1",
+              f"the database is back in the pre-R6.6 shape ({rac[0]} 9.3 and {rac[1]} 9.4 applications inside the "
+              f"snapshot, both tables empty, one synthetic draft beside them)")
+        restart()
+        check(ra_counts() == (str(int(rac[0]) + 1), rac[1], rac[2]),
+              f"the first boot moved every application into the tables ({rac[0]} 9.3 + the drill's own draft, "
+              f"{rac[1]} 9.4, {rac[2]} amended with a decreasing adjustment)")
+        check(psql("select count(*) from compat_state where data->'db' ? 'lateFilings' or data->'db' ? 'returnAmendments'") == "0",
+              "…and rewrote the snapshot without them")
+        check(ra_registers() == rabefore,
+              "…and serves the same answers: both registers, the 9.4 CSV, one of each and the compliance centre "
+              "that reads the applications through the mirror")
+        raboots_after, ranow = ra_boots(), ra_counts()
+        restart()
+        check(ra_counts() == ranow and (raboots is None or raboots_after == raboots + 1)
+              and (raboots is None or ra_boots() == raboots_after),
+              "a second boot adopts nothing again — the tables are the only copy from then on")
+        # the synthetic draft came along: edit it (the period's return is already submitted, so the rules refuse),
+        # try to file it (the same refusal), then delete it — the three write paths against an old-code draft.
+        drPut = arif.put(f"{BASE}/vat/late-filings/{DRILL_LF_ID}", json={"period": "2025-12", "reasonKind": "documents",
+                                                                         "reason": "Editing the drill's draft once the tables own the family.", "requestedDate": "2026-01-22"})
+        drFile = arif.post(f"{BASE}/vat/late-filings/{DRILL_LF_ID}/action", json={"action": "file", "date": "2026-01-12", "ref": "CVAT/DRILL/1"})
+        drDel = arif.delete(f"{BASE}/vat/late-filings/{DRILL_LF_ID}")
+        check(drPut.status_code == 422 and drPut.json().get("errors", {}).get("period") == ["alreadySubmitted"]
+              and drFile.status_code == 422 and drFile.json().get("errors", {}).get("period") == ["alreadySubmitted"]
+              and drDel.status_code == 200
+              and psql(f"select count(*) from late_filings where id = '{DRILL_LF_ID}' and deleted_at is not null and status = 'draft'") == "1",
+              "and the drill's draft runs the ported write paths: the rules refuse the edit and the filing "
+              "(the return is submitted), and the delete stamps the row — the id retires with it")
+        raWrite = arif.post(f"{BASE}/vat/return-amendments", json={"period": "2026-02", "reasonKind": "clerical", "description": f"Native check {TAG} on the upgraded database — transposed digits", "noAudit": True,
+                                                                   "corrections": [{"note": 1, "field": "value", "to": 1234.56, "explanation": "Transposed digits"}]})
+        raw = raWrite.json() if raWrite.status_code == 201 else {}
+        check(raWrite.status_code == 201
+              and psql(f"select count(*) from return_amendments where id = '{raw.get('id')}' and deleted_at is null") == "1",
+              f"and writes land in the tables on the upgraded database ({raWrite.status_code})")
 
     else:
         skipped("restart checks (API_RESTART_CMD not set)")

@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, BondUdGarment, BondUdInput, HistoryEntry, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
+import type { AuditChange, BondUdGarment, BondUdInput, HistoryEntry, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -1664,6 +1664,101 @@ export const bondUds = pgTable("bond_uds", {
   check("bond_uds_issuer_check", sql`${t.issuer} in ('BGMEA','BKMEA','Customs')`),
   check("bond_uds_expiry_check", sql`${t.expiry} >= ${t.date}`),
   check("bond_uds_master_lc_value_check", sql`${t.masterLcValue} is null or ${t.masterLcValue} >= 0`),
+])
+
+/**
+ * R6.6 — a Mushak 9.3 application (s.65, rule 48): ask the Commissioner to file one period's return late, inside
+ * seven days of the due date and at most a month past it. Granted (or deemed after seven days) the return is filed
+ * without the late-return penalty; refused, the penalty stands.
+ */
+export const lateFilings = pgTable("late_filings", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** LF-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  /** the tax period the application asks to file late (the return's own id) */
+  period: text("period").notNull(),
+  reasonKind: text("reason_kind", { enum: ["systemFailure", "disaster", "illness", "documents", "other"] }).notNull(),
+  reason: text("reason").notNull(),
+  /** the filing date asked for — after the due date, at most one month after it */
+  requestedDate: date("requested_date", { mode: "string" }).notNull(),
+  status: text("status", { enum: ["draft", "filed", "approved", "rejected"] }).notNull(),
+  filedOn: date("filed_on", { mode: "string" }),
+  filedRef: text("filed_ref"),
+  decidedOn: date("decided_on", { mode: "string" }),
+  commissionerRef: text("commissioner_ref"),
+  /** approved: the filing date actually allowed (at most the one asked for) */
+  grantedDate: date("granted_date", { mode: "string" }),
+  rejectReason: text("reject_reason"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft is stamped, not removed — the mock's id counter moved on, so the row retires its id */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one application number while it lives, and one live application per period — a rejected one frees the period,
+  // exactly as the mock's array did
+  uniqueIndex("late_filings_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  uniqueIndex("late_filings_period_key").on(t.period).where(sql`${t.deletedAt} is null and ${t.status} <> 'rejected'`),
+  index("late_filings_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?status=` filter walks the states */
+  index("late_filings_status_idx").on(t.status),
+  check("late_filings_status_check", sql`${t.status} in ('draft','filed','approved','rejected')`),
+])
+
+/**
+ * R6.6 — a Mushak 9.4 application (s.66, rule 49): amend a submitted return's 9.1 source notes within four years,
+ * declaring that no VAT audit has started. An increase is paid with interest; a decrease becomes a decreasing
+ * adjustment in a later open period, and the application files the amended return itself.
+ */
+export const returnAmendments = pgTable("return_amendments", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** AM-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  /** the tax period of the return being amended */
+  period: text("period").notNull(),
+  reasonKind: text("reason_kind", { enum: ["clerical", "underpaid", "overpaid", "other"] }).notNull(),
+  description: text("description").notNull(),
+  /** the corrections asked for, with their "as filed" values — a record of the change, so it travels as JSONB */
+  corrections: jsonb("corrections").$type<ReturnAmendment["corrections"]>().notNull(),
+  /** the declaration that no VAT audit / enquiry has started for the period */
+  noAudit: boolean("no_audit").notNull(),
+  /** 1 = amends the original return; 2 = amends the first amended return, … */
+  revision: integer("revision").notNull(),
+  status: text("status", { enum: ["draft", "filed", "approved", "rejected", "amended"] }).notNull(),
+  filedOn: date("filed_on", { mode: "string" }),
+  filedRef: text("filed_ref"),
+  decidedOn: date("decided_on", { mode: "string" }),
+  commissionerRef: text("commissioner_ref"),
+  rejectReason: text("reject_reason"),
+  /** decrease: the tax period the Commissioner allows the decreasing adjustment in */
+  adjustPeriod: text("adjust_period"),
+  /**
+   * The amended return once filed — the acknowledgement, the deposit (an increase), the decreasing adjustments
+   * posted (a decrease), the effect and the computation it was filed with. A record, so it travels as JSONB the
+   * way a settlement does.
+   */
+  amended: jsonb("amended").$type<NonNullable<ReturnAmendment["amended"]>>(),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft is stamped, not removed — the mock's id counter moved on, so the row retires its id */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one application number while it lives, and one live application per period — a rejected or already-amended one
+  // frees the period for a later revision, exactly as the mock's array did
+  uniqueIndex("return_amendments_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  uniqueIndex("return_amendments_period_key").on(t.period).where(sql`${t.deletedAt} is null and ${t.status} <> 'rejected' and ${t.status} <> 'amended'`),
+  index("return_amendments_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?status=` filter walks the states */
+  index("return_amendments_status_idx").on(t.status),
+  check("return_amendments_status_check", sql`${t.status} in ('draft','filed','approved','rejected','amended')`),
+  check("return_amendments_revision_check", sql`${t.revision} >= 1`),
 ])
 
 /** What our own UD permits us to import under bond: one row per input, in the order it was entered. */

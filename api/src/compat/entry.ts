@@ -147,6 +147,12 @@ export type { UdSource, UdHead, UdWrite } from "@/app/api/v1/_r62"
 export { bondUdCreate, bondUdUpdate, bondUdSettle, bondUdInUse, bondUdLines, newBondUdId,
   bondUdCsvColumns, bondUdCsvRows } from "@/app/api/v1/_r65"
 export type { BondUdSource, BondUdWrite, BondUdParsed, SettleParsed } from "@/app/api/v1/_r65"
+// R6.6: the Mushak 9.3 (late filing) / 9.4 (amended return) rules, shared the same way — over whichever copy of the
+// returns, the applications and the settings the caller holds. An amend step that decreases the tax also returns the
+// decreasing adjustments it posts (notes 32 / 39), which the native module stores beside the application itself.
+export { lfCheck, lfCreate, lfUpdate, lfRemove, lfAction, amCheck, amCreate, amUpdate, amRemove, amAction,
+  lfRef, amRef, lfCsvColumns, lfCsvRows, amCsvColumns, amCsvRows } from "@/app/api/v1/_r66"
+export type { LateSource, AmendSource, LfWrite, AmWrite, LfData, LateActionData, AmData, AmendActionData } from "@/app/api/v1/_r66"
 export type { UdParsed } from "@/lib/schemas"
 export { bulkImportInput } from "@/lib/schemas"
 export { SERVICES } from "@/lib/r2"

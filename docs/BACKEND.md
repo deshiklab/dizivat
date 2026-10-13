@@ -749,6 +749,41 @@ error codes, the frozen statements and the audit events cannot drift between the
   register, the drawback claims, the export register, the proceeds, the late filings, the penalty, the SD
   eligibility and the 9.4 amendments — and then `compat_state` and the lock are removed and the API can scale out.
 
+## R6.6 — the Mushak 9.3 / 9.4 applications on their own tables
+
+`api/src/modules/returnapps.ts` serves `vat/late-filings` (the register with its totals, `?status=` and its
+CSV), `vat/late-filings/{id}` (one application, its edit and its delete), `vat/late-filings/{id}/action`
+(file / approve / reject), and the same three routes for `vat/return-amendments` (the 9.4 register, one
+amendment, and file / approve / amend). The rules are the mock's own, re-exported by `api/src/compat/entry.ts`
+from `_r66.ts` (`lfCheck`, `lfCreate`, `lfUpdate`, `lfRemove`, `lfAction`, `amCheck`, `amCreate`, `amUpdate`,
+`amRemove`, `amAction` with the register rows `lateFilingRow` / `amendmentRow` and the CSV columns) — the
+7-day and one-month windows of s.65, the four years a 9.4 has to correct a source note, the revision that a
+second application for the same period climbs to, the state a deemed approval flips it to — so the rows, the
+error codes, the frozen effects and the audit events cannot drift between the two runtimes.
+
+- **An application is a row.** `late_filings` holds a 9.3 (the period, the reason, the dates asked and granted,
+  the reference it was filed under) and `return_amendments` a 9.4 — the corrections as JSONB in the order they
+  were entered (note, column, as-filed, corrected, the explanation), the frozen computation the amended return
+  was built from, and the history (JSONB) — the same shape a declaration's amendment certificates travel in: a
+  record of what was asked, not figures anything has to add up.
+- **One number per family, in the database as well.** A partial unique index on `(no)` covers the live rows of
+  each family, so a race that slips past the application check is a 409, not a 500. A deleted draft is stamped
+  `deleted_at`, not removed — the register no longer lists it and its id retires with it, the way every other
+  family's stamped rows do — and an edit or a filing is refused once the application has moved past draft.
+- **The clock is the app's, not the server's.** A filed 9.3 becomes *deemed approved* seven days after it was
+  filed, and the register's `state` flips with it: the module computes that against the fixed `TODAY` the whole
+  app — the mock, the pages, the seed — runs on, exactly as the mock routes do; only the CSV filename stamp uses
+  the real date. The register, `?status=deemed` and the CSVs are byte-identical between the two runtimes on any
+  day the suite is run.
+- **The effects still land where they always did.** A decreasing 9.4 that is approved posts its s.66 adjustment
+  (a `va` number, note 32) in the period it was allowed to, and amending files the amended return (9.1 type C)
+  with its own acknowledgement number — both through the shared mirror write-back, so the adjustments register
+  and the compliance centre, still compat code, read them the moment they are posted, and the write-back adopts
+  whatever a compat handler changes the other way.
+- **13 compat route modules are left, 103 native.** What is left is the rest of the R6 VAT registers — the bond
+  register, the drawback claims, the export register, the proceeds, the penalty and the SD eligibility — and
+  then `compat_state` and the lock are removed and the API can scale out.
+
 ## Tables
 
 | Table | Purpose |
@@ -798,7 +833,9 @@ error codes, the frozen statements and the audit events cannot drift between the
 | `bond_uds` | **R6.5:** our own UD (BGMEA / BKMEA) or UP (Bond Commissionerate) — the number (unique while it lives), the kind and issuer, the dates, the export LC / contract and the buyer behind it, the LC value, the settlement frozen as it was recorded (JSONB), its history (JSONB); `deleted_at` retires the id of one a restored older backup dropped |
 | `bond_ud_inputs` | **R6.5:** the bonded inputs an own UD permits us to import — item, name, HS code, unit, the quantity; primary key (UD, position) |
 | `bond_ud_garments` | **R6.5:** the finished goods the order exports against an own UD — item, name, unit, the quantity; primary key (UD, position) |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2) |
+| `late_filings` | **R6.6:** a Mushak 9.3 late-return application (s.65) — the number (unique while it lives), the period, the reason, the dates, the reference it was filed under, the decision, its history (JSONB); `deleted_at` retires the id of a deleted draft |
+| `return_amendments` | **R6.6:** a Mushak 9.4 amendment application (s.66) — the number (unique while it lives), the period, the revision, the corrections as JSONB (note, column, as-filed, corrected, explanation), the frozen computation the amended return was built from, the filing and decision references, the adjust period of its decreasing adjustment, its history (JSONB); `deleted_at` retires the id of a deleted draft |
+| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2, no own UDs since R6.5, no late filings or return amendments since R6.6) |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the

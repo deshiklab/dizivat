@@ -11,9 +11,10 @@ import { periodLabel, periodOf } from "@/lib/r4"
 import { AMEND_YEARS, amendEffect, amendmentRow, applyCorrections, fieldsOf, lateFilingRow, lateLimits, latestComputation, noteValue } from "@/lib/return-apps"
 import { addMonths } from "@/lib/sd-export"
 import { amendActionInput, amendmentInput, lateActionInput, lateFilingInput, prcMatchInput, prcPostInput, prcReverseInput } from "@/lib/schemas"
-import type { HistoryEntry, LateFiling, PrcBatch, Realisation, ReturnAmendment, VatAdjustment } from "@/lib/types"
+import type { AuditChange, HistoryEntry, LateFiling, PrcBatch, Realisation, ReturnAmendment, VatAdjustment, VatReturn, VatSettings } from "@/lib/types"
+import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
-import { deny, json, problem, withAuth, zodProblem } from "./_lib"
+import { deny, json, problem, ruleResponse, withAuth, zodProblem, type RuleProblem } from "./_lib"
 import { FIRST_RETURN } from "@/lib/mock/seed-r4"
 import { nextNo } from "./_r4"
 
@@ -136,109 +137,107 @@ export const batchReverse = withAuth<Ctx>("doc.approve", async (req, { params },
 
 /* ── Mushak 9.3 — late filing ─────────────────────────────────────────────────────────────────────────────── */
 
-const retOf = (period: string) => db.returns.find((r) => r.period === period)
-const lfRow = (lf: LateFiling) => lateFilingRow(lf, retOf(lf.period), db.vatSettings, TODAY)
-const findLf = async (p: Ctx["params"]) => { const { id } = await p; return db.lateFilings.find((x) => x.id === id || x.no === id) }
-const lfRef = (lf: LateFiling) => `${lf.no} · 9.3 · ${periodLabel(lf.period)}`
+/* ── Mushak 9.3 / 9.4 — shared rules ──────────────────────────────────────────────────────────────────────── */
+
+/**
+ * What the 9.3 rules read: the returns (their due dates and submissions), the applications themselves and the
+ * settings that carry the holidays. The mock's own arrays are the default; the API hands the rules the rows instead.
+ */
+export interface LateSource { returns: VatReturn[]; lateFilings: LateFiling[]; vatSettings: VatSettings }
+/** The same for 9.4, plus the adjustments a decrease posts and the returns it re-files. */
+export interface AmendSource { returns: VatReturn[]; returnAmendments: ReturnAmendment[]; adjustments: VatAdjustment[]; vatSettings: VatSettings }
+const lateSrc = (): LateSource => ({ returns: db.returns, lateFilings: db.lateFilings, vatSettings: db.vatSettings })
+const amendSrc = (): AmendSource => ({ returns: db.returns, returnAmendments: db.returnAmendments, adjustments: db.adjustments, vatSettings: db.vatSettings })
+const srcRet = (src: LateSource | AmendSource, period: string) => src.returns.find((r) => r.period === period)
+
+/** The audit trail keeps the application's number and period as its reference. */
+export const lfRef = (lf: LateFiling) => `${lf.no} · 9.3 · ${periodLabel(lf.period)}`
+export const amRef = (a: ReturnAmendment) => `${a.no} · 9.4 · ${periodLabel(a.period)}`
+
+/** What a write hands back: the application as it stands, what the register shows, and what the audit trail says. */
+export type LfWrite = RuleProblem | {
+  lf: LateFiling; row: ReturnType<typeof lateFilingRow>; at: string
+  action: "created" | "edited" | "submitted" | "approved" | "cancelled"; ref: string; changes?: AuditChange[]; note?: string
+}
+export type AmWrite = RuleProblem | {
+  a: ReturnAmendment; row: ReturnType<typeof amendmentRow>; at: string
+  action: "created" | "edited" | "submitted" | "approved" | "cancelled"; ref: string; changes?: AuditChange[]; note?: string
+  /** the decreasing adjustments an amend step posts (s.55 read with s.66) — the caller stores and audits them */
+  adjustments?: VatAdjustment[]
+}
+export type LfData = ReturnType<typeof lateFilingInput.parse>
+export type LateActionData = ReturnType<typeof lateActionInput.parse>
+export type AmData = ReturnType<typeof amendmentInput.parse>
+export type AmendActionData = ReturnType<typeof amendActionInput.parse>
+
+/** Next LF-MMYY#### / AM-MMYY#### and the id that goes with it (MMYY of today; the counter runs across months and
+ *  is never reused, and a deleted draft retires its id rather than freeing it). */
+export const newLateFilingTag = (stamp: string) => { const n = ++db.seq.lateFiling; return { id: `lf${n}-${stamp}`, no: `LF-${mmyy()}${String(n).padStart(4, "0")}` } }
+export const newAmendmentTag = (stamp: string) => { const n = ++db.seq.amendment; return { id: `am${n}-${stamp}`, no: `AM-${mmyy()}${String(n).padStart(4, "0")}` } }
 
 /** Period / requested-date checks shared by create and edit. */
-function lfCheck(d: ReturnType<typeof lateFilingInput.parse>, selfId?: string): Record<string, string[]> | null {
+export function lfCheck(d: LfData, src: LateSource, selfId?: string): Record<string, string[]> | null {
   const errors: Record<string, string[]> = {}
   if (d.period < FIRST_RETURN || d.period > CURRENT) errors.period = ["outOfRange"]
-  else if (retOf(d.period)?.status === "submitted") errors.period = ["alreadySubmitted"]
-  else if (db.lateFilings.some((x) => x.id !== selfId && x.period === d.period && x.status !== "rejected")) errors.period = ["duplicate"]
+  else if (srcRet(src, d.period)?.status === "submitted") errors.period = ["alreadySubmitted"]
+  else if (src.lateFilings.some((x) => x.id !== selfId && x.period === d.period && x.status !== "rejected")) errors.period = ["duplicate"]
   if (!errors.period) {
-    const lim = lateLimits(d.period, db.vatSettings)
+    const lim = lateLimits(d.period, src.vatSettings)
     if (d.requestedDate <= lim.due) errors.requestedDate = ["notAfterDue"]
     else if (d.requestedDate > lim.maxDate) errors.requestedDate = ["beyondMonth"]
   }
   return Object.keys(errors).length ? errors : null
 }
 
-/** GET /vat/late-filings — ?status= (draft|filed|approved|deemed|rejected), ?format=csv. */
-export const lateGet = withAuth(null, async (req) => {
-  const sp = new URL(req.url).searchParams
-  const status = sp.get("status")
-  const rows = db.lateFilings.map(lfRow).filter((r) => !status || r.state === status).sort((a, b) => (a.period < b.period ? 1 : a.period > b.period ? -1 : a.no < b.no ? 1 : -1))
-  if (sp.get("format") === "csv") {
-    return csvResponse(toCSV(rows, [
-      { key: "no", label: "Application" }, { key: "period", label: "Tax period", get: (r) => periodLabel(r.period) }, { key: "due", label: "Due date" },
-      { key: "requestedDate", label: "Requested to" }, { key: "state", label: "Status" }, { key: "filedOn", label: "Filed on" }, { key: "filedRef", label: "Reference" },
-      { key: "decidedOn", label: "Decided on" }, { key: "effectiveDate", label: "Return allowed to" }, { key: "reasonKind", label: "Reason" }, { key: "reason", label: "Details" },
-    ]), `mushak-9.3-${TODAY}.csv`)
-  }
-  await delay(60)
-  return json({ rows, totals: { pending: rows.filter((r) => r.state === "filed").length, allowed: rows.filter((r) => r.state === "approved" || r.state === "deemed").length, rejected: rows.filter((r) => r.state === "rejected").length } })
-})
-
-export const latePost = withAuth("doc.create", async (req, _ctx, user) => {
-  const parsed = lateFilingInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const bad = lfCheck(d)
-  if (bad) return invalid(bad)
+/**
+ * Creating one: the period and the requested date have to pass, then the draft opens. Pushed into `src`, which is
+ * the mock's array or, in the API, the rows that carry the collection.
+ */
+export function lfCreate(d: LfData, user: User, today: string, src: LateSource = lateSrc(), stamp = Date.now().toString(36)): LfWrite {
+  const bad = lfCheck(d, src)
+  if (bad) return { status: 422, title: "Validation failed", errors: bad }
   const at = new Date().toISOString()
-  db.seq.lateFiling++
+  const { id, no } = newLateFilingTag(stamp)
   const lf: LateFiling = {
-    id: `lf${db.seq.lateFiling}-${Date.now().toString(36)}`, no: `LF-${mmyy()}${String(db.seq.lateFiling).padStart(4, "0")}`, period: d.period, reasonKind: d.reasonKind,
-    reason: d.reason, requestedDate: d.requestedDate, status: "draft", createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
+    id, no, period: d.period, reasonKind: d.reasonKind, reason: d.reason, requestedDate: d.requestedDate, status: "draft",
+    createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
   }
-  db.lateFilings.push(lf)
-  recordAudit({ at, actor: user, entity: "lateFiling", entityId: lf.id, ref: lfRef(lf), action: "created" })
-  return json(lfRow(lf), { status: 201 })
-})
+  src.lateFilings.push(lf)
+  return { lf, row: lateFilingRow(lf, srcRet(src, lf.period), src.vatSettings, today), at, action: "created", ref: lfRef(lf) }
+}
 
-export const lateOne = withAuth<Ctx>(null, async (_req, { params }) => {
-  const lf = await findLf(params)
-  return lf ? json(lfRow(lf)) : problem(404, "Application not found")
-})
-
-export const latePut = withAuth<Ctx>("doc.edit", async (req, { params }, user) => {
-  const lf = await findLf(params)
-  if (!lf) return problem(404, "Application not found")
-  if (lf.status !== "draft") return problem(409, `Only a draft application can be changed — ${lf.no} is ${lf.status}.`)
-  const parsed = lateFilingInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const bad = lfCheck(parsed.data, lf.id)
-  if (bad) return invalid(bad)
+/** Editing one — the same checks against the world as it stands now. The caller has already refused a filed one. */
+export function lfUpdate(lf: LateFiling, d: LfData, user: User, today: string, src: LateSource = lateSrc()): LfWrite {
+  const bad = lfCheck(d, src, lf.id)
+  if (bad) return { status: 422, title: "Validation failed", errors: bad }
   const before = structuredClone(lf)
-  Object.assign(lf, parsed.data)
+  Object.assign(lf, d)
   const at = push(lf, user.name, "edited")
-  recordAudit({ at, actor: user, entity: "lateFiling", entityId: lf.id, ref: lfRef(lf), action: "edited", changes: diff(before, lf, ["period", "reasonKind", "reason", "requestedDate"]) })
-  return json(lfRow(lf))
-})
+  return { lf, row: lateFilingRow(lf, srcRet(src, lf.period), src.vatSettings, today), at, action: "edited", ref: lfRef(lf),
+    changes: diff(before, lf, ["period", "reasonKind", "reason", "requestedDate"]) }
+}
 
-export const lateDelete = withAuth<Ctx>("doc.delete", async (_req, { params }, user) => {
-  const lf = await findLf(params)
-  if (!lf) return problem(404, "Application not found")
-  if (lf.status !== "draft") return problem(409, `Only a draft application can be deleted — ${lf.no} is ${lf.status}.`)
-  db.lateFilings.splice(db.lateFilings.indexOf(lf), 1)
-  recordAudit({ actor: user, entity: "lateFiling", entityId: lf.id, ref: lfRef(lf), action: "deleted" })
-  return json({ ok: true, id: lf.id })
-})
+/** Deleting a draft: it leaves the collection, its id retiring with it. The caller has already refused a filed one. */
+export function lfRemove(lf: LateFiling, src: LateSource = lateSrc()) {
+  const i = src.lateFilings.indexOf(lf)
+  if (i >= 0) src.lateFilings.splice(i, 1)
+}
 
 /**
- * POST /vat/late-filings/:id/action — {action, date, ref?, grantedDate?, reason?}
+ * Acting on one —
  *  file (draft → filed): on or before 7 days after the period ends, return not submitted;
  *  approve (filed / deemed → approved): granted date after the due date, at most the date asked for;
  *  reject (filed → rejected, reason; not once deemed approved).
+ * The caller has already checked the permission and the from-state.
  */
-export const lateAction = withAuth<Ctx>("doc.create", async (req, { params }, user) => {
-  const lf = await findLf(params)
-  if (!lf) return problem(404, "Application not found")
-  const parsed = lateActionInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  if (d.action !== "file") { const no = deny(user, "doc.approve"); if (no) return no }
-  const row = lfRow(lf)
-  const from = { file: ["draft"], approve: ["filed", "deemed"], reject: ["filed"] }[d.action]
-  if (!from.includes(row.state)) return problem(409, row.state === "deemed" && d.action === "reject" ? `${lf.no} was deemed approved on ${row.deemedOn} — the Commissioner did not decide within 7 days.` : `Cannot ${d.action} a ${row.state} application (${lf.no}).`)
+export function lfAction(lf: LateFiling, d: LateActionData, user: User, today: string, src: LateSource = lateSrc()): LfWrite {
+  const row = lateFilingRow(lf, srcRet(src, lf.period), src.vatSettings, today)
   const errors: Record<string, string[]> = {}
-  if (d.date > TODAY) errors.date = ["afterToday"]
+  if (d.date > today) errors.date = ["afterToday"]
   let note = ""
   if (d.action === "file") {
     if (!errors.date && d.date > row.applyBy) errors.date = ["afterApplyBy"]
-    if (retOf(lf.period)?.status === "submitted") errors.period = ["alreadySubmitted"]
+    if (srcRet(src, lf.period)?.status === "submitted") errors.period = ["alreadySubmitted"]
     if (!Object.keys(errors).length) { lf.status = "filed"; lf.filedOn = d.date; lf.filedRef = d.ref || undefined; note = `Filed${d.ref ? ` — ${d.ref}` : ""}` }
   } else {
     if (!errors.date && lf.filedOn && d.date < lf.filedOn) errors.date = ["beforePrevious"]
@@ -252,28 +251,20 @@ export const lateAction = withAuth<Ctx>("doc.create", async (req, { params }, us
       if (!Object.keys(errors).length) { lf.status = "rejected"; lf.decidedOn = d.date; lf.commissionerRef = d.ref || undefined; lf.rejectReason = d.reason; note = `Refused — ${d.reason}` }
     }
   }
-  if (Object.keys(errors).length) return invalid(errors)
-  const action: HistoryEntry["action"] = d.action === "file" ? "submitted" : d.action === "approve" ? "approved" : "cancelled"
+  if (Object.keys(errors).length) return { status: 422, title: "Validation failed", errors }
+  const action = d.action === "file" ? "submitted" : d.action === "approve" ? "approved" : "cancelled" as const
   const at = push(lf, user.name, action, note)
-  recordAudit({ at, actor: user, entity: "lateFiling", entityId: lf.id, ref: lfRef(lf), action, note })
-  return json(lfRow(lf))
-})
+  return { lf, row: lateFilingRow(lf, srcRet(src, lf.period), src.vatSettings, today), at, action, ref: lfRef(lf), note }
+}
 
-/* ── Mushak 9.4 — amended return ──────────────────────────────────────────────────────────────────────────── */
-
-const amRef = (a: ReturnAmendment) => `${a.no} · 9.4 · ${periodLabel(a.period)}`
-const amRow = (a: ReturnAmendment) => amendmentRow(a, retOf(a.period)!, db.returnAmendments, db.vatSettings, TODAY)
-const findAm = async (p: Ctx["params"]) => { const { id } = await p; return db.returnAmendments.find((x) => x.id === id || x.no === id) }
-
-type AmData = ReturnType<typeof amendmentInput.parse>
 /** Period, deadline and correction checks; returns the corrections with their "as filed" values. */
-function amCheck(d: AmData, self?: ReturnAmendment): { errors?: Record<string, string[]>; corrections?: ReturnAmendment["corrections"]; revision?: number } {
+export function amCheck(d: AmData, src: AmendSource, self?: ReturnAmendment): { errors?: Record<string, string[]>; corrections?: ReturnAmendment["corrections"]; revision?: number } {
   const errors: Record<string, string[]> = {}
-  const ret = retOf(d.period)
+  const ret = srcRet(src, d.period)
   if (!ret || ret.status !== "submitted" || !ret.snapshot) return { errors: { period: ["notSubmitted"] } }
   if (TODAY > addMonths(ret.submissionDate!, AMEND_YEARS * 12)) return { errors: { period: ["tooLate"] } }
-  if (db.returnAmendments.some((x) => x.id !== self?.id && x.period === d.period && x.status !== "rejected" && x.status !== "amended")) return { errors: { period: ["duplicate"] } }
-  const base = latestComputation(ret, db.returnAmendments)!
+  if (src.returnAmendments.some((x) => x.id !== self?.id && x.period === d.period && x.status !== "rejected" && x.status !== "amended")) return { errors: { period: ["duplicate"] } }
+  const base = latestComputation(ret, src.returnAmendments)!
   const seen = new Set<string>()
   const corrections = d.corrections.map((c, i) => {
     const k = `corrections.${i}`
@@ -288,96 +279,60 @@ function amCheck(d: AmData, self?: ReturnAmendment): { errors?: Record<string, s
   return { corrections, revision: self?.revision ?? base.revision }
 }
 
-/** GET /vat/return-amendments — ?status=, ?format=csv (one row per correction). */
-export const amendGet = withAuth(null, async (req) => {
-  const sp = new URL(req.url).searchParams
-  const status = sp.get("status")
-  const rows = db.returnAmendments.filter((a) => retOf(a.period)).map(amRow).filter((r) => !status || r.state === status)
-    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-  if (sp.get("format") === "csv") {
-    const flat = rows.flatMap((r) => r.corrections.map((c) => ({ ...c, no: r.no, period: periodLabel(r.period), state: r.state, reasonKind: r.reasonKind, deltaVat: r.effect.deltaVat, deltaSd: r.effect.deltaSd, toPay: r.effect.toPay, filedOn: r.filedOn ?? "", filedRef: r.filedRef ?? "" })))
-    return csvResponse(toCSV(flat, [
-      { key: "no", label: "Application" }, { key: "period", label: "Tax period" }, { key: "state", label: "Status" }, { key: "reasonKind", label: "Reason" },
-      { key: "note", label: "9.1 note" }, { key: "field", label: "Column" }, { key: "from", label: "As filed" }, { key: "to", label: "Corrected" }, { key: "explanation", label: "Explanation" },
-      { key: "deltaVat", label: "Net VAT change" }, { key: "deltaSd", label: "Net SD change" }, { key: "toPay", label: "To pay (incl. interest)" }, { key: "filedOn", label: "Filed on" }, { key: "filedRef", label: "Reference" },
-    ]), `mushak-9.4-${TODAY}.csv`)
-  }
-  await delay(60)
-  return json({ rows, totals: { pending: rows.filter((r) => r.state === "filed").length, toFile: rows.filter((r) => r.state === "approved" || r.state === "deemed").length, amended: rows.filter((r) => r.state === "amended").length, paid: round2(rows.reduce((a, r) => a + (r.amended?.payment?.amount ?? 0), 0)) } })
-})
-
-export const amendPost = withAuth("doc.create", async (req, _ctx, user) => {
-  const parsed = amendmentInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  const c = amCheck(d)
-  if (c.errors) return invalid(c.errors)
+/** Creating one: the period and every correction have to pass, then the draft opens with its "as filed" values.
+ *  Pushed into `src`, which is the mock's array or, in the API, the rows that carry the collection. */
+export function amCreate(d: AmData, user: User, today: string, src: AmendSource = amendSrc(), stamp = Date.now().toString(36)): AmWrite {
+  const c = amCheck(d, src)
+  if (c.errors) return { status: 422, title: "Validation failed", errors: c.errors }
   const at = new Date().toISOString()
-  db.seq.amendment++
+  const { id, no } = newAmendmentTag(stamp)
   const a: ReturnAmendment = {
-    id: `am${db.seq.amendment}-${Date.now().toString(36)}`, no: `AM-${mmyy()}${String(db.seq.amendment).padStart(4, "0")}`, period: d.period, reasonKind: d.reasonKind,
-    description: d.description, corrections: c.corrections!, noAudit: d.noAudit, revision: c.revision!, status: "draft", createdBy: user.name, createdAt: at,
-    history: [{ at, by: user.name, action: "created" }],
+    id, no, period: d.period, reasonKind: d.reasonKind, description: d.description, corrections: c.corrections!, noAudit: d.noAudit,
+    revision: c.revision!, status: "draft", createdBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created" }],
   }
-  db.returnAmendments.push(a)
-  recordAudit({ at, actor: user, entity: "returnAmendment", entityId: a.id, ref: amRef(a), action: "created", note: `${a.corrections.length} correction(s)` })
-  return json(amRow(a), { status: 201 })
-})
+  src.returnAmendments.push(a)
+  return { a, row: amendmentRow(a, srcRet(src, a.period)!, src.returnAmendments, src.vatSettings, today), at, action: "created", ref: amRef(a), note: `${a.corrections.length} correction(s)` }
+}
 
-export const amendOne = withAuth<Ctx>(null, async (_req, { params }) => {
-  const a = await findAm(params)
-  return a && retOf(a.period) ? json(amRow(a)) : problem(404, "Application not found")
-})
-
-export const amendPut = withAuth<Ctx>("doc.edit", async (req, { params }, user) => {
-  const a = await findAm(params)
-  if (!a) return problem(404, "Application not found")
-  if (a.status !== "draft") return problem(409, `Only a draft application can be changed — ${a.no} is ${a.status}.`)
-  const parsed = amendmentInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const c = amCheck(parsed.data, a.period === parsed.data.period ? a : undefined)
-  if (c.errors) return invalid(c.errors)
+/** Editing one — the same checks against the world as it stands now, against its own revision when the period
+ *  stays. The caller has already refused a filed one. */
+export function amUpdate(a: ReturnAmendment, d: AmData, user: User, today: string, src: AmendSource = amendSrc()): AmWrite {
+  const c = amCheck(d, src, a.period === d.period ? a : undefined)
+  if (c.errors) return { status: 422, title: "Validation failed", errors: c.errors }
   const before = structuredClone(a)
-  Object.assign(a, { period: parsed.data.period, reasonKind: parsed.data.reasonKind, description: parsed.data.description, noAudit: parsed.data.noAudit, corrections: c.corrections!, revision: c.revision! })
+  Object.assign(a, { period: d.period, reasonKind: d.reasonKind, description: d.description, noAudit: d.noAudit, corrections: c.corrections!, revision: c.revision! })
   const at = push(a, user.name, "edited")
-  recordAudit({ at, actor: user, entity: "returnAmendment", entityId: a.id, ref: amRef(a), action: "edited", changes: diff(before, a, ["period", "reasonKind", "description"]) })
-  return json(amRow(a))
-})
+  return { a, row: amendmentRow(a, srcRet(src, a.period)!, src.returnAmendments, src.vatSettings, today), at, action: "edited", ref: amRef(a),
+    changes: diff(before, a, ["period", "reasonKind", "description"]) }
+}
 
-export const amendDelete = withAuth<Ctx>("doc.delete", async (_req, { params }, user) => {
-  const a = await findAm(params)
-  if (!a) return problem(404, "Application not found")
-  if (a.status !== "draft") return problem(409, `Only a draft application can be deleted — ${a.no} is ${a.status}.`)
-  db.returnAmendments.splice(db.returnAmendments.indexOf(a), 1)
-  recordAudit({ actor: user, entity: "returnAmendment", entityId: a.id, ref: amRef(a), action: "deleted" })
-  return json({ ok: true, id: a.id })
-})
+/** Deleting a draft: it leaves the collection, its id retiring with it. The caller has already refused a filed one. */
+export function amRemove(a: ReturnAmendment, src: AmendSource = amendSrc()) {
+  const i = src.returnAmendments.indexOf(a)
+  if (i >= 0) src.returnAmendments.splice(i, 1)
+}
 
 /**
- * POST /vat/return-amendments/:id/action — {action, date, ref?, reason?, adjustPeriod?, challanNo?, challanDate?, amount?}
+ * Acting on one —
  *  file (draft → filed): no earlier than the return's submission, within 4 years of it;
- *  approve (filed / deemed → approved): a decrease needs the tax period of the decreasing adjustment (later than the
- *    amended period, not yet submitted; default the current period);
+ *  approve (filed / deemed → approved): a decrease needs the tax period of the decreasing adjustment;
  *  reject (filed → rejected, reason; not once a decrease is deemed approved);
  *  amend (approved / deemed → amended): files the amended return — an increase needs the treasury deposit of the
- *    difference + interest to the deposit date; a decrease posts the decreasing adjustment(s) in the allowed period.
+ *    difference + interest; a decrease posts the decreasing adjustment(s) in the allowed period, returned in the
+ *    write for the caller to store (they land in `src.adjustments` here, which is the mock's array).
+ * The caller has already checked the permission and the from-state.
  */
-export const amendAction = withAuth<Ctx>("doc.create", async (req, { params }, user) => {
-  const a = await findAm(params)
-  const ret = a && retOf(a.period)
-  if (!a || !ret) return problem(404, "Application not found")
-  const parsed = amendActionInput.safeParse(await req.json().catch(() => ({})))
-  if (!parsed.success) return zodProblem(parsed.error)
-  const d = parsed.data
-  if (d.action !== "file") { const no = deny(user, "doc.approve"); if (no) return no }
-  const row = amRow(a)
-  const from = { file: ["draft"], approve: ["filed", "deemed"], reject: ["filed"], amend: ["approved", "deemed"] }[d.action]
-  if (!from.includes(row.state)) return problem(409, row.state === "deemed" && d.action === "reject" ? `${a.no} was deemed approved on ${row.deemedOn} — the Commissioner did not decide within 30 days.` : `Cannot ${d.action} a ${row.state} application (${a.no}).`)
+export function amAction(a: ReturnAmendment, d: AmendActionData, user: User, today: string, src: AmendSource = amendSrc()): AmWrite {
+  const ret = srcRet(src, a.period)!
+  const row = amendmentRow(a, ret, src.returnAmendments, src.vatSettings, today)
   const errors: Record<string, string[]> = {}
-  if (d.date > TODAY) errors.date = ["afterToday"]
+  if (d.date > today) errors.date = ["afterToday"]
   const dec = row.effect.direction === "decrease"
-  const adjustOk = (p: string) => p > a.period && p <= CURRENT && retOf(p)?.status !== "submitted"
+  const adjustOk = (p: string) => p > a.period && p <= CURRENT && srcRet(src, p)?.status !== "submitted"
   let note = ""
+  let payment: NonNullable<ReturnAmendment["amended"]>["payment"]
+  let effect = row.effect
+  const adjustments: VatAdjustment[] = []
   if (d.action === "file") {
     if (!errors.date && d.date < row.original.submissionDate) errors.date = ["beforeReturn"]
     else if (!errors.date && d.date > row.applyBy) errors.date = ["tooLate"]
@@ -398,16 +353,14 @@ export const amendAction = withAuth<Ctx>("doc.create", async (req, { params }, u
     // amended return
     const prev = a.decidedOn ?? row.deemedOn ?? a.filedOn
     if (!errors.date && prev && d.date < prev) errors.date = ["beforePrevious"]
-    const base = latestComputation(ret, db.returnAmendments, a.revision)!.computation
+    const base = latestComputation(ret, src.returnAmendments, a.revision)!.computation
     const corrected = applyCorrections(base, a.corrections)
-    let payment: NonNullable<ReturnAmendment["amended"]>["payment"]
-    let effect = row.effect
     const adj = a.adjustPeriod ?? d.adjustPeriod ?? CURRENT
     if (row.effect.direction === "increase") {
       const paidOn = d.challanDate ?? d.date
-      effect = amendEffect(base, corrected, { period: a.period, settings: db.vatSettings, submittedOn: ret.submissionDate!, paidOn })
+      effect = amendEffect(base, corrected, { period: a.period, settings: src.vatSettings, submittedOn: ret.submissionDate!, paidOn })
       if (!d.challanNo) errors.challanNo = ["required"]
-      if (paidOn > TODAY) errors.challanDate = ["afterToday"]
+      if (paidOn > today) errors.challanDate = ["afterToday"]
       else if (prev && paidOn < prev) errors.challanDate = ["beforePrevious"]
       if (!d.amount) errors.amount = ["required"]
       else if (d.amount < effect.toPay - 0.005) errors.amount = ["belowDue"]
@@ -422,27 +375,195 @@ export const amendAction = withAuth<Ctx>("doc.create", async (req, { params }, u
         for (const [kind, amount] of [["otherDecrease", effect.decreaseVat], ["sdDecrease", effect.decreaseSd]] as const) {
           if (amount <= 0.004) continue
           db.seq.adjustment++
-          const no = nextNo("VA", "adjustment", db.adjustments, d.date)
+          const no = nextNo("VA", "adjustment", src.adjustments, d.date)
           const va: VatAdjustment = {
             id: `va${db.seq.adjustment}`, no, kind, note: kind === "otherDecrease" ? 32 : 39, issueDate: d.date, taxPeriod: adj, amount: round2(amount),
             description: `Amended return ${periodLabel(a.period)} (Mushak 9.4 ${a.no}) — net ${kind === "otherDecrease" ? "VAT" : "SD"} over-declared`, reference: a.commissionerRef ?? a.no,
             process: "Approved", issuedBy: user.name, createdAt: at, history: [{ at, by: user.name, action: "created", note: `From ${a.no}` }, { at, by: user.name, action: "approved", note: `Allowed by the Commissioner (s.66)` }],
           }
-          db.adjustments.push(va)
+          src.adjustments.push(va)
           adjustmentIds.push(va.id)
-          recordAudit({ at, actor: user, entity: "adjustment", entityId: va.id, ref: no, action: "approved", note: `${a.no} · ${periodLabel(adj)} · ৳ ${va.amount.toFixed(2)}` })
         }
         a.adjustPeriod = adj
       }
-      const ackNo = d.ref || `NBR-91A-${a.period.replace("-", "")}-${String(4_000_000 + db.returnAmendments.length * 1_337 + a.revision).padStart(7, "0")}`
+      const ackNo = d.ref || `NBR-91A-${a.period.replace("-", "")}-${String(4_000_000 + src.returnAmendments.length * 1_337 + a.revision).padStart(7, "0")}`
       a.status = "amended"
       a.amended = { date: d.date, ackNo, ...(payment ? { payment } : {}), ...(adjustmentIds.length ? { adjustmentIds } : {}), effect, computation }
       note = `Amended return filed — ${ackNo}${payment ? ` · ৳ ${payment.amount.toFixed(2)} deposited (challan ${payment.challanNo})` : ""}${adjustmentIds.length ? ` · decreasing adjustment in ${periodLabel(adj)}` : ""}`
+      adjustments.push(...src.adjustments.filter((x) => adjustmentIds.includes(x.id)))
     }
   }
-  if (Object.keys(errors).length) return invalid(errors)
-  const action: HistoryEntry["action"] = d.action === "file" ? "submitted" : d.action === "approve" ? "approved" : d.action === "reject" ? "cancelled" : "edited"
+  if (Object.keys(errors).length) return { status: 422, title: "Validation failed", errors }
+  const action = d.action === "file" ? "submitted" : d.action === "approve" ? "approved" : d.action === "reject" ? "cancelled" : "edited" as const
   const at = push(a, user.name, action, note)
-  recordAudit({ at, actor: user, entity: "returnAmendment", entityId: a.id, ref: amRef(a), action, note })
-  return json(amRow(a))
+  return { a, row: amendmentRow(a, ret, src.returnAmendments, src.vatSettings, today), at, action, ref: amRef(a), note, ...(adjustments.length ? { adjustments } : {}) }
+}
+
+/** The 9.3 register's CSV columns and rows — shared with the PostgreSQL build's controller. */
+export const lfCsvColumns = [
+  { key: "no", label: "Application" }, { key: "period", label: "Tax period", get: (r: { period: string }) => periodLabel(r.period) }, { key: "due", label: "Due date" },
+  { key: "requestedDate", label: "Requested to" }, { key: "state", label: "Status" }, { key: "filedOn", label: "Filed on" }, { key: "filedRef", label: "Reference" },
+  { key: "decidedOn", label: "Decided on" }, { key: "effectiveDate", label: "Return allowed to" }, { key: "reasonKind", label: "Reason" }, { key: "reason", label: "Details" },
+]
+export const lfCsvRows = (rows: ReturnType<typeof lateFilingRow>[]) => rows
+
+/** The 9.4 register's CSV: one row per correction, the application's own fields repeated beside each. */
+export const amCsvColumns = [
+  { key: "no", label: "Application" }, { key: "period", label: "Tax period" }, { key: "state", label: "Status" }, { key: "reasonKind", label: "Reason" },
+  { key: "note", label: "9.1 note" }, { key: "field", label: "Column" }, { key: "from", label: "As filed" }, { key: "to", label: "Corrected" }, { key: "explanation", label: "Explanation" },
+  { key: "deltaVat", label: "Net VAT change" }, { key: "deltaSd", label: "Net SD change" }, { key: "toPay", label: "To pay (incl. interest)" }, { key: "filedOn", label: "Filed on" }, { key: "filedRef", label: "Reference" },
+]
+export const amCsvRows = (rows: ReturnType<typeof amendmentRow>[]) => rows.flatMap((r) => r.corrections.map((c) => ({ ...c, no: r.no, period: periodLabel(r.period), state: r.state, reasonKind: r.reasonKind, deltaVat: r.effect.deltaVat, deltaSd: r.effect.deltaSd, toPay: r.effect.toPay, filedOn: r.filedOn ?? "", filedRef: r.filedRef ?? "" })))
+
+/* ── Mushak 9.3 / 9.4 — the mock's routes ────────────────────────────────────────────────────────────────── */
+
+const findLf = async (p: Ctx["params"]) => { const { id } = await p; return db.lateFilings.find((x) => x.id === id || x.no === id) }
+const findAm = async (p: Ctx["params"]) => { const { id } = await p; return db.returnAmendments.find((x) => x.id === id || x.no === id) }
+/** file is the applicant's own step; the Commissioner's three need the approval permission. */
+const amDecides = (d: { action: string }) => d.action !== "file"
+
+/** GET /vat/late-filings — ?status= (draft|filed|approved|deemed|rejected), ?format=csv. */
+export const lateGet = withAuth(null, async (req) => {
+  const sp = new URL(req.url).searchParams
+  const status = sp.get("status")
+  const rows = db.lateFilings.map((lf) => lateFilingRow(lf, db.returns.find((r) => r.period === lf.period), db.vatSettings, TODAY))
+    .filter((r) => !status || r.state === status).sort((a, b) => (a.period < b.period ? 1 : a.period > b.period ? -1 : a.no < b.no ? 1 : -1))
+  if (sp.get("format") === "csv") return csvResponse(toCSV(lfCsvRows(rows), lfCsvColumns), `mushak-9.3-${TODAY}.csv`)
+  await delay(60)
+  return json({ rows, totals: { pending: rows.filter((r) => r.state === "filed").length, allowed: rows.filter((r) => r.state === "approved" || r.state === "deemed").length, rejected: rows.filter((r) => r.state === "rejected").length } })
+})
+
+/** POST /vat/late-filings — new draft application. */
+export const latePost = withAuth("doc.create", async (req, _ctx, user) => {
+  const parsed = lateFilingInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const w = lfCreate(parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ at: w.at, actor: user, entity: "lateFiling", entityId: w.lf.id, ref: w.ref, action: "created" })
+  return json(w.row, { status: 201 })
+})
+
+/** GET /vat/late-filings/:id — one application. */
+export const lateOne = withAuth<Ctx>(null, async (_req, { params }) => {
+  const lf = await findLf(params)
+  return lf ? json(lateFilingRow(lf, db.returns.find((r) => r.period === lf.period), db.vatSettings, TODAY)) : problem(404, "Application not found")
+})
+
+/** PUT /vat/late-filings/:id — edit a draft (the 409 comes before the body is parsed, as the contract pins). */
+export const latePut = withAuth<Ctx>("doc.edit", async (req, { params }, user) => {
+  const lf = await findLf(params)
+  if (!lf) return problem(404, "Application not found")
+  if (lf.status !== "draft") return problem(409, `Only a draft application can be changed — ${lf.no} is ${lf.status}.`)
+  const parsed = lateFilingInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const w = lfUpdate(lf, parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ at: w.at, actor: user, entity: "lateFiling", entityId: w.lf.id, ref: w.ref, action: "edited", changes: w.changes })
+  return json(w.row)
+})
+
+/** DELETE /vat/late-filings/:id — remove a draft. */
+export const lateDelete = withAuth<Ctx>("doc.delete", async (_req, { params }, user) => {
+  const lf = await findLf(params)
+  if (!lf) return problem(404, "Application not found")
+  if (lf.status !== "draft") return problem(409, `Only a draft application can be deleted — ${lf.no} is ${lf.status}.`)
+  lfRemove(lf)
+  recordAudit({ actor: user, entity: "lateFiling", entityId: lf.id, ref: lfRef(lf), action: "deleted" })
+  return json({ ok: true, id: lf.id })
+})
+
+/**
+ * POST /vat/late-filings/:id/action — {action, date, ref?, grantedDate?, reason?}; the from-state is refused
+ * before the rules run (a deemed approval cannot be rejected, with its own message).
+ */
+export const lateAction = withAuth<Ctx>("doc.create", async (req, { params }, user) => {
+  const lf = await findLf(params)
+  if (!lf) return problem(404, "Application not found")
+  const parsed = lateActionInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const d = parsed.data
+  if (amDecides(d)) { const no = deny(user, "doc.approve"); if (no) return no }
+  const row = lateFilingRow(lf, db.returns.find((r) => r.period === lf.period), db.vatSettings, TODAY)
+  const from = { file: ["draft"], approve: ["filed", "deemed"], reject: ["filed"] }[d.action]
+  if (!from.includes(row.state)) return problem(409, row.state === "deemed" && d.action === "reject" ? `${lf.no} was deemed approved on ${row.deemedOn} — the Commissioner did not decide within 7 days.` : `Cannot ${d.action} a ${row.state} application (${lf.no}).`)
+  const w = lfAction(lf, d, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ at: w.at, actor: user, entity: "lateFiling", entityId: w.lf.id, ref: w.ref, action: w.action, note: w.note })
+  return json(w.row)
+})
+
+/** GET /vat/return-amendments — ?status=, ?format=csv (one row per correction). */
+export const amendGet = withAuth(null, async (req) => {
+  const sp = new URL(req.url).searchParams
+  const status = sp.get("status")
+  const rows = db.returnAmendments.filter((a) => db.returns.some((r) => r.period === a.period))
+    .map((a) => amendmentRow(a, db.returns.find((r) => r.period === a.period)!, db.returnAmendments, db.vatSettings, TODAY))
+    .filter((r) => !status || r.state === status)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+  if (sp.get("format") === "csv") return csvResponse(toCSV(amCsvRows(rows), amCsvColumns), `mushak-9.4-${TODAY}.csv`)
+  await delay(60)
+  return json({ rows, totals: { pending: rows.filter((r) => r.state === "filed").length, toFile: rows.filter((r) => r.state === "approved" || r.state === "deemed").length, amended: rows.filter((r) => r.state === "amended").length, paid: round2(rows.reduce((a, r) => a + (r.amended?.payment?.amount ?? 0), 0)) } })
+})
+
+/** POST /vat/return-amendments — new draft application with its corrections. */
+export const amendPost = withAuth("doc.create", async (req, _ctx, user) => {
+  const parsed = amendmentInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const w = amCreate(parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ at: w.at, actor: user, entity: "returnAmendment", entityId: w.a.id, ref: w.ref, action: "created", note: w.note })
+  return json(w.row, { status: 201 })
+})
+
+/** GET /vat/return-amendments/:id — one application. */
+export const amendOne = withAuth<Ctx>(null, async (_req, { params }) => {
+  const a = await findAm(params)
+  return a && db.returns.some((r) => r.period === a.period) ? json(amendmentRow(a, db.returns.find((r) => r.period === a.period)!, db.returnAmendments, db.vatSettings, TODAY)) : problem(404, "Application not found")
+})
+
+/** PUT /vat/return-amendments/:id — edit a draft (the 409 comes before the body is parsed, as the contract pins). */
+export const amendPut = withAuth<Ctx>("doc.edit", async (req, { params }, user) => {
+  const a = await findAm(params)
+  if (!a) return problem(404, "Application not found")
+  if (a.status !== "draft") return problem(409, `Only a draft application can be changed — ${a.no} is ${a.status}.`)
+  const parsed = amendmentInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const w = amUpdate(a, parsed.data, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  recordAudit({ at: w.at, actor: user, entity: "returnAmendment", entityId: w.a.id, ref: w.ref, action: "edited", changes: w.changes })
+  return json(w.row)
+})
+
+/** DELETE /vat/return-amendments/:id — remove a draft. */
+export const amendDelete = withAuth<Ctx>("doc.delete", async (_req, { params }, user) => {
+  const a = await findAm(params)
+  if (!a) return problem(404, "Application not found")
+  if (a.status !== "draft") return problem(409, `Only a draft application can be deleted — ${a.no} is ${a.status}.`)
+  amRemove(a)
+  recordAudit({ actor: user, entity: "returnAmendment", entityId: a.id, ref: amRef(a), action: "deleted" })
+  return json({ ok: true, id: a.id })
+})
+
+/**
+ * POST /vat/return-amendments/:id/action — {action, date, ref?, reason?, adjustPeriod?, challanNo?, challanDate?,
+ *  amount?}; the from-state is refused before the rules run (a deemed approval cannot be rejected, with its own
+ *  message). An amend step that decreases the tax posts the decreasing adjustments — they are audited here and
+ *  stored by the PostgreSQL build beside the application row itself.
+ */
+export const amendAction = withAuth<Ctx>("doc.create", async (req, { params }, user) => {
+  const a = await findAm(params)
+  const ret = a && db.returns.find((r) => r.period === a.period)
+  if (!a || !ret) return problem(404, "Application not found")
+  const parsed = amendActionInput.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return zodProblem(parsed.error)
+  const d = parsed.data
+  if (amDecides(d)) { const no = deny(user, "doc.approve"); if (no) return no }
+  const row = amendmentRow(a, ret, db.returnAmendments, db.vatSettings, TODAY)
+  const from = { file: ["draft"], approve: ["filed", "deemed"], reject: ["filed"], amend: ["approved", "deemed"] }[d.action]
+  if (!from.includes(row.state)) return problem(409, row.state === "deemed" && d.action === "reject" ? `${a.no} was deemed approved on ${row.deemedOn} — the Commissioner did not decide within 30 days.` : `Cannot ${d.action} a ${row.state} application (${a.no}).`)
+  const w = amAction(a, d, user, TODAY)
+  if ("status" in w) return ruleResponse(w)
+  for (const va of w.adjustments ?? []) recordAudit({ at: w.at, actor: user, entity: "adjustment", entityId: va.id, ref: va.no, action: "approved", note: `${a.no} · ${periodLabel(va.taxPeriod)} · ৳ ${va.amount.toFixed(2)}` })
+  recordAudit({ at: w.at, actor: user, entity: "returnAmendment", entityId: w.a.id, ref: w.ref, action: w.action, note: w.note })
+  return json(w.row)
 })

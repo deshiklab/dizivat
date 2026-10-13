@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -35,6 +35,8 @@ interface Globals {
     adjustments: VatAdjustment[]
     uds: UdRecord[]
     bondUds: BondUd[]
+    lateFilings: LateFiling[]
+    returnAmendments: ReturnAmendment[]
     accountingConfig: AccountingConfig
     returns: VatReturn[]; vatSettings: VatSettings
     trash: TrashEntry[]
@@ -72,6 +74,8 @@ export function restoreGlobals(s: {
   adjustments: VatAdjustment[]
   uds: UdRecord[]
   bondUds: BondUd[]
+  lateFilings: LateFiling[]
+  returnAmendments: ReturnAmendment[]
   accountingConfig: AccountingConfig
   returns: VatReturn[]; vatSettings: VatSettings
   events: AuditEvent[]
@@ -86,6 +90,7 @@ export function restoreGlobals(s: {
     boms: s.boms, productionConfig: s.productionConfig, workOrders: s.workOrders,
     moneyAccounts: s.moneyAccounts, moneyDocs: s.moneyDocs, treasury: s.treasury, vds: s.vds,
     adjustments: s.adjustments, uds: s.uds, bondUds: s.bondUds,
+    lateFilings: s.lateFilings ?? [], returnAmendments: s.returnAmendments ?? [],
     accountingConfig: s.accountingConfig,
     returns: s.returns ?? [], vatSettings: s.vatSettings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
@@ -421,6 +426,39 @@ export const mirror = {
   },
   removeBondUd(id: string) {
     const list = mirror.bondUds()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R6.6: the Mushak 9.3 applications — the VAT return view and the return-apps read them (their own register
+   *  reads the rows, see returnapps.ts) */
+  lateFilings: (): LateFiling[] => G.__dzDb!.lateFilings,
+  putLateFilings(list: LateFiling[]) { const a = mirror.lateFilings(); a.splice(0, a.length, ...list) },
+  findLateFiling: (idOrNo: string) => mirror.lateFilings().find((x) => x.id === idOrNo || x.no === idOrNo),
+  putLateFiling(lf: LateFiling) {
+    const list = mirror.lateFilings()
+    const cur = list.find((x) => x.id === lf.id)
+    if (cur) replaceObject(cur, lf)
+    else list.push(lf)
+    return cur ?? lf
+  },
+  removeLateFiling(id: string) {
+    const list = mirror.lateFilings()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R6.6: the Mushak 9.4 applications — the same */
+  returnAmendments: (): ReturnAmendment[] => G.__dzDb!.returnAmendments,
+  putReturnAmendments(list: ReturnAmendment[]) { const a = mirror.returnAmendments(); a.splice(0, a.length, ...list) },
+  findReturnAmendment: (idOrNo: string) => mirror.returnAmendments().find((x) => x.id === idOrNo || x.no === idOrNo),
+  putReturnAmendment(a: ReturnAmendment) {
+    const list = mirror.returnAmendments()
+    const cur = list.find((x) => x.id === a.id)
+    if (cur) replaceObject(cur, a)
+    else list.push(a)
+    return cur ?? a
+  },
+  removeReturnAmendment(id: string) {
+    const list = mirror.returnAmendments()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
   },

@@ -774,6 +774,39 @@ Next.js 15 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui (B
     same settled UD, the same `?state=` answer and the same bond register are required back, and a second boot
     adopts nothing again). Contract unchanged: 676 checks / 226 endpoints.
 
+- **R6.6 — Backend: the Mushak 9.3 / 9.4 applications on their own tables (branch `r6-enlistment-rmg`):**
+  `vat/late-filings` (the register with `?status=` and its CSV), `vat/late-filings/{id}` (one application, its
+  edit and its delete), `vat/late-filings/{id}/action`, and the same three routes for `vat/return-amendments`
+  leave the compat layer — **13 compat route modules left, 103 native**. See
+  [docs/BACKEND.md › R6.6](docs/BACKEND.md#r66--the-mushak-93--94-applications-on-their-own-tables).
+  - **An application is a row.** `late_filings` holds a 9.3 and `return_amendments` a 9.4 — the corrections, the
+    frozen computation the amended return was built from and the history as JSONB on the row, the way a
+    declaration's amendment certificates travel. One number per family in the database as well (a partial
+    unique index over the live rows); a deleted draft is stamped `deleted_at`, so the register no longer lists
+    it and its id retires.
+  - **The clock is the app's, not the server's.** The deemed-approval state a filed 9.3 flips to seven days
+    later is computed against the fixed `TODAY` the whole app runs on, exactly as the mock does — the register,
+    `?status=deemed` and the CSVs are identical between the two runtimes on any day.
+  - **The effects still land where they always did.** An approved decreasing 9.4 posts its s.66 adjustment
+    (note 32) in the period it was allowed to and amending files the amended return (9.1 type C), both through
+    the shared mirror write-back that the adjustments register and the compliance centre — still compat code —
+    read the moment they are posted.
+  - **The rules are the mock's own, taken out of the route files.** `lfCreate` … `lfAction` and `amCreate` …
+    `amAction` with the register rows and CSV columns are `_r66.ts`'s now and take the returns and the settings
+    as data, so both runtimes call the same functions — the rows, the 422s, the frozen effects and the audit
+    events cannot drift.
+  - **Tests:** `api_native.py` 757 checks (+14: the seeded 9.3s and the filed 9.4 as rows with the NBR
+    reference they were filed under, a deleted draft stamped with its id retired, a decreasing application
+    posting its note-32 adjustment in the adjustments family with its audit event, and **an upgrade drill**:
+    the database is rewritten into its pre-R6.6 shape — every application back inside `compat_state`, both
+    tables empty — the API restarted, and the same registers with the 9.4 CSV, one of each and the compliance
+    centre are required back with the snapshot rewritten without them, a second boot adopting nothing again,
+    the drill's draft refused by the ported write paths and a fresh write landing in the tables). An A/B run
+    holds the mock and the PostgreSQL API answer-for-answer on the same seed: 30 requests — both registers,
+    both CSVs, one of each, and a create → edit → file → approve → amend lifecycle twice (once without a tax
+    effect, once decreasing so the s.66 adjustment posts) — identical but for ids and timestamps. Contract
+    unchanged: 676 checks / 226 endpoints.
+
 Every menu entry of the plan is now live; unknown URLs still open a *Planned* page that links back to the legacy RBS VAT screen.
 
 All data is **realistic mock data**, served from `src/app/api/v1/*` (Next route handlers) through a typed client (`src/lib/api/client.ts`). ESLint stops components from importing the mock directly. On this branch the same `/api/v1` contract is also served by the **NestJS + PostgreSQL** API in `api/`: build and run with `API_UPSTREAM=http://127.0.0.1:4000` and no component changes are needed (see *Backend (R5)* below).

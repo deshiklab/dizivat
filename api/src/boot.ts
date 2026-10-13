@@ -9,12 +9,12 @@ import { asc, eq, sql } from "drizzle-orm"
 import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, CreditNote, Damage, DebitNote, Item, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, Sale,
+  AccountingConfig, AuditEvent, Batch, Bom, CreditNote, Damage, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, ProductionConfig, Purchase, ReturnAmendment, Sale,
   BondUd, StockDoc, Transfer, TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder
 } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, compatState, items, masterItems, meta, noteLines, notes, openingEntries, parties, productionConfig, purchaseLines, purchases, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
+import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, compatState, items, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, productionConfig, purchaseLines, purchases, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -43,6 +43,7 @@ import {
 } from "./modules/returns"
 import { assembleUds, markUds, udLineRows, udValues } from "./modules/uds"
 import { assembleBondUds, bondUdGarmentRows, bondUdInputRows, bondUdValues, markBondUds } from "./modules/bonduds"
+import { amendmentValues, lateFilingValues, markLateFilings, markReturnAmendments, toAmendment, toLateFiling } from "./modules/returnapps"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
@@ -137,6 +138,9 @@ async function seed(log: (m: string) => void) {
   const demoUds: UdRecord[] = m.db.uds
   // R6.5: our own UDs / UP with their bond settlements
   const demoBondUds: BondUd[] = m.db.bondUds
+  // R6.6: the Mushak 9.3 late-filing and 9.4 amendment applications
+  const demoLateFilings: LateFiling[] = m.db.lateFilings
+  const demoReturnAmendments: ReturnAmendment[] = m.db.returnAmendments
   // R5.6: the Mushak 9.1 returns — one row per tax period, the period being its id — and the NBR settings row
   const demoReturns: VatReturn[] = m.db.returns
   const demoVatSettings: VatSettings = m.db.vatSettings
@@ -201,6 +205,8 @@ async function seed(log: (m: string) => void) {
     const demoBondUdGarmentRows = demoBondUds.flatMap(bondUdGarmentRows)
     for (let i = 0; i < demoBondUdInputRows.length; i += 500) await tx.insert(bondUdInputs).values(demoBondUdInputRows.slice(i, i + 500))
     for (let i = 0; i < demoBondUdGarmentRows.length; i += 500) await tx.insert(bondUdGarments).values(demoBondUdGarmentRows.slice(i, i + 500))
+    for (let i = 0; i < demoLateFilings.length; i += 500) await tx.insert(lateFilings).values(demoLateFilings.slice(i, i + 500).map(lateFilingValues))
+    for (let i = 0; i < demoReturnAmendments.length; i += 500) await tx.insert(returnAmendments).values(demoReturnAmendments.slice(i, i + 500).map(amendmentValues))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -244,10 +250,12 @@ async function seed(log: (m: string) => void) {
   markAdjustments(m.db.adjustments)
   markUds(m.db.uds)
   markBondUds(m.db.bondUds)
+  markLateFilings(m.db.lateFilings)
+  markReturnAmendments(m.db.returnAmendments)
   G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
   markPersisted(events)
   markSaved(snapshot)
-  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${demoOpeningRows.length} opening entries, ${demoBatchRows.length} production batches, ${demoBomRows.length} price declarations, ${demoWorkOrderRows.length} work orders, ${demoMoney.length} receipts and payments, ${demoDeposits.length} treasury deposits, ${demoCertificates.length} VDS entries, ${demoAdjustments.length} VAT adjustments, ${demoReturns.length} tax returns, ${demoUds.length} UDs, ${demoBondUds.length} own UDs, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${demoOpeningRows.length} opening entries, ${demoBatchRows.length} production batches, ${demoBomRows.length} price declarations, ${demoWorkOrderRows.length} work orders, ${demoMoney.length} receipts and payments, ${demoDeposits.length} treasury deposits, ${demoCertificates.length} VDS entries, ${demoAdjustments.length} VAT adjustments, ${demoReturns.length} tax returns, ${demoUds.length} UDs, ${demoBondUds.length} own UDs, ${demoLateFilings.length} late-filing applications, ${demoReturnAmendments.length} return amendments, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 async function restore(state: { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log: (m: string) => void) {
@@ -312,6 +320,11 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   const liveUds: UdRecord[] = await assembleUds((await db.select().from(uds).orderBy(asc(uds.ord))).filter((r) => !r.deletedAt))
   // R6.5: our own UDs — the head rows with their inputs and garments
   const liveBondUds: BondUd[] = await assembleBondUds((await db.select().from(bondUds).orderBy(asc(bondUds.ord))).filter((r) => !r.deletedAt))
+  // R6.6: the Mushak 9.3 / 9.4 applications — live rows; a deleted draft's row keeps its id retired
+  const lateFilingDbRows = await db.select().from(lateFilings).orderBy(asc(lateFilings.ord))
+  const liveLateFilings: LateFiling[] = lateFilingDbRows.filter((r) => !r.deletedAt).map(toLateFiling)
+  const returnAmendmentDbRows = await db.select().from(returnAmendments).orderBy(asc(returnAmendments.ord))
+  const liveReturnAmendments: ReturnAmendment[] = returnAmendmentDbRows.filter((r) => !r.deletedAt).map(toAmendment)
   const [vatSettingsDbRow] = await db.select().from(vatSettings).where(eq(vatSettings.id, 1))
   // the settings row is written by the seed and by the adoption below, so this fallback only guards a restore that
   // came from a backup older than both: the company's own zone, the one the NBR codes are filed under
@@ -356,6 +369,11 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   // …and our own UDs' the same way (`bu2-m1x9z`)
   seq.bondUd = Math.max(seq.bondUd ?? liveBondUds.length,
     (await db.select().from(bondUds)).reduce((m, r) => Math.max(m, Number(r.id.slice(2).split("-")[0]) || 0), 0))
+  // …and the 9.3 / 9.4 applications' the same way (`lf3-k3f9x`, `am2-m1x9z`): a deleted draft retires its id
+  seq.lateFiling = Math.max(seq.lateFiling ?? liveLateFilings.length,
+    lateFilingDbRows.reduce((m, r) => Math.max(m, Number(r.id.slice(2).split("-")[0]) || 0), 0))
+  seq.amendment = Math.max(seq.amendment ?? liveReturnAmendments.length,
+    returnAmendmentDbRows.reduce((m, r) => Math.max(m, Number(r.id.slice(2).split("-")[0]) || 0), 0))
   const [ep] = await db.select().from(meta).where(eq(meta.key, "seeded_at"))
   setEpoch(ep?.value)
   const raw = await db.execute(sql`select * from audit_events order by id`)
@@ -367,6 +385,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     openings: liveOpenings, batches: liveBatches, boms: liveBoms, productionConfig: config,
     workOrders: liveWorkOrders, moneyAccounts: liveAccounts, moneyDocs: liveMoney,
     treasury: liveDeposits, vds: liveCertificates, adjustments: liveAdjustments, uds: liveUds, bondUds: liveBondUds,
+    lateFilings: liveLateFilings, returnAmendments: liveReturnAmendments,
     accountingConfig: accountingCfg, returns: liveReturns, vatSettings: vatSettingsCfg, events,
   })
   loadCompat()
@@ -393,6 +412,8 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   markAdjustments(mirror.adjustments())
   markUds(mirror.uds())
   markBondUds(mirror.bondUds())
+  markLateFilings(mirror.lateFilings())
+  markReturnAmendments(mirror.returnAmendments())
   markReturns(mirror.returns())
   markVatSettings()
   markPersisted(events)
@@ -410,14 +431,14 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
     })
   }
   markSaved(json)
-  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 /** The collections R5.2, R5.3, R5.4 and R5.5 moved out of `compat_state` into their own tables. */
 const ADOPTED = ["customers", "vendors", "items", "masterItems", "transfers", "damages", "sales", "purchases",
   "creditNotes", "debitNotes", "openings", "batches", "boms", "productionConfig", "workOrders",
   "moneyAccounts", "moneyDocs", "accountingConfig", "treasury", "vds", "adjustments", "returns",
-  "vatSettings", "uds", "bondUds"] as const
+  "vatSettings", "uds", "bondUds", "lateFilings", "returnAmendments"] as const
 
 /**
  * Upgrade: a database written before these tables holds the collections inside `compat_state` (and deleted
@@ -426,7 +447,7 @@ const ADOPTED = ["customers", "vendors", "items", "masterItems", "transfers", "d
  * older backup into a fresh database. R5.2 moved the master data, R5.3 the stock documents, the sales invoices and
  * the purchases (a deleted draft in the undo buffer becoming a `deleted_at` row). R5.4 the notes and the opening
  * stock entries and the production batches (whose deleted drafts became `deleted_at` rows too, since no family has
- * an undo), and R6.5 our own UDs / UP with their bond settlements.
+ * an undo), R6.5 our own UDs / UP with their bond settlements, and R6.6 the Mushak 9.3 / 9.4 applications.
  */
 async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: string) => void): Promise<boolean> {
   const s = state.db as {
@@ -437,6 +458,8 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
     treasury?: TreasuryDeposit[]; vds?: VdsEntry[]; adjustments?: VatAdjustment[]
     uds?: UdRecord[]
     bondUds?: BondUd[]
+    lateFilings?: LateFiling[]
+    returnAmendments?: ReturnAmendment[]
     returns?: VatReturn[]; vatSettings?: VatSettings
     trash?: TrashEntry[]
   }
@@ -504,6 +527,10 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
   const bondUdHeadRows = bondUdDocs.map(bondUdValues)
   const bondUdOwnInputRows = bondUdDocs.flatMap(bondUdInputRows)
   const bondUdGarmentRowsToAdopt = bondUdDocs.flatMap(bondUdGarmentRows)
+  const lateFilingDocs: LateFiling[] = s.lateFilings ?? []
+  const lateFilingRowsToAdopt = lateFilingDocs.map(lateFilingValues)
+  const returnAmendmentDocs: ReturnAmendment[] = s.returnAmendments ?? []
+  const amendmentRowsToAdopt = returnAmendmentDocs.map(amendmentValues)
   const [{ n: haveParties }] = await db.select({ n: sql<number>`count(*)::int` }).from(parties)
   const [{ n: haveItems }] = await db.select({ n: sql<number>`count(*)::int` }).from(items)
   const [{ n: haveMasters }] = await db.select({ n: sql<number>`count(*)::int` }).from(masterItems)
@@ -526,7 +553,9 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
   const [{ n: haveVatSettings }] = await db.select({ n: sql<number>`count(*)::int` }).from(vatSettings)
   const [{ n: haveUds }] = await db.select({ n: sql<number>`count(*)::int` }).from(uds)
   const [{ n: haveBondUds }] = await db.select({ n: sql<number>`count(*)::int` }).from(bondUds)
-  const moved: string[] = [], movedDocs: string[] = [], movedR54: string[] = [], movedR55: string[] = [], movedR56: string[] = [], movedR62: string[] = [], movedR65: string[] = []
+  const [{ n: haveLateFilings }] = await db.select({ n: sql<number>`count(*)::int` }).from(lateFilings)
+  const [{ n: haveReturnAmendments }] = await db.select({ n: sql<number>`count(*)::int` }).from(returnAmendments)
+  const moved: string[] = [], movedDocs: string[] = [], movedR54: string[] = [], movedR55: string[] = [], movedR56: string[] = [], movedR62: string[] = [], movedR65: string[] = [], movedR66: string[] = []
   if ((!haveParties && partyRows.length) || (!haveItems && itemRows.length) || (!haveMasters && masterRows.length)
     || (!haveStock && stockRows.length) || (!haveSales && saleRows.length) || (!havePurchases && purchaseRows.length)
     || (!haveNotes && noteRows.length) || (!haveOpenings && openingRows.length)
@@ -536,7 +565,8 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
     || (!haveDeposits && depositRows.length) || (!haveCertificates && certificateRows.length)
     || (!haveAdjustments && adjustmentRows.length) || (!haveReturns && returnRows.length)
     || (!haveVatSettings && vatSettingsDoc) || (!haveUds && udHeadRows.length)
-    || (!haveBondUds && bondUdHeadRows.length)) {
+    || (!haveBondUds && bondUdHeadRows.length)
+    || (!haveLateFilings && lateFilingRowsToAdopt.length) || (!haveReturnAmendments && amendmentRowsToAdopt.length)) {
     await db.transaction(async (tx) => {
       await lockState(tx) // waits out any other instance's in-flight write; the epoch is not set yet
       if (!haveParties && partyRows.length) {
@@ -642,6 +672,14 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
         for (let i = 0; i < bondUdGarmentRowsToAdopt.length; i += 500) await tx.insert(bondUdGarments).values(bondUdGarmentRowsToAdopt.slice(i, i + 500))
         movedR65.push(`${bondUdHeadRows.length} own UDs (${bondUdOwnInputRows.length} inputs, ${bondUdGarmentRowsToAdopt.length} garments)`)
       }
+      if (!haveLateFilings && lateFilingRowsToAdopt.length) {
+        for (let i = 0; i < lateFilingRowsToAdopt.length; i += 500) await tx.insert(lateFilings).values(lateFilingRowsToAdopt.slice(i, i + 500))
+        movedR66.push(`${lateFilingRowsToAdopt.length} late-filing applications`)
+      }
+      if (!haveReturnAmendments && amendmentRowsToAdopt.length) {
+        for (let i = 0; i < amendmentRowsToAdopt.length; i += 500) await tx.insert(returnAmendments).values(amendmentRowsToAdopt.slice(i, i + 500))
+        movedR66.push(`${amendmentRowsToAdopt.length} return amendments`)
+      }
     })
     if (moved.length) log(`R5.2 upgrade: ${moved.join(", ")} moved out of compat_state into their own tables`)
     if (movedDocs.length) log(`R5.3 upgrade: ${movedDocs.join(", ")} moved out of compat_state into their own tables`)
@@ -650,6 +688,7 @@ async function adoptCompatRows(state: { db: Record<string, unknown> }, log: (m: 
     if (movedR56.length) log(`R5.6 upgrade: ${movedR56.join(", ")} moved out of compat_state into their own tables`)
     if (movedR62.length) log(`R6.2 upgrade: ${movedR62.join(", ")} moved out of compat_state into their own tables`)
     if (movedR65.length) log(`R6.5 upgrade: ${movedR65.join(", ")} moved out of compat_state into their own tables`)
+    if (movedR66.length) log(`R6.6 upgrade: ${movedR66.join(", ")} moved out of compat_state into their own tables`)
   }
   return true
 }
