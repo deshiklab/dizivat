@@ -27,10 +27,16 @@ import type { Item, Party, Purchase, Sale } from "@/lib/types"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, zodErrors } from "../common/http"
 import { withStateLock } from "../common/lock"
+import { lockState } from "../common/state-guard"
+import { deltaEmpty } from "../common/writeback"
 import { compat, mirror } from "../state"
+import { users } from "../db/schema"
+import { eq } from "drizzle-orm"
+import { db, type Tx } from "../db/client"
 import { AuditService } from "./audit"
-import { CompatService } from "./compat"
 import { DerivedService } from "./derived"
+import { applyPartyDelta, commitPartyDelta, partyDelta } from "./parties"
+import { applyItemDelta, applyMasterDelta, commitItemDelta, commitMasterDelta, itemDelta, masterDelta } from "./items"
 import type { MovementSource } from "@/lib/mock/db"
 import { returnSource, type ReturnSource } from "./returns"
 
@@ -49,19 +55,27 @@ export class BooksService {
   constructor(
     @Inject(DerivedService) private readonly derived: DerivedService,
     @Inject(AuditService) private readonly audits: AuditService,
-    @Inject(CompatService) private readonly compat: CompatService,
   ) {}
 
   /**
-   * The two writes here land in the in-memory world the compat layer still owns — the user store's read ids, and the
-   * SKUs and parties the bulk import creates — so they are saved the way a compat handler's are: the snapshot and
-   * every write-back in one transaction, before the request answers. (A native write's own rows are its module's
-   * business; these are not rows yet.)
+   * The bulk import's transaction. It still creates its SKUs and its parties through the mirror's arrays, so the
+   * party, item and master-item write-backs carry what it created into the tables — the last users of the
+   * write-back machine now that every other family writes its own rows and the compat snapshot is gone. The
+   * audit entries it records go straight to `audit_events` in their own locked transactions.
    */
   save<T>(fn: () => T | Promise<T>): Promise<T> {
     return withStateLock(async () => {
       const out = await fn()
-      await this.compat.persist()
+      const parts = partyDelta(), its = itemDelta(), masters = masterDelta()
+      if (!deltaEmpty(parts) || !deltaEmpty(its) || !deltaEmpty(masters)) {
+        await db.transaction(async (tx: Tx) => {
+          await lockState(tx)
+          await applyPartyDelta(tx, parts)
+          await applyItemDelta(tx, its)
+          await applyMasterDelta(tx, masters)
+        })
+        commitPartyDelta(parts); commitItemDelta(its); commitMasterDelta(masters)
+      }
       return out
     })
   }
@@ -99,9 +113,11 @@ export class BooksService {
     return compat().notificationsFor(user, src, { events, read: mirror.notifRead(user.id) })
   }
 
-  /** Marking them read is a write to the user store, which the compat snapshot carries. */
-  notificationsRead(user: User, ids: string[]) {
-    mirror.putNotifRead(user.id, [...new Set([...mirror.notifRead(user.id), ...ids])].slice(-500))
+  /** Marking them read is a write to the user's own row — the last user-store bit the compat snapshot carried. */
+  async notificationsRead(user: User, ids: string[]) {
+    const merged = [...new Set([...mirror.notifRead(user.id), ...ids])].slice(-500)
+    await db.update(users).set({ notifRead: merged }).where(eq(users.id, user.id))
+    mirror.putNotifRead(user.id, merged)
   }
 
   /**
@@ -190,7 +206,7 @@ export class NotificationsController {
     const user = req.dz!.user
     const current = (await this.svc.notifications(user)).filter((n) => n.kind !== "security").map((n) => n.id)
     const ids = "all" in parsed.data ? current : parsed.data.ids.filter((id) => !id.startsWith("security:"))
-    await this.svc.save(() => this.svc.notificationsRead(user, ids))
+    await this.svc.notificationsRead(user, ids)
     const items = await this.svc.notifications(user)
     res.status(200).json({ items, unread: items.filter((n) => !n.read).length }) // the mock answered 200, not 201
   }

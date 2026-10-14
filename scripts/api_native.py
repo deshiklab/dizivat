@@ -608,25 +608,6 @@ def session(user, pw=PW, remember=False):
     return s
 
 
-def flush_snapshot(s):
-    """Ask a compat route to save the in-memory state, the way the all-compat code saved it after every request.
-
-    A native write does not save the snapshot: its own tables are the durable copy, and a stamped row is what retires
-    a deleted draft's id in production (boot lifts `db.seq` from the highest id each table has seen). A drill that
-    rewinds those tables into their pre-release shape therefore has to flush the snapshot first, or the database it
-    pretends to be — one the old code wrote, saving after every request — would hold a counter the real one never
-    lost. Which write still saves the snapshot moves as the port does: the compat routes are all native now, so it
-    is the notifications' mark-as-read — a write the user store needs, marking nothing read.
-    """
-    # the last compat routes (the penalty and the SD-eligible list) went native with the four readers, so no
-    # read flushes anymore — but the notifications' mark-as-read still saves the snapshot (the user store lives
-    # in it). The id names no notification, so nothing is marked: the save is all that happens.
-    r = s.post(f"{BASE}/notifications/read", json={"ids": ["flush"]})
-    if r.status_code == 200:
-        return
-    raise AssertionError(f"no way left to flush the snapshot: /notifications/read answered {r.status_code}")
-
-
 def token_of(s):
     return s.cookies.get("dizivat_session")
 
@@ -652,6 +633,21 @@ def restart():
 
 def psql(q):
     return subprocess.run(["psql", DB_URL, "-At", "-c", q], capture_output=True, text=True, check=True).stdout.strip()
+
+
+# The finale drains compat_state and the boot drops the table — every drill that rewinds the tables into
+# their pre-release shape has to put it back first, as the empty snapshot the old code would have written.
+# The counters need no flushing any more: the boot lifts them from the rows, stamped drafts included.
+def ensure_compat_state():
+    psql("""create table if not exists compat_state (
+      "key" text primary key not null, "data" jsonb not null,
+      "updated_at" timestamp (3) with time zone default now() not null)""")
+    psql("""insert into compat_state ("key", "data") values ('main', '{"db":{}}'::jsonb)
+      on conflict ("key") do nothing""")
+
+
+# the finale boot's own verdict: the drained snapshot table is gone
+COMPAT_GONE = "select (to_regclass('public.compat_state') is null)"
 
 
 def invite(admin, username, role="operator"):
@@ -798,11 +794,9 @@ def run():
         check(psql(f"select count(*) from audit_events where ref like '%{TAG}%'") != "0", "audit events are rows in audit_events")
         check(int(psql("select count(*) from sessions where revoked_at is not null")) >= 3, "revoked sessions are kept for review")
         check(psql(f"select count(*) from parties where name ilike '%R5 Persist Test {TAG}%'") == "1", "R5.2: customers are rows in the parties table")
-        check(psql(f"select count(*) from compat_state where data::text ilike '%R5 Persist Test {TAG}%'") == "0", "R5.2: …and no longer inside the compat snapshot")
-        check(psql("select count(*) from compat_state where data->'db' ? 'customers' or data->'db' ? 'vendors'") == "0", "R5.2: the snapshot carries no party collection at all")
-        check(psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'bondUds'") == "0",
-              "neither the own UDs nor the drawback claims are inside compat_state anymore — both families are rows now")
+        check(psql(COMPAT_GONE) == "t", "R5.2: …and no longer inside the compat snapshot")
+        check(psql(COMPAT_GONE) == "t",
+              "R5.2: …and there is no compat snapshot to hold any of it — the table itself is gone")
         check(int(psql("select count(*) from parties where kind = 'customer'")) >= 10 and int(psql("select count(*) from parties where kind = 'vendor'")) >= 14,
               "R5.2: the demo customers and vendors were seeded into the table")
         dup = subprocess.run(["psql", DB_URL, "-At", "-c", "insert into parties (id, ord, kind, name, bin, mode, mobile, address) "
@@ -816,7 +810,7 @@ def run():
         check(psql(f"select opening = 40 from items where id = '{iid}'") == "t", "R5.2: a compat document that moved a counter reached the table")
         # the R6.2 importer uppercases every SKU it reads (`str(r.sku).toUpperCase()`), so the row carries the tag in capitals
         check(psql(f"select count(*) from items where sku = 'R5IMP-{TAG.upper()}'") == "1", "R5.2: …and the compat bulk import was adopted into it")
-        check(psql("select count(*) from compat_state where data->'db' ? 'items' or data->'db' ? 'masterItems'") == "0",
+        check(psql(COMPAT_GONE) == "t",
               "R5.2: the snapshot carries no item collection at all")
         check(int(psql("select count(*) from items")) >= 22 and int(psql("select count(*) from master_items")) >= 19,
               "R5.2: the demo SKUs and master items were seeded into their tables")
@@ -946,7 +940,7 @@ def run():
           f"R5.3: approving more than the branch holds is a 422 ({sh.status_code})")
     if DB_URL:
         check(psql("select count(*) from stock_documents") == rows0, "R5.3: …and the refused document left no row behind")
-        check(psql("select count(*) from compat_state where data->'db' ? 'transfers' or data->'db' ? 'damages'") == "0",
+        check(psql(COMPAT_GONE) == "t",
               "R5.3: the snapshot carries no stock-document collection at all")
         check(int(psql("select count(*) from stock_documents where kind = 'transfer'")) >= 8
               and int(psql("select count(*) from stock_documents where kind = 'damage'")) >= 6
@@ -1111,7 +1105,7 @@ def run():
           f"R5.3: approving more than the branch holds is a 422 ({sh.status_code})")
     if DB_URL:
         check(psql("select count(*) from sales") == rows0, "R5.3: …and the refused invoice left no row behind")
-        check(psql("select count(*) from compat_state where data->'db' ? 'sales'") == "0",
+        check(psql(COMPAT_GONE) == "t",
               "R5.3: the snapshot carries no sales collection at all")
         check(int(psql("select count(*) from sales")) >= 227 and int(psql("select count(*) from sale_lines")) >= 442
               and int(psql("select count(*) from sales where export_deemed is not null")) >= 16
@@ -1262,7 +1256,7 @@ def run():
     check(arif.get(f"{BASE}/purchases/{ps.json()['id']}/returnable").status_code == 404,
           "R5.3: …and a service purchase has nothing to return (404)")
     if DB_URL:
-        check(psql("select count(*) from compat_state where data->'db' ? 'purchases'") == "0",
+        check(psql(COMPAT_GONE) == "t",
               "R5.3: the snapshot carries no purchases collection at all")
         check(int(psql("select count(*) from purchases")) >= 101 and int(psql("select count(*) from purchase_lines")) >= 101
               and int(psql("select count(*) from purchases where boe_no is not null")) >= 40
@@ -1420,8 +1414,8 @@ def run():
           and arif.delete(f"{BASE}/debit-notes/{dnid}").status_code == 409,
           "R5.3: a draft debit note is deleted, and an approved one is not (409)")
     if DB_URL:
-        check(psql("select count(*) from compat_state where data->'db' ? 'creditNotes'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'debitNotes'") == "0",
+        check(psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t",
               "R5.3: the snapshot carries neither note collection at all")
         check(int(psql("select count(*) from notes where kind = 'credit'")) >= 5
               and int(psql("select count(*) from notes where kind = 'debit'")) >= 5
@@ -1507,7 +1501,7 @@ def run():
           == int(psql(f"select count(*) from opening_entries where item_id = '{iid}' and deleted_at is null")) if DB_URL else True,
           "R5.4: the register's ?item= filter serves one SKU's entries from the table")
     if DB_URL:
-        check(psql("select count(*) from compat_state where data->'db' ? 'openings'") == "0",
+        check(psql(COMPAT_GONE) == "t",
               "R5.4: the snapshot carries no openings collection at all")
         check(int(psql("select count(*) from opening_entries")) >= 24
               and int(psql("select count(*) from opening_entries where bond_boe_no is not null")) >= 2,
@@ -1729,7 +1723,7 @@ def run():
               "R5.4: …as a row of its own, with no consumed inputs")
     arif.patch(f"{BASE}/production/batches/{b6.json()['id']}", json={"process": "Cancelled", "reason": f"R5.4 cancelled {TAG}"})
     if DB_URL:
-        check(psql("select count(*) from compat_state where data->'db' ? 'batches'") == "0",
+        check(psql(COMPAT_GONE) == "t",
               "R5.4: the snapshot carries no batches collection at all")
         check(int(psql("select count(*) from batches")) >= 8 and int(psql("select count(*) from batch_lines")) >= 10
               and int(psql("select count(*) from batch_consumption")) >= 30
@@ -3055,9 +3049,9 @@ def run():
               and psql("select count(*) from vds_entries where deleted_at is null") == str(vdVds["total"])
               and psql("select count(*) from vat_adjustments where deleted_at is null") == str(vdAdj["total"]),
               "R5.6: …and every one of them is a row in its own table")
-        check(psql("select count(*) from compat_state where data->'db' ? 'treasury'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'vds'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'adjustments'") == "0",
+        check(psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t",
               "R5.6: …and no longer inside the compat snapshot")
     check(arif.get(f"{BASE}/vat/treasury", params={"format": "csv"}).text.splitlines()[0].lstrip("﻿").startswith("Challan date")
           and arif.get(f"{BASE}/vat/vds", params={"format": "csv"}).headers.get("content-disposition", "").startswith('attachment; filename="vds-')
@@ -3258,7 +3252,7 @@ def run():
         check(psql("select count(*) from uds where deleted_at is null") == str(len(udRows))
               and psql("select count(*) from ud_lines l join uds u on u.id = l.ud_id where u.deleted_at is null")
               == str(udLines)
-              and psql("select count(*) from compat_state where data->'db' ? 'uds'") == "0",
+              and psql(COMPAT_GONE) == "t",
               f"R6.2: …every one of them is a row in uds with its inputs in ud_lines ({udLines} inputs), "
               f"and none is inside the compat snapshot")
     check(arif.get(f"{BASE}/vat/uds", params={"format": "csv"}).headers.get("content-disposition", "").startswith('attachment; filename="ud-register-')
@@ -3447,7 +3441,9 @@ def run():
     d = admin.get(f"{BASE}/backups/{bid}")
     import gzip as _gz
     snap = json.loads(_gz.decompress(d.content)) if d.ok else {}
-    check(d.ok and snap.get("format") == "dizivat-backup/1" and "audit_events" in snap.get("tables", {}) and "compat_state" in snap.get("tables", {}), "R6.2: download is a gzip JSON snapshot of the tables")
+    check(d.ok and snap.get("format") == "dizivat-backup/1" and "audit_events" in snap.get("tables", {}) and "compat_state" not in snap.get("tables", {})
+              and all("notif_read" in u for u in snap.get("tables", {}).get("users", [])),
+              "R6.2: download is a gzip JSON snapshot of the tables — compat_state among them no more; the read ids ride the users' rows")
     check(not any("password_hash" in u for u in snap.get("tables", {}).get("users", [])), "R6.2: password hashes are not in backups")
     check(session("arif").get(f"{BASE}/backups").status_code == 403, "R6.2: backups need settings.manage")
     if DB_URL:
@@ -3814,7 +3810,7 @@ def run():
                   "R5.3: the refused document never reached stock_documents")
             wu = arif.post(f"{BASE}/vat/uds", json={**ud_body, "no": f"BKMEA/UD/2026/SW{TAG}".upper(), "masterLcNo": f"EXP-LC-SW-{TAG}"})
             check(wu.status_code == 503, f"stale instance refuses a native declaration write after a re-seed elsewhere (HTTP {wu.status_code})")
-            check(psql(f"select count(*) from compat_state where data::text like '%R6 Stale Write {TAG}%'") == "0", "stale snapshot not written over the re-seeded data")
+            check(psql(COMPAT_GONE) == "t", "the stale instance has no snapshot to write over the re-seeded data — the table is gone")
             r = requests.post(f"{BASE}/auth/login", json={"username": "farzana", "password": PW})
             check(r.status_code == 503, f"stale instance refuses to append to the audit chain (HTTP {r.status_code})")
             check(psql("select count(*) from audit_events") == events_before, "no audit event chained to a replaced head")
@@ -3845,8 +3841,8 @@ def run():
             with open(API_LOG, encoding="utf-8", errors="replace") as f:
                 return sum(1 for line in f if "R5.2 upgrade:" in line)
         had, before, boots = counts(), registers(), upgraded_boots()
-        psql(PRE_R52_COLLECTIONS)
-        psql(PRE_R52_TRASH)
+        ensure_compat_state(); psql(PRE_R52_COLLECTIONS)
+        ensure_compat_state(); psql(PRE_R52_TRASH)
         psql("delete from parties")
         psql("delete from items")
         psql("delete from master_items")
@@ -3856,10 +3852,9 @@ def run():
               f"the database is back in the pre-R5.2 shape ({had[0]} parties, {had[2]} SKUs, {had[3]} master items inside the snapshot)")
         restart()
         check(counts() == had, f"the first boot moved every record into the tables (parties {had[0]} incl. {had[1]} deleted, items {had[2]}, master items {had[3]})")
-        check(psql("select count(*) from compat_state where data->'db' ? 'customers' or data->'db' ? 'vendors' "
-                   "or data->'db' ? 'items' or data->'db' ? 'masterItems'") == "0",
-              "…and rewrote the snapshot without them")
-        check(psql(PARTY_TRASH_LEFT) == "0", "…and took the deleted parties out of the undo buffer, keeping its documents")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
+        check(psql(COMPAT_GONE) == "t", "…and the undo buffer went with the table — the stamped rows are the deleted parties' only copy")
         check(registers() == before, "…and serves the same four registers, row for row")
         check(psql(f"select count(*) from parties where id = '{gid}' and deleted_at is not null") == "1"
               and arif.get(f"{BASE}/vendors/{gid}").status_code == 404, "a party deleted before the upgrade is still in the trash")
@@ -3885,7 +3880,7 @@ def run():
                 return sum(1 for line in f if "R5.3 upgrade:" in line)
         shad, sbefore, ssplit, sboots = stock_counts(), stock_registers(), held(), stock_boots()
         tlines = psql(f"select count(*) from stock_document_lines where doc_id = '{tid}'")
-        psql(PRE_R53_COLLECTIONS)
+        ensure_compat_state(); psql(PRE_R53_COLLECTIONS)
         psql("delete from stock_document_lines")
         psql("delete from stock_documents")
         check(stock_counts() == ("0", "0")
@@ -3893,8 +3888,8 @@ def run():
               f"the database is back in the pre-R5.3 shape ({shad[0]} stock documents, {shad[1]} lines inside the snapshot)")
         restart()
         check(stock_counts() == shad, f"the first boot moved every document into the tables ({shad[0]} documents, {shad[1]} lines)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'transfers' or data->'db' ? 'damages'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(stock_registers() == sbefore, "…and serves the same two registers, row for row")
         check(psql(f"select count(*) from stock_documents where id = '{tid}' and process = 'Cancelled'") == "1"
               and psql(f"select count(*) from stock_document_lines where doc_id = '{tid}'") == tlines,
@@ -3929,8 +3924,8 @@ def run():
                     psql("select count(*) from sale_realisations"))
 
         scounts, sbefore, ssplit, sboots, sshapes = sale_counts(), sale_registers(), sold_held(), stock_boots(), sale_shapes()
-        psql(PRE_R53_SALES)
-        psql(PRE_R53_SALE_TRASH)
+        ensure_compat_state(); psql(PRE_R53_SALES)
+        ensure_compat_state(); psql(PRE_R53_SALE_TRASH)
         psql("delete from sale_realisations")
         psql("delete from sale_lines")
         psql("delete from sales")
@@ -3941,8 +3936,7 @@ def run():
         restart()
         check(sale_counts() == scounts,
               f"the first boot moved every invoice into the tables ({scounts[0]} invoices, {scounts[1]} lines)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'sales'") == "0", "…and rewrote the snapshot without them")
-        check(psql(SALE_TRASH_LEFT) == "0", "…and took the deleted drafts out of the undo buffer, keeping its documents")
+        check(psql(COMPAT_GONE) == "t", "…and dropped the snapshot table with its undo buffer — the rows are the only copy")
         check(sale_registers() == sbefore, "…and serves the same three registers, row for row")
         check(psql(f"select count(*) from sales where id = '{gone['id']}' and deleted_at is not null") == "1"
               and psql(f"select count(*) from sale_lines where sale_id = '{gone['id']}'") == "1",
@@ -3983,8 +3977,8 @@ def run():
 
         pcounts, pbefore, psplit, pboots, pshapes = (purchase_counts(), purchase_registers(), held(),
                                                      stock_boots(), purchase_shapes())
-        psql(PRE_R53_PURCHASES)
-        psql(PRE_R53_PURCHASE_TRASH)
+        ensure_compat_state(); psql(PRE_R53_PURCHASES)
+        ensure_compat_state(); psql(PRE_R53_PURCHASE_TRASH)
         psql("delete from purchase_lines")
         psql("delete from purchases")
         check(purchase_counts() == ("0", "0")
@@ -3995,10 +3989,8 @@ def run():
         restart()
         check(purchase_counts() == pcounts,
               f"the first boot moved every purchase into the tables ({pcounts[0]} documents, {pcounts[1]} lines)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'purchases'") == "0",
-              "…and rewrote the snapshot without them")
-        check(psql(PURCHASE_TRASH_LEFT) == "0",
-              "…and took the deleted drafts out of the undo buffer, keeping its documents")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table with its undo buffer — the stamped rows are the deleted drafts' only copy")
         check(purchase_registers() == pbefore, "…and serves the same three registers, row for row")
         check(psql(f"select count(*) from purchases where id = '{gonep['id']}' and deleted_at is not null") == "1"
               and psql(f"select count(*) from purchase_lines where purchase_id = '{gonep['id']}'") == "1",
@@ -4036,9 +4028,8 @@ def run():
 
         goncn = arif.post(f"{BASE}/credit-notes", json={**cn_body, "note": f"R5.3 deleted {TAG}"}).json()
         arif.delete(f"{BASE}/credit-notes/{goncn['id']}")
-        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         ncounts, nbefore, nsplit, nboots = note_counts(), note_registers(), sold_held(), stock_boots()
-        psql(PRE_R53_NOTES)
+        ensure_compat_state(); psql(PRE_R53_NOTES)
         psql("delete from note_lines")
         psql("delete from notes")
         check(note_counts() == ("0", "0", "0")
@@ -4049,9 +4040,9 @@ def run():
         restart()
         check(note_counts() == ncounts,
               f"the first boot moved every note into the tables ({ncounts[0]} + {ncounts[1]} notes, {ncounts[2]} lines)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'creditNotes'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'debitNotes'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(note_registers() == nbefore, "…and serves the same registers, row for row")
         check(psql(f"select count(*) from notes where id = '{goncn['id']}'") == "0",
               "a note deleted before the upgrade stays deleted — the mock kept no row for it either")
@@ -4083,7 +4074,6 @@ def run():
 
         goneo = arif.post(f"{BASE}/opening-stock", json={**os_body, "note": f"R5.4 deleted {TAG}"}).json()
         arif.delete(f"{BASE}/opening-stock/{goneo['id']}")
-        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         def opening_boots():
             """How many boots adopted the opening entries — one `R5.4 upgrade:` line each."""
             if not API_LOG or not os.path.exists(API_LOG):
@@ -4092,7 +4082,7 @@ def run():
                 return fh.read().count("R5.4 upgrade:")
 
         ocounts, obefore, osplit, oboots = opening_counts(), opening_registers(), held(), opening_boots()
-        psql(PRE_R54_OPENINGS)
+        ensure_compat_state(); psql(PRE_R54_OPENINGS)
         psql("delete from opening_entries")
         check(opening_counts() == ("0", "0")
               and psql("select count(*) from compat_state where data->'db' ? 'openings'") == "1",
@@ -4100,8 +4090,8 @@ def run():
               f"inside the snapshot)")
         restart()
         check(opening_counts() == ocounts, f"the first boot moved every entry into the table ({ocounts[0]} entries)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'openings'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(opening_registers() == obefore,
               "…and serves the same three registers, row for row — the branch split and the items with them")
         check(psql(f"select count(*) from opening_entries where id = '{goneo['id']}'") == "0",
@@ -4148,9 +4138,8 @@ def run():
 
         goneb = arif.post(f"{BASE}/production/batches", json={**batch_body, "remark": f"R5.4 deleted {TAG}"}).json()
         arif.delete(f"{BASE}/production/batches/{goneb['id']}")
-        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         bcounts, bbefore, bsplit, bboots = batch_counts(), batch_registers(), bfg_stock(bgid, binp), batch_boots()
-        psql(PRE_R54_BATCHES)
+        ensure_compat_state(); psql(PRE_R54_BATCHES)
         psql("delete from batch_consumption")
         psql("delete from batch_lines")
         psql("delete from batches")
@@ -4161,8 +4150,8 @@ def run():
         restart()
         check(batch_counts() == bcounts,
               f"the first boot moved every batch into the tables ({bcounts[0]} batches, {bcounts[1]} lines)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'batches'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(batch_registers() == bbefore,
               "…and serves the same six registers, row for row — the lots, the work orders' progress, the "
               "subcontracting register, the derived stock and one SKU's ledger with them")
@@ -4214,9 +4203,8 @@ def run():
 
         pdGone = arif.post(f"{BASE}/production/boms", json={**pdBody, "itemId": pdFg2["itemId"]}).json()
         arif.delete(f"{BASE}/production/boms/{pdGone.get('id')}")
-        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         pdc, pdbefore, pdboots = pd_counts(), pd_registers(), pd_boots()
-        psql(PRE_R55_BOMS)
+        ensure_compat_state(); psql(PRE_R55_BOMS)
         psql("delete from bom_costs")
         psql("delete from bom_inputs")
         psql("delete from boms")
@@ -4231,9 +4219,9 @@ def run():
               f"the first boot moved every live declaration into the tables ({pdc[0]} of them, with {pdc[1]} inputs "
               f"and {pdc[2]} cost heads) and the configuration into its one row — a stamped draft left nothing to "
               f"adopt, so no row came back")
-        check(psql("select count(*) from compat_state where data->'db' ? 'boms'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'productionConfig'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(pd_registers() == pdbefore,
               "…and serves the same registers, row for row — the declarations, one with its versions, the CSV, the "
               "configuration, and the batch, lot and bond registers that read them")
@@ -4297,9 +4285,8 @@ def run():
         wkGone = arif.post(f"{BASE}/production/work-orders", json={**wkBody, "process": "Created",
                                                                    "requisitionNo": f"REQ-26-{TAG}e"}).json()
         arif.delete(f"{BASE}/production/work-orders/{wkGone.get('id')}")
-        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         wkc, wkbefore, wkboots = wk_counts(), wk_registers(), wk_boots()
-        psql(PRE_R55_WORK_ORDERS)
+        ensure_compat_state(); psql(PRE_R55_WORK_ORDERS)
         psql("delete from work_order_lines")
         psql("delete from work_orders")
         check(wk_counts() == ("0", "0", "0", "0/0/0")
@@ -4310,8 +4297,8 @@ def run():
         check(wk_counts() == wkc,
               f"the first boot moved every work order into the tables ({wkc[0]} of them, with {wkc[1]} lines and "
               f"{wkc[3]} issued/received/rejected)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'workOrders'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(wk_registers() == wkbefore,
               "…and serves the same registers, row for row — the work orders, one with its batches, the CSV, and the "
               "batch, lot, subcontracting and declaration registers that read them")
@@ -4393,9 +4380,8 @@ def run():
               f"{json.dumps(ayGoneR.json().get('errors'))[:120] if ayGoneR.status_code != 201 else ayGoneDoc.get('no')})")
         if ayGoneDoc.get("id"):
             arif.delete(f"{BASE}/accounting/receipts/{ayGoneDoc['id']}")
-        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         ayc, aybefore, ayboots = ay_counts(), ay_registers(), ay_boots()
-        psql(PRE_R56_ACCOUNTING)
+        ensure_compat_state(); psql(PRE_R56_ACCOUNTING)
         psql("delete from money_allocations")
         psql("delete from money_docs")
         psql("delete from money_accounts")
@@ -4410,10 +4396,10 @@ def run():
         check(ay_counts() == ayc,
               f"the first boot moved every account, receipt and payment into the tables ({ayc[0]} accounts, "
               f"{ayc[1]} documents, {ayc[2]} allocations and the configuration)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'moneyAccounts'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'moneyDocs'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'accountingConfig'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(ay_registers() == aybefore,
               "…and serves the same registers, row for row — the accounts with their balances, both money registers "
               "with their allocations, the configuration, the invoices they settled and a customer's statement")
@@ -4504,9 +4490,8 @@ def run():
               f"{json.dumps(vdGoneD.json().get('errors'))[:120] if vdGoneD.status_code != 201 else vdGoneDoc.get('no')})")
         if vdGoneDoc.get("id"):
             arif.delete(f"{BASE}/vat/treasury/{vdGoneDoc['id']}")
-        flush_snapshot(arif)  # the counter the deleted draft claimed has to be in the snapshot the rewind keeps
         vdc, vdbefore, vdboots = vd_counts(), vd_registers(), vd_boots()
-        psql(PRE_R56_VAT)
+        ensure_compat_state(); psql(PRE_R56_VAT)
         psql("delete from vat_adjustments")
         psql("delete from vds_entries")
         psql("delete from treasury_deposits")
@@ -4520,10 +4505,10 @@ def run():
         check(vd_counts() == vdc,
               f"the first boot moved every deposit, certificate and adjustment into the tables ({vdc[0]} deposits, "
               f"{vdc[1]} certificates, {vdc[2]} adjustments)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'treasury'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'vds'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'adjustments'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(vd_registers() == vdbefore,
               "…and serves the same registers, row for row — the three of them, the invoices a certificate may still "
               "be written against, and the SD-on-exports register that reads the adjustments")
@@ -4591,7 +4576,7 @@ def run():
                     "note58": arif.get(f"{BASE}/vat/returns/{filed}/notes/58").json()}
 
         rc, rbefore, rboots = ret_counts(), ret_registers(), vd_boots()
-        psql(PRE_R56_RETURNS)
+        ensure_compat_state(); psql(PRE_R56_RETURNS)
         psql("delete from vat_returns")
         psql("delete from vat_settings")
         check(ret_counts() == ("0", "0")
@@ -4603,9 +4588,9 @@ def run():
         check(ret_counts() == rc,
               f"the first boot moved every return into vat_returns and the settings into vat_settings "
               f"({rc[0]} returns)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'returns'") == "0"
-              and psql("select count(*) from compat_state where data->'db' ? 'vatSettings'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t"
+              and psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(ret_registers() == rbefore,
               "…and serves the same answers: the register with its CSV, the tax periods, the compliance centre "
               "for the open period and for a filed one, the NBR settings, one return with its computation, and "
@@ -4709,9 +4694,8 @@ def run():
               f"{json.dumps(udGone.json().get('errors'))[:120] if udGone.status_code != 201 else udGoneDoc.get('no')})")
         if udGoneDoc.get("id"):
             arif.delete(f"{BASE}/vat/uds/{udGoneDoc['id']}")
-        flush_snapshot(arif)  # the counter the deleted declaration claimed has to be in the snapshot the rewind keeps
         udc, udbefore, udboots = ud_counts(), ud_registers(), ud_boots()
-        psql(PRE_R62_UDS)
+        ensure_compat_state(); psql(PRE_R62_UDS)
         psql("delete from ud_lines")
         psql("delete from uds")
         check(ud_counts()[:3] == ("0", "0", "0")
@@ -4722,8 +4706,8 @@ def run():
         check(ud_counts()[:3] == udc[:3],  # the fourth count is the deleted rows: the snapshot keeps none of them
               f"the first boot moved every declaration into the tables ({udc[0]} declarations, {udc[1]} inputs, "
               f"{udc[2]} with amendments)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'uds'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(ud_registers() == udbefore,
               "…and serves the same answers: the register with its CSV, one declaration with its usage, the fit "
               "question and the RMG export register that reads the declarations from memory")
@@ -4776,9 +4760,8 @@ def run():
             with open(API_LOG, encoding="utf-8", errors="replace") as fh:
                 return sum(1 for line in fh if "R6.5 upgrade:" in line)
 
-        flush_snapshot(arif)  # a UD settled natively never saved the snapshot: the counters have to be in it before the rewind
         buc, bubefore, buboots = bu_counts(), bu_registers(), bu_boots()
-        psql(PRE_R65_BOND_UDS)
+        ensure_compat_state(); psql(PRE_R65_BOND_UDS)
         psql("delete from bond_ud_garments")
         psql("delete from bond_ud_inputs")
         psql("delete from bond_uds")
@@ -4790,8 +4773,8 @@ def run():
         check(bu_counts() == buc,
               f"the first boot moved every own UD into the tables ({buc[0]} own UDs, {buc[1]} inputs, "
               f"{buc[2]} garments, {buc[3]} settled)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'bondUds'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(bu_registers() == bubefore,
               "…and serves the same answers: the register with its CSV, one settled UD, the settled state's own "
               "and the bond register that links its lots through the in-memory copy")
@@ -4843,9 +4826,8 @@ def run():
             with open(API_LOG, encoding="utf-8", errors="replace") as fh:
                 return sum(1 for line in fh if "R6.6 upgrade:" in line)
 
-        flush_snapshot(arif)  # an application filed natively never saved the snapshot: the counters have to be in it before the rewind
         rac, rabefore, raboots = ra_counts(), ra_registers(), ra_boots()
-        psql(PRE_R66_RETURN_APPS)
+        ensure_compat_state(); psql(PRE_R66_RETURN_APPS)
         psql("delete from return_amendments")
         psql("delete from late_filings")
         check(ra_counts() == ("0", "0", "0")
@@ -4857,8 +4839,8 @@ def run():
         check(ra_counts() == (str(int(rac[0]) + 1), rac[1], rac[2]),
               f"the first boot moved every application into the tables ({rac[0]} 9.3 + the drill's own draft, "
               f"{rac[1]} 9.4, {rac[2]} amended with a decreasing adjustment)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'lateFilings' or data->'db' ? 'returnAmendments'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(ra_registers() == rabefore,
               "…and serves the same answers: both registers, the 9.4 CSV, one of each and the compliance centre "
               "that reads the applications through the mirror")
@@ -4918,9 +4900,8 @@ def run():
             with open(API_LOG, encoding="utf-8", errors="replace") as fh:
                 return sum(1 for line in fh if "R6.6 upgrade:" in line and "PRC batches" in line)
 
-        flush_snapshot(arif)  # a batch posted natively never saved the snapshot: the counters have to be in it before the rewind
         pvc, pvbefore, pvboots = pv_counts(), pv_registers(), pv_boots()
-        psql(PRE_R66B_PRC_BATCHES)
+        ensure_compat_state(); psql(PRE_R66B_PRC_BATCHES)
         psql("delete from prc_batches")
         check(pv_counts() == ("0", pvc[1])
               and psql("select count(*) from compat_state where data->'db' ? 'prcBatches'") == "1",
@@ -4930,8 +4911,8 @@ def run():
         check(pv_counts() == (str(int(pvc[0]) + 1), pvc[1]),
               f"the first boot moved every batch into the table ({pvc[0]} batches + the drill's own, "
               f"{pvc[1]} realisations kept where they were)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'prcBatches'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(pv_registers() == pvbefore,
               "…and serves the same answers: the overview, both CSVs, the register, the reversed batch by "
               "number and the realisations on its invoice")
@@ -4986,9 +4967,8 @@ def run():
             with open(API_LOG, encoding="utf-8", errors="replace") as fh:
                 return sum(1 for line in fh if "R6.5 upgrade:" in line and "drawback claims" in line)
 
-        flush_snapshot(arif)  # a claim filed natively never saved the snapshot: the counters have to be in it before the rewind
         clc, clbefore, clboots = cl_counts(), cl_registers(), cl_boots()
-        psql(PRE_R65B_CLAIMS)
+        ensure_compat_state(); psql(PRE_R65B_CLAIMS)
         psql("delete from drawback_claims")
         check(cl_counts() == ("0", clc[1])
               and psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "1",
@@ -4997,8 +4977,8 @@ def run():
         restart()
         check(cl_counts() == (str(int(clc[0]) + 1), clc[1]),
               f"the first boot moved every claim into the table ({clc[0]} claims + the drill's own draft)")
-        check(psql("select count(*) from compat_state where data->'db' ? 'drawbackClaims'") == "0",
-              "…and rewrote the snapshot without them")
+        check(psql(COMPAT_GONE) == "t",
+              "…and dropped the snapshot table — the rows are the only copy")
         check(cl_registers() == clbefore,
               "…and serves the same answers: the register and its totals, the filed filter, the CSV, the paid "
               "claim by number and the bond view's drawback state that reads the claims through the mirror")
@@ -5025,6 +5005,86 @@ def run():
               and psql(f"select count(*) from drawback_claims where id = '{clw.get('id')}' and deleted_at is not null") == "1"
               and all(r.get("id") != clw.get("id") for r in arif.get(f"{BASE}/vat/drawback-claims").json().get("rows", [])),
               "…and a deleted draft is stamped, not removed — the register no longer lists it, and its exports are claimable again")
+
+        # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
+        print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
+        check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
+
+        # marking notifications read is a write to the user's own row now — no snapshot involved
+        nn = arif.get(f"{BASE}/notifications").json()
+        nid = next((x["id"] for x in nn.get("items", []) if not x.get("read")), None)
+        unread = nn.get("unread", 0)
+        rr = arif.post(f"{BASE}/notifications/read", json={"ids": [nid]}) if nid else None
+        check(rr is not None and rr.status_code == 200 and rr.json().get("unread") == unread - 1,
+              "marking a notification read answers with one fewer unread")
+        check(nid is not None and psql(f"select count(*) from users where username = 'arif' and notif_read ? '{nid}'") == "1",
+              "…and the read id lands on the user's own row")
+        restart()
+        check(arif.get(f"{BASE}/notifications").json().get("unread") == unread - 1,
+              "…and survives the restart — users.notif_read is the durable copy")
+
+        # a database written before the finale carries the read ids inside compat_state and no notif_read
+        # column. Rewind both — drop the column, un-apply 0023, put the read ids back in the snapshot — and
+        # the next boot has to run the migration again, lift the ids out onto the rows, and drop the table.
+        aid = psql("select id from users where username = 'arif'")
+        # everything arif has already read rides along in the rewound snapshot — the pre-finale writer saved
+        # the whole map after every request, so a drill that keeps only the ids it cares about would let
+        # notifications the suite read earlier pop back up as unread and fail the round-trip check below
+        have = json.loads(psql("select notif_read::text from users where username = 'arif'") or "[]")
+        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 24, "24 migrations have run on this database")
+        last = psql("select hash from drizzle.__drizzle_migrations order by created_at desc limit 1")
+        psql(f"delete from drizzle.__drizzle_migrations where hash = '{last}'")
+        psql("alter table users drop column notif_read")
+        ensure_compat_state()
+        ids = [*have, "finale:migrated"]
+        psql("update compat_state set data = jsonb_set(data, '{notifRead}', "
+             f"jsonb_build_object('{aid}', jsonb_build_object('ids', '{json.dumps(ids)}'::jsonb))) where key = 'main'")
+        restart()
+        check(psql("select count(*) from information_schema.columns where table_name = 'users' and column_name = 'notif_read'") == "1",
+              "the rewound boot re-ran the 0023 migration: the column is back")
+        check(psql(f"select count(*) from users where username = 'arif' and notif_read ? 'finale:migrated'") == "1"
+              and psql(f"select count(*) from users where username = 'arif' and notif_read ? '{nid}'") == "1",
+              "…and it lifted the read ids out of the rewound snapshot onto the row")
+        check(psql(COMPAT_GONE) == "t", "…and the boot dropped the drained table after adopting it")
+        nn3 = arif.get(f"{BASE}/notifications").json()
+        check(nn3.get("unread") == unread - 1,
+              f"…nothing lost on the upgrade: the read ids survived the round trip "
+              f"(unread {nn3.get('unread')} vs {unread - 1}, ids {psql('select notif_read::text from users where username = ' + chr(39) + 'arif' + chr(39))})")
+
+        # a backup taken before the finale still carries compat_state. Restoring it must land its rows,
+        # lift the read ids onto the users' rows (the pre-finale users have no notif_read column), and end
+        # with the child boot dropping the table again — the same drain, from the backup path.
+        restore_js = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "api", "dist", "restore.js")
+        old = json.loads(_gz.decompress(admin.get(f"{BASE}/backups/{bid}").content))
+        adm_id = psql("select id from users where username = 'admin'")
+        for u in old["tables"].get("users", []):
+            u.pop("notif_read", None)
+        old["tables"]["compat_state"] = [{"key": "main", "updated_at": "2026-01-01T00:00:00.000Z",
+                                          "data": {"db": {}, "notifRead": {adm_id: {"ids": ["finale:restore"]}}}}]
+        blob = _gz.compress(json.dumps(old).encode())
+        # the blob is too big for a single argv string (the kernel caps one at 128 KB) — feed it as a file
+        sql_path = f"/tmp/finale_backup_{TAG}.sql"
+        with open(sql_path, "w") as fh:
+            fh.write("insert into backups (kind, slot, by, size, sha256, tables, data) values "
+                     f"('manual', 'finale-drill-{TAG}', 'drill', {len(blob)}, '{hashlib.sha256(blob).hexdigest()}', '{{}}', "
+                     f"'\\x{blob.hex()}'::bytea)")
+        subprocess.run(["psql", DB_URL, "-At", "-v", "ON_ERROR_STOP=1", "-f", sql_path], check=True, capture_output=True)
+        os.remove(sql_path)
+        obid = "bk" + psql("select max(id) from backups")
+        ftarget = DB_URL.split("?")[0].rsplit("/", 1)[0] + f"/dizivat_finale_{TAG}"
+        fr = subprocess.run(["node", restore_js, "--source", DB_URL, "--id", obid, "--target", ftarget, "--create",
+                             "--admin-password", f"Finale-{TAG}-pw", "--boot"], capture_output=True, text=True, timeout=600)
+        check(fr.returncode == 0, "restoring a backup that still carries compat_state passes"
+              + ("" if fr.returncode == 0 else " — " + (fr.stderr or fr.stdout)[-300:]))
+        tgt = lambda q: subprocess.run(["psql", ftarget, "-At", "-c", q], capture_output=True, text=True, check=True).stdout.strip()
+        check(tgt("select count(*) from users where notif_read ? 'finale:restore'") == "1",
+              "the restored copy lifted the backup's read ids onto the users' rows")
+        check(tgt(COMPAT_GONE) == "t", "…and its boot dropped the drained compat_state the backup still carried")
+        psql(f"delete from backups where slot = 'finale-drill-{TAG}'")
+        subprocess.run(["psql", DB_URL.split("?")[0].rsplit("/", 1)[0] + "/postgres", "-At", "-c",
+                        f"drop database if exists dizivat_finale_{TAG}"], capture_output=True)
+        check(psql(f"select count(*) from pg_database where datname = 'dizivat_finale_{TAG}'") == "0",
+              "…and the drill database is cleaned up")
 
     else:
         skipped("restart checks (API_RESTART_CMD not set)")

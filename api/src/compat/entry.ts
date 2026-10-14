@@ -1,8 +1,9 @@
 /**
- * Compat bundle (dist/compat.js): the mock route handlers plus the helpers the native modules need from the same
- * in-memory world. Loaded once at boot, after main.ts has put the saved state into the globals.
+ * Compat bundle (dist/compat.js): the helpers the native modules need from the mock's in-memory world — the
+ * shared rules, the demo data set and its globals. Loaded once at boot, after main.ts has put the saved state
+ * into the globals. The route table that once ran unported mock handlers inside NestJS is gone: it emptied
+ * with R6.7's readers and the finale deleted it.
  */
-export { routeModules } from "./routes.gen"
 export { db, stockBranches, usedBranchIds, withStock } from "@/lib/mock/db"
 export { badUnit, unitUsage } from "@/lib/mock/units"
 export { auditStore, dhakaDay, diff } from "@/lib/mock/audit"

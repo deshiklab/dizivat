@@ -8,7 +8,6 @@ import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
 import { BatchesController, BatchesService } from "./modules/batches"
 import { DerivedService, ItemLedgerController, LotsController, StockController, SubcontractController } from "./modules/derived"
-import { CompatController, CompatService } from "./modules/compat"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
 import { CustomersController, PartiesService, VendorsController } from "./modules/parties"
 import { ItemsController, ItemsService, MasterItemsController } from "./modules/items"
@@ -74,13 +73,13 @@ const NATIVE_CONTROLLERS = [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService,
-    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, CompatService, BackupsService, UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, AccountingConfigService,
-    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, CompatService, BackupsService,
+    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService,
     UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
   ],
 })
@@ -92,14 +91,14 @@ const COMMIT = (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || "").t
 
 @Controller("api/v1/health")
 class HealthController {
-  constructor(@Inject(CompatService) private readonly compat: CompatService) {}
-
   /** Public liveness + database check (Render health check). */
   @Get()
   async health() {
     const t = Date.now()
     await db.execute(sql`select 1`)
-    return { ok: true, version: VERSION, commit: COMMIT, seed: SEED_VERSION, db: { ok: true, ms: Date.now() - t }, modules: { native: NATIVE_CONTROLLERS.length, compatRoutes: this.compat.size }, uptime: Math.round(process.uptime()) }
+    // compatRoutes stays in the shape at 0: the compat route table itself went native in R6.7, and its
+    // snapshot followed in the finale — there is no compat fallback layer to count any more
+    return { ok: true, version: VERSION, commit: COMMIT, seed: SEED_VERSION, db: { ok: true, ms: Date.now() - t }, modules: { native: NATIVE_CONTROLLERS.length, compatRoutes: 0 }, uptime: Math.round(process.uptime()) }
   }
 }
 
@@ -107,8 +106,5 @@ class HealthController {
 class NativeModule {}
 
 /** Last, so its catch-all only sees what no native controller handles. */
-@Module({ controllers: [CompatController] })
-class CompatModule {}
-
-@Module({ imports: [CoreModule, NativeModule, CompatModule] })
+@Module({ imports: [CoreModule, NativeModule] })
 export class AppModule {}

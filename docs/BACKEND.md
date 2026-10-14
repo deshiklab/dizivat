@@ -53,8 +53,8 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 | The drawback claims (R6.5) | `vat/drawback-claims`, `vat/drawback-claims/{id}`, `vat/drawback-claims/{id}/action` | **native** — `drawback_claims` (the frozen export lines, the DEDO reference and the decision dates travel with the head; the number unique while it lives, a deleted draft stamped) |
 | The last four readers (R6): the bond register, the RMG export register, the penalty quote, the SD-eligible inputs | `vat/bond`, `vat/exports`, `vat/penalty`, `vat/sd-eligible` | **native** — no tables of their own: each adds up documents other modules own, read through the mirror, with the mock's own computation — and with these four the compat route table is empty |
 
-`api/scripts/gen-compat-routes.mjs` holds the native list and generates the compat route table
-(`api/src/compat/routes.gen.ts`). CI fails if the table is stale.
+The compat route table that once ran unported mock handlers inside NestJS is gone: it emptied with the four
+readers, and the finale (below) deleted the generator, the table and the controller that mounted it.
 
 ### What is better than the mock now
 
@@ -76,23 +76,28 @@ inside the API, and their data is saved to PostgreSQL so nothing is lost on rest
 1. **Boot**
    - Migrations run first.
    - **First start:** the demo data set is seeded into PostgreSQL (the same data the mock and the Pages demo use): 6 users with scrypt hashes, company, units, tariff, about 1,160 audit events, and the document state.
-   - **Later starts:** everything is restored from PostgreSQL *before* the compat bundle loads.
-2. **Per request** (historical, since the four readers went native: no route is served through this path anymore)
-   - Nest authenticated the request from the `sessions` table and ran the mock handler with that user (`api/src/compat/session-user.shim.ts`).
-   - The path is still walked by the writes that carry compat state of their own — the notifications' read ids
-     and the bulk import's creations — through the same persist step.
-   - A process-wide lock serialises those requests.
-3. **Write-through** (both directions)
-   - Native modules own users, company, units, (R5.2) the parties, items and master items, (R5.3) the stock documents, the sales invoices, the purchases and both note families, and (R5.4) the opening stock entries and the production batches in PostgreSQL — and, since the last R5.4 slice, the branch split and an item's ledger, which are derived from those rows rather than stored.
-   - They update the in-memory copies the compat handlers read, so both sides always agree. For example, items validate their unit against the `units` table, and an invoice quotes a customer the `parties` table holds.
-   - The other way round: when a compat handler writes a record a native module owns — the R6.2 bulk import creates
-     customers, vendors and SKUs, approving a document moves an item's counters, a restored backup puts stock
-     documents back — the request's persist step
-     compares the in-memory rows with what was last saved and adopts the difference into the table
-     (`api/src/common/writeback.ts`).
+   - **Later starts:** everything is restored from the tables *before* the compat bundle loads — and a database
+     that still carries a `compat_state` snapshot (anything written before the finale) is adopted and drained
+     first; see the finale section below.
+2. **The bundle is shared code, not routes.** No route is served through the compat path anymore: the last one
+   went native with the four readers. What `dist/compat.js` still provides is the mock's own world in memory —
+   the document collections the native modules read through the mirror, the shared rule functions
+   (`api/src/compat/entry.ts`), and the demo data set the seed writes.
+3. **Write-through** (one direction left)
+   - Native modules own every family in PostgreSQL and update the in-memory copies the shared computations
+     read, so the two sides always agree. For example, items validate their unit against the `units` table, and
+     an invoice quotes a customer the `parties` table holds.
+   - The one write the other way round is the R6.2 bulk import: it creates customers, vendors and SKUs through
+     the mirror's arrays, and its own transaction carries the party, item and master-item write-back legs into
+     the tables (`api/src/common/writeback.ts`) — the last users of the write-back machine now that the
+     snapshot's persist step is gone. The notifications' read ids, the snapshot's other last tenant, live on
+     the user's own row (`users.notif_read`).
 
-**Single instance by design** until R5.6 removes the compat layer: run one API process per database. Render's free
-plan runs exactly one.
+**Single instance by design** still: run one API process per database (Render's free plan runs exactly one). The
+compat snapshot that once forced this is gone, but the in-memory mirror — the shared computation's world —
+remains, and it is per-process. The state lock's remaining work is the audit chain: `lockState` (a PostgreSQL
+advisory lock plus the boot-epoch check) serialises appends across a rolling deploy, and `withStateLock`
+serialises the import, the backup snapshot and the audit writes inside the process.
 
 ## R5.2 — customers and vendors on their own table
 
@@ -883,17 +888,62 @@ between the two runtimes.
   closing a declaration or posting a PRC batch moves the bond view, the export register's at-risk count and the
   proceeds filters the moment it commits — the mirror is updated in the same transaction as the rows, which the
   suite checks from both sides.
-- **What is left of the compat layer is state, not routes.** The user store (preferences, the notifications'
-  read ids), the sequence counters and the undo buffers still live inside `compat_state`, saved by the writes
-  that touch them; the lock that serialises them stays until the finale moves those too.
-- **0 compat route modules are left, 116 native.** Every route is served by a native module; the compat table
-  (`api/src/compat/routes.gen.ts`) is empty, and CI still fails if it goes stale.
+- **What was left of the compat layer was state, not routes.** The user store's last tenant (the notifications'
+  read ids), the sequence counters and the undo buffers still lived inside `compat_state` at this point, saved
+  by the writes that touched them; the finale that followed moved those too.
+- **0 compat route modules were left, 116 native.** Every route was served by a native module; the compat table
+  was empty — and the finale deleted it, its generator and the controller that mounted it.
+
+## The finale — `compat_state` is gone
+
+The snapshot the compat layer was built around — the JSONB `db` the all-mock code saved after every request and
+every ported slice drained a family at a time — has no tenants left, so the last piece of the layer went with it.
+
+- **The read ids moved onto the user's own row.** Migration `0023` adds `users.notif_read` (JSONB, default `[]`)
+  and lifts the ids out of the stored snapshot in the same migration, so a live upgrade loses nothing. Marking
+  notifications read is a single `UPDATE` on that row plus the mirror — no snapshot save, no state lock.
+- **The counters derive from the rows — and from the audit trail.** The boot already lifted every sequence
+  counter from the highest id each table had seen; the finale adds the audit trail as a second witness for the
+  families whose deleted drafts leave a stamped row (`sale`, `purchase`, `creditNote`, `debitNote`, `opening`,
+  `batch`, `bom`, `workOrder`, `receipt`, `payment`, `account`, `treasury`, `vds`, `adjustment`, `ud`, `bondUd`,
+  `lateFiling`, `returnAmendment`, `prcBatch`, `drawbackClaim`): their numbers were always retired through the
+  audit refs (`nextNo` reads them), and now their ids retire through the audit `entity_id`s the same way, so a
+  deleted draft's id cannot come back even when the row that stamped it is gone.
+- **The boot drops the table at run time.** Migrations cannot: they run *before* the boot, and a database
+  written by an earlier release still holds data the adoption legs must read first. So `bootState` reads the
+  table if it exists, `restore()` adopts whatever collections a pre-port snapshot still carries (the R5.2–R6.6
+  legs, unchanged), and the boot then drops `compat_state` under the state lock — the same lock, so a rolling
+  deploy's older instance finishes its in-flight write first; its next save failing afterwards is its
+  503-retry path. A fresh seed drops the empty table immediately.
+- **The compat module is deleted.** The fallback controller, the persist step (the delta machine that compared
+  the in-memory world with the last saved snapshot and wrote every family's legs) and the `compatSnapshot`
+  helper are gone. The bulk import keeps its three write-back legs — party, item, master-item — in its own
+  transaction, and its audit entries were already native. The route-table generator and the empty table went
+  with the controller; the compat *bundle* (`dist/compat.js`) stays: it is the shared rules and the in-memory
+  world the native modules still read through the mirror.
+- **Backups and restores.** A backup taken by this version carries no `compat_state` (the table is gone) and
+  carries the read ids on the users' rows. Restoring a backup taken *before* the finale still works: the
+  restore recreates the table if the target's boot already dropped it, lifts the read ids from the snapshot
+  onto the users' rows (the pre-finale users have no `notif_read` column of their own), and the restored
+  copy's first boot adopts and drops the table like any other upgrade.
+- **What the drills prove.** `api_native.py` ends with the finale block: the read ids survive a restart as
+  rows; un-applying `0023` and rewinding the read ids into a recreated snapshot makes the next boot re-run the
+  migration, lift them back out and drop the table; and a crafted pre-finale backup (compat_state and all,
+  users without the column) restores, migrates, boots and ends with the table dropped. The per-family upgrade
+  drills each recreate the empty snapshot before rewinding their tables into it — the shape the old code would
+  have written — and assert the table is *gone* after the adoption boot, not merely rewritten without their
+  collection.
+- **Single instance remains — for a different reason.** The snapshot no longer pins the API to one process; the
+  in-memory mirror does (every shared computation reads it). The state lock's remaining work is the audit
+  chain across a rolling deploy and the re-seed epoch check; the in-process lock serialises the import, the
+  backup snapshot and the audit writes. Scaling out is a story about moving the mirror's reads to the tables,
+  one family at a time — the same discipline this whole port ran on.
 
 ## Tables
 
 | Table | Purpose |
 | --- | --- |
-| `users` | accounts, role (incl. `vatOfficer`), status, scrypt hash, `password_is_demo`, preferences (JSONB); **R6.2** `access_until` for VAT officers |
+| `users` | accounts, role (incl. `vatOfficer`), status, scrypt hash, `password_is_demo`, preferences (JSONB); **R6.2** `access_until` for VAT officers; **finale** `notif_read` — the notification ids the user has already read, the last user-store bit the compat snapshot carried |
 | `sessions` | one row per sign-in; `revoked_at` + `revoke_reason` (signedOut, passwordChanged, passwordReset, deactivated) |
 | `login_failures` | failures per username, `locked_until` |
 | `saved_views` | list views per user and table |
@@ -942,7 +992,7 @@ between the two runtimes.
 | `drawback_claims` | **R6.5:** a drawback claim — the number (`DBK-…`, unique while it lives), the status, the export lines frozen at creation with their CD + RD (JSONB), the DEDO reference, the sanction and refund dates and amounts, the rejection reason, the history (JSONB) |
 | `prc_batches` | **R6.6:** a bank PRC file posted against the export-proceeds register — the number (`PB-…`, unique while it lives), the file name, the lines with their allocations as JSONB, the per-currency totals, the skipped lines, the reversal date and reason, its history (JSONB) |
 | `return_amendments` | **R6.6:** a Mushak 9.4 amendment application (s.66) — the number (unique while it lives), the period, the revision, the corrections as JSONB (note, column, as-filed, corrected, explanation), the frozen computation the amended return was built from, the filing and decision references, the adjust period of its decreasing adjustment, its history (JSONB); `deleted_at` retires the id of a deleted draft |
-| `compat_state` | JSONB state of the modules not yet ported (no customers, vendors, items, master items or units since R5.2, no stock documents, sales invoices, purchases or notes since R5.3, no opening entries or production batches since R5.4, no price declarations, production configuration or work orders since R5.5, no accounts, receipts, payments or accounting configuration since R5.6, no treasury deposits, VDS entries or VAT adjustments since R5.6, no tax returns or NBR settings since the 9.1 return's own slice, no exporters' declarations since R6.2, no own UDs since R6.5, no late filings, return amendments or PRC batches since R6.6) |
+| `compat_state` | **gone (finale).** The R5.1 JSONB snapshot is empty: every collection it ever held has a table now, the notification read-ids moved to `users.notif_read` and the counters derive from the rows. The table stays in the schema for one more release — a database written before the finale still upgrades through the boot's adoption legs, which read it and then drop it at run time. Remove from the schema once every installed base has passed a finale boot |
 | `meta` | seed version, tariff fiscal year |
 
 **Demo data upgrades (R6.2):** at start-up, if `meta.seed_version` differs from `SEED_VERSION` in `api/src/boot.ts`, the
@@ -985,7 +1035,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 694 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 793 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and
@@ -1303,7 +1353,10 @@ Without `RENDER_DEPLOY_HOOK_URL`, the *Deploy gate* job prints a warning and not
 | R5.3 | **done** — transfers and damage (`stock_documents` + `stock_document_lines`), sales (6.3, `sales` + `sale_lines` + `sale_realisations`), purchases incl. imports and services (`purchases` + `purchase_lines`), credit and debit notes (6.7/6.8, `notes` + `note_lines`) |
 | R5.4 | **done** — the derived stock: the opening entries (`opening_entries`) and the production batches (6.4, `batches` + `batch_lines` + `batch_consumption`) are rows, and since every family the branch split and an item's ledger add up is relational now, `stock` and `items/{id}/ledger` are served from those rows by the mock's own derivation. Next: the rest of production — BOMs and their 4.3 versions, work orders, the production configuration, the lots and subcontracting registers |
 | R5.5 | **done** — the rest of production: the price declarations (Mushak 4.3, `boms` + `bom_inputs` + `bom_costs`), the production configuration (`production_config`) and the work orders (`work_orders` + `work_order_lines`, whose progress the approved batches' rows are summed into) are rows, and the two registers derived from them — the finished-goods lots (`production/lots`) and the subcontracting register (`production/subcontract`) — are served from those rows by the mock's own derivation. Production is out of `compat_state` |
-| R5.6 | **in progress** — accounting is done: the accounts (`money_accounts`), the receipts and the payments with their allocations (`money_docs` + `money_allocations`, settling the invoice's `paid` and `due` in the same transaction) and the accounting configuration (`accounting_config`); so are the treasury deposits (`treasury_deposits`), the VDS certificates (`vds_entries`, whose approval settles what it withholds on the invoice's row), the VAT adjustments (`vat_adjustments`) and the Mushak 9.1 return with the period lock, the tax periods and the compliance centre (`vat_returns`, a submitted one carrying the computation it was filed with, and the one row of `vat_settings`). Next: the Mushak books — then `compat_state` and the lock are removed and the API can scale out |
+| R5.6 | **done** — accounting: the accounts (`money_accounts`), the receipts and the payments with their allocations (`money_docs` + `money_allocations`, settling the invoice's `paid` and `due` in the same transaction) and the accounting configuration (`accounting_config`); the treasury deposits (`treasury_deposits`), the VDS certificates (`vds_entries`, whose approval settles what it withholds on the invoice's row), the VAT adjustments (`vat_adjustments`) and the Mushak 9.1 return with the period lock, the tax periods and the compliance centre (`vat_returns`, a submitted one carrying the computation it was filed with, and the one row of `vat_settings`) |
+| R6.2–R6.6 | **done** — the exporters' Utilization Declarations (`uds` + `ud_lines`), our own UDs / UPs with their settlement (`bond_uds` + `bond_ud_inputs` + `bond_ud_garments`), the late-filing and return-amendment applications (`late_filings`, `return_amendments`), the bank-file PRC batches (`prc_batches`) and the drawback claims (`drawback_claims`) are rows; the registers that read them (UD register, bond consumption register, export-proceeds register, penalty) are native readers over the mirror |
+| R6.7 | **done** — the last four readers (bond register, RMG export register, penalty quote, SD-eligible inputs) are native: the compat route table is empty, 116 routes native |
+| Finale | **done** — `compat_state` is gone: the read ids on `users.notif_read`, the counters from the rows and the audit trail, the table dropped by the boot that drains it, and the compat module (controller, persist, snapshot helper, route-table generator) deleted. The write-back survives only for the bulk import's three legs. Scaling out is now a mirror story, not a snapshot story |
 
 Money columns will be `numeric(18,2)` (as `parties.credit_limit`, the `items` prices and `tariff_lines` already are),
 quantities `numeric(18,3)` (the units allow up to three decimals) and a declaration's coefficients `numeric(18,4)`

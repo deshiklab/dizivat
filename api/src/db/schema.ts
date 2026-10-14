@@ -32,6 +32,8 @@ export const users = pgTable("users", {
   /** seeded account still on the published demo password (listed on the login page) */
   passwordIsDemo: boolean("password_is_demo").notNull().default(false),
   preferences: jsonb("preferences").$type<Record<string, string>>().notNull().default({}),
+  /** the notification ids this user has already read — the last user-store bit the compat snapshot carried */
+  notifRead: jsonb("notif_read").$type<string[]>().notNull().default([]),
   createdAt: ts("created_at").notNull().defaultNow(),
   lastSignInAt: ts("last_sign_in_at"),
   /** R6.2: VAT officer — last day (Asia/Dhaka) the account may sign in; null for every other role */
@@ -1520,6 +1522,14 @@ export const vatSettings = pgTable("vat_settings", {
 /**
  * Modules not yet migrated (the VAT returns, the registers that are derived from documents…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
+ */
+/**
+ * The R5.1 compat snapshot. Every collection it ever held has a table now, and the finale boot drops the table
+ * once the stored snapshot is drained (the counters re-derive from the rows, the notification read-ids moved to
+ * `users.notif_read`, the undo buffer has been empty since the last mock route went native). It stays in the
+ * schema for one more release: a database written before the finale still upgrades through the boot's adoption
+ * legs, which read this table before dropping it. Remove from the schema once every installed base has passed
+ * a finale boot.
  */
 export const compatState = pgTable("compat_state", {
   key: text("key").primaryKey(),

@@ -199,10 +199,20 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
       const { rows: [{ n }] } = await tc.query(`select count(*)::int as n from ${q(t)}`)
       if (n > 0) throw new Error(`target database is not empty (${t} has ${n} rows) — restore into a new database`)
     }
+    // a backup taken before the finale still carries compat_state — recreate it if this target's boot already
+    // dropped it, in the 0000 shape, so its rows land; the child boot below adopts them and drops it again
+    if (payload.tables.compat_state && !list.includes("compat_state")) {
+      await tc.query('create table if not exists compat_state ("key" text primary key not null, "data" jsonb not null, "updated_at" timestamp (3) with time zone default now() not null)')
+      list.push("compat_state")
+    }
     const missing = Object.keys(payload.tables).filter((t) => !list.includes(t))
     if (missing.length) throw new Error(`the backup has tables this version does not know: ${missing.join(", ")}`)
 
-    // 3 — users: no password hashes in a backup
+    // 3 — users: no password hashes in a backup. A backup taken before the finale has no `notif_read` on the
+    // user's row — the read ids lived inside compat_state — so they move onto it here, the same way the
+    // migration moves them on a live upgrade. The snapshot row itself lands in the table recreated above, and
+    // the child boot drops it once it has drained it.
+    const snapNotifRead = (payload.tables.compat_state?.[0] as { data?: { notifRead?: Record<string, { ids: string[] }> } } | undefined)?.data?.notifRead ?? {}
     const userRows = payload.tables.users ?? []
     users = userRows.map((u) => ({ id: String(u.id), username: String(u.username), role: String(u.role), active: !!u.active }))
     const admin = a.adminUser ? users.find((u) => u.username === a.adminUser) : users.find((u) => u.role === "admin" && u.active)
@@ -214,6 +224,7 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
       u.password_hash = isAdmin ? adminHash : unusable
       u.password_is_demo = false
       u.must_change_password = !isAdmin
+      u.notif_read ??= snapNotifRead[String(u.id)]?.ids ?? []
     }
 
     // 4 — insert, table by table, in one transaction
@@ -240,7 +251,10 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
       if (n !== payload.tables[t].length) mismatches.push(`${t}: ${n} rows ≠ ${payload.tables[t].length} in the backup`)
     }
     const want = (payload.tables.compat_state?.[0] as { data?: { db?: Record<string, unknown> } } | undefined)?.data?.db ?? {}
-    const got = ((await tc.query("select data from compat_state where key = 'main'")).rows[0]?.data as { db?: Record<string, unknown> } | undefined)?.db ?? {}
+    const compatThere = (await tc.query("select to_regclass('public.compat_state') is not null as t")).rows[0]?.t
+    const got = compatThere
+      ? ((await tc.query("select data from compat_state where key = 'main'")).rows[0]?.data as { db?: Record<string, unknown> } | undefined)?.db ?? {}
+      : {}
     for (const [k, v] of Object.entries(want)) if (Array.isArray(v)) {
       const g = got[k]
       documents += v.length

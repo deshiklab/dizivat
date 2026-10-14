@@ -18,7 +18,6 @@ import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, 
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
-import { compatSnapshot, markSaved } from "./modules/compat"
 import { toUser } from "./modules/identity"
 import { itemValues, markItems, markMasters, masterValues, toItem, toMaster } from "./modules/items"
 import { assembleBatches, batchLineValues, batchValues, consumptionValues, markBatches } from "./modules/batches"
@@ -60,7 +59,12 @@ export const SEED_VERSION = "r6.6"
 const demoReseed = () => (process.env.DEMO_RESEED ?? "on") !== "off"
 
 export async function bootState(log: (m: string) => void) {
-  const [state] = await db.select().from(compatState).where(eq(compatState.key, "main"))
+  // the finale drops compat_state once its snapshot is drained; a database written before the finale still
+  // carries one (a skipped-release upgrade may even carry document arrays, which the adoption legs below read)
+  const compatTable = (await db.execute(sql`select to_regclass('public.compat_state') as t`)).rows[0]?.t as string | null
+  const [state] = compatTable
+    ? await db.select().from(compatState).where(eq(compatState.key, "main"))
+    : [undefined]
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(users)
   if (state && n) {
     await sealUnchained(log) // R6: upgrade — chain the events written by R5.1
@@ -72,6 +76,9 @@ export async function bootState(log: (m: string) => void) {
     }
     return restore(state.data as { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log)
   }
+  // the finale: everything comes back from the tables — an empty `seq` (the counters re-derive from the rows)
+  // and an empty `trash` (the undo buffer has been empty since the last mock route went native)
+  if (n) return restore({ db: { seq: {}, trash: [] }, notifRead: {} }, log)
   return seed(log)
 }
 
@@ -80,7 +87,6 @@ async function seed(log: (m: string) => void) {
   const m = loadCompat() // fresh globals: demo users, company, documents, audit history
   const demoHash = await Promise.all(m.userStore.users.map(() => hashPassword(m.DEMO_PASSWORD)))
   const events = m.auditStore.events
-  const snapshot = compatSnapshot()
   // R5.2: the master data goes into its own tables (`ord` keeps each collection's insertion order)
   const demoParties = [...m.db.customers, ...m.db.vendors].map((x) => partyValues(x))
   const demoItems = m.db.items.map(itemValues)
@@ -230,7 +236,6 @@ async function seed(log: (m: string) => void) {
       const ids = await tx.insert(auditEvents).values(chained.rows).returning({ id: auditEvents.id })
       ids.forEach((r, j) => { chunk[j].id = `a${r.id}` })
     }
-    await tx.insert(compatState).values({ key: "main", data: JSON.parse(snapshot) as unknown })
     await tx.insert(meta).values([
       { key: "seed_version", value: SEED_VERSION }, { key: "seeded_at", value: seededAt }, { key: "tariff_fy", value: m.TARIFF_FY },
     ])
@@ -263,17 +268,38 @@ async function seed(log: (m: string) => void) {
   markClaims(m.db.drawbackClaims)
   G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
   markPersisted(events)
-  markSaved(snapshot)
+  await dropCompatState(log) // a fresh database never had snapshot contents — drop the empty table now
   log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${demoOpeningRows.length} opening entries, ${demoBatchRows.length} production batches, ${demoBomRows.length} price declarations, ${demoWorkOrderRows.length} work orders, ${demoMoney.length} receipts and payments, ${demoDeposits.length} treasury deposits, ${demoCertificates.length} VDS entries, ${demoAdjustments.length} VAT adjustments, ${demoReturns.length} tax returns, ${demoUds.length} UDs, ${demoBondUds.length} own UDs, ${demoLateFilings.length} late-filing applications, ${demoReturnAmendments.length} return amendments, ${demoPrcBatches.length} PRC batches, ${demoDrawbackClaims.length} drawback claims, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
-async function restore(state: { db: Record<string, unknown>; notifRead: Record<string, { ids: string[] }> }, log: (m: string) => void) {
+/**
+ * The finale: whatever the snapshot still carried is in the tables now — the collections the adoption legs
+ * moved, the notification read-ids the migration moved to `users.notif_read`, and the counters re-derived
+ * from the rows — so this boot drops `compat_state` for good. Under the state lock: a rolling deploy's older
+ * instance may still be finishing a write to it; the lock waits that out, and its own save failing afterwards
+ * is its 503-retry path, the one the epoch check already answers with.
+ */
+async function dropCompatState(log: (m: string) => void) {
+  if ((await db.execute(sql`select to_regclass('public.compat_state') as t`)).rows[0]?.t) {
+    await db.transaction(async (tx) => {
+      await lockState(tx)
+      await tx.execute(sql`drop table if exists compat_state`)
+    })
+    log("compat_state dropped — the snapshot's last contents are table rows now")
+  }
+}
+
+async function restore(state: { db: Record<string, unknown>; notifRead?: Record<string, { ids: string[] }> }, log: (m: string) => void) {
   const t0 = Date.now()
+  // the mock's own module load reads `db.seq` — a drained pre-finale snapshot (or the finale's empty stand-in)
+  // may not carry one, so default the two keys every snapshot always had
+  state = { ...state, db: { seq: {}, trash: [], ...state.db } }
   const userRows = await db.select().from(users).orderBy(asc(users.ord))
   const prefs: Record<string, Preferences> = {}
+  const notifRead: Record<string, { ids: string[] }> = Object.fromEntries(userRows.map((r) => [r.id, { ids: r.notifRead ?? [] }]))
   const list: User[] = userRows.map((r) => { prefs[r.id] = r.preferences as Preferences; return toUser(r) })
   const unitRows: Unit[] = (await db.select().from(units).orderBy(asc(units.ord))).map((r) => ({ id: r.id, code: r.code, name: r.name, decimals: r.decimals, active: r.active, createdAt: r.createdAt.toISOString() }))
-  const adopted = await adoptCompatRows(state, log)
+  await adoptCompatRows(state, log)
   const partyRows = await db.select().from(parties).orderBy(asc(parties.ord))
   const live = (kind: "customer" | "vendor"): Party[] => partyRows.filter((r) => r.kind === kind && !r.deletedAt).map(toParty)
   const customers = live("customer"), vendors = live("vendor")
@@ -399,8 +425,27 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   setEpoch(ep?.value)
   const raw = await db.execute(sql`select * from audit_events order by id`)
   const events: AuditEvent[] = (raw.rows as Parameters<typeof rawToEvent>[0][]).map(rawToEvent)
+  // the id counters of the families whose deleted drafts leave a stamped row must also cover ids the rows no
+  // longer carry — a stamp can be lost (a database rewound to its pre-port shape kept no rows for deleted
+  // drafts at all), while the audit trail is append-only: its entityIds always know which ids were used.
+  // The numbers of these families were always retired this way (`nextNo` reads the audit refs); now their
+  // ids are too.
+  for (const [entity, key, skip] of [
+    ["sale", "sale", 1], ["purchase", "purchase", 1],
+    ["creditNote", "creditNote", 2], ["debitNote", "debitNote", 2],
+    ["opening", "opening", 2], ["batch", "batch", 2], ["bom", "bom", 3], ["workOrder", "workOrder", 2],
+    ["receipt", "receipt", 2], ["payment", "payment", 2], ["account", "account", 2],
+    ["treasury", "treasury", 2], ["vds", "vds", 3], ["adjustment", "adjustment", 2],
+    ["ud", "ud", 2], ["bondUd", "bondUd", 2],
+    ["lateFiling", "lateFiling", 2], ["returnAmendment", "amendment", 2], ["prcBatch", "prcBatch", 2],
+    ["drawbackClaim", "claim", 2],
+  ] as const) {
+    const seen = events.reduce((m, e) =>
+      e.entity === entity && e.entityId ? Math.max(m, Number(e.entityId.slice(skip).split("-")[0]) || 0) : m, 0)
+    seq[key] = Math.max(seq[key] ?? 0, seen)
+  }
   restoreGlobals({
-    db: state.db as never, notifRead: state.notifRead, users: list, prefs, company: await loadCompany(), units: unitRows,
+    db: state.db as never, notifRead, users: list, prefs, company: await loadCompany(), units: unitRows,
     customers, vendors, partyTrash, items: itemRows, masterItems: masterRows, transfers, damages,
     sales: liveSales, saleTrash, purchases: livePurchases, purchaseTrash, creditNotes, debitNotes,
     openings: liveOpenings, batches: liveBatches, boms: liveBoms, productionConfig: config,
@@ -440,20 +485,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead: Record<s
   markReturns(mirror.returns())
   markVatSettings()
   markPersisted(events)
-  const json = compatSnapshot()
-  // an adopted snapshot still carries the adopted collections — replace it with the one this version writes. Under
-  // the state lock, and only while the stored row is still in the older shape: another instance may have served
-  // writes during this boot (rolling deploy) and its newer snapshot must not be clobbered by this one.
-  if (adopted) {
-    await db.transaction(async (tx) => {
-      await lockState(tx)
-      const [row] = await tx.select().from(compatState).where(eq(compatState.key, "main"))
-      const stored = row?.data as { db?: Record<string, unknown> } | undefined
-      if (stored?.db && ADOPTED.some((k) => k in stored.db!))
-        await tx.update(compatState).set({ data: JSON.parse(json) as unknown, updatedAt: new Date() }).where(eq(compatState.key, "main"))
-    })
-  }
-  markSaved(json)
+  await dropCompatState(log)
   log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${livePrcBatches.length} PRC batches, ${liveDrawbackClaims.length} drawback claims, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 

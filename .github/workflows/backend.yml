@@ -49,10 +49,8 @@ jobs:
         with: { python-version: "3.12", cache: pip, cache-dependency-path: scripts/requirements.txt }
       - run: npm ci
       - run: npm --prefix api ci
-      - name: API typecheck (incl. the compat route modules)
+      - name: API typecheck
         run: npm --prefix api run typecheck
-      - name: Compat route table is up to date
-        run: node api/scripts/gen-compat-routes.mjs && git diff --exit-code api/src/compat/routes.gen.ts
       - name: Migrations match the schema
         run: cd api && npx drizzle-kit check
       - run: npm --prefix api run build
