@@ -3221,6 +3221,7 @@
     "prepareReturn": "Prepare return",
     "continueReturn": "Continue return",
     "deposit": "Deposit (TR-6)",
+    "downloadPack": "Download pack",
     "deposits": "Treasury deposits",
     "depositsBody": "{count, plural, one {# approved challan} other {# approved challans}} ·",
     "depositsPending": "{n} drafts not yet counted",

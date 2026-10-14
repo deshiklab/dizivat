@@ -7,7 +7,7 @@ Runs through the Next.js frontend (BASE_URL, default http://localhost:3000), whi
   SESSION_SECRET   enables the forged-token check (must equal the API's secret)
 Run on a freshly seeded database (`node api/dist/main.js --reset`); it creates its own users and records.
 """
-import base64, datetime, hashlib, hmac, json, math, os, subprocess, sys, time, uuid
+import base64, datetime, hashlib, hmac, io, json, math, os, subprocess, sys, time, uuid, zipfile
 import re
 import requests
 
@@ -5060,6 +5060,48 @@ def run():
         check(back.get("activeFy") == "2026-27" and back.get("summary", {}).get("removed") == before.get("total") - 1
               and admin.get(f"{BASE}/tariff", params={"hs": "52052300"}).json().get("cd") == 5,
               "R7.1: re-importing an older year replaces its rows and switches the app back to it")
+
+        # ── R7.2: the monthly compliance pack ────────────────────────────────────────────────────
+        print("\nR7.2: the monthly compliance pack")
+        P = "2026-08"
+        hub = admin.get(f"{BASE}/vat/compliance", params={"period": P}).json()
+        pack = admin.get(f"{BASE}/vat/compliance/pack", params={"period": P})
+        check(pack.status_code == 200 and pack.headers.get("content-type", "").startswith("application/zip")
+              and pack.headers.get("content-disposition", "") == f'attachment; filename="compliance-pack-{P}.zip"',
+              f"R7.2: the pack answers as a zip attachment (got {pack.status_code}, {pack.headers.get('content-type')})")
+        check(admin.get(f"{BASE}/vat/compliance/pack", params={"period": "2019-01"}).status_code == 422,
+              "R7.2: the pack validates its period exactly like the compliance centre (422 outOfRange)")
+        z = zipfile.ZipFile(io.BytesIO(pack.content))
+        names = z.namelist()
+        check(z.testzip() is None and len(z.infolist()) == 8 and all(i.compress_type == zipfile.ZIP_STORED for i in z.infolist())
+              and names[0] == f"manifest-{P}.json" and names[1] == f"checklist-{P}.txt"
+              and f"mushak-6.2-sales-{P}.csv" in names and f"mushak-6.1-purchases-{P}.csv" in names
+              and f"mushak-6.10-{P}.csv" in names and f"tr-6-{P}.csv" in names and f"vds-6.6-{P}.csv" in names
+              and f"return-9.1-{P}.json" in names,
+              f"R7.2: the zip carries the eight members, stored uncompressed, CRCs intact (got {names})")
+        man = json.loads(z.read(f"manifest-{P}.json"))
+        rows_of = {f["name"]: f.get("rows") for f in man.get("files", [])}
+        csv_rows = lambda n: len(z.read(n).decode("utf-8-sig").strip("\n").split("\n")) - 1
+        check(man.get("period") == P and man.get("summary", {}).get("status") == hub.get("status")
+              and man.get("summary", {}).get("computation", {}).get("outputVat") == hub.get("computation", {}).get("outputVat"),
+              "R7.2: the manifest's summary is the compliance centre's own answer, not a second computation")
+        check(all(csv_rows(n) == r for n, r in rows_of.items() if r is not None),
+              "R7.2: the manifest's row counts match the CSVs it lists")
+        ret = json.loads(z.read(f"return-9.1-{P}.json"))
+        check((ret is None) == bool(hub.get("notStarted")) and (ret or {}).get("period") == P,
+              "R7.2: the 9.1 return rides along as JSON — the manifest marks it absent when none is started")
+        book = admin.get(f"{BASE}/mushak/6.10", params={"from": f"{P}-01", "to": f"{P}-31"}).json()
+        check(csv_rows(f"mushak-6.10-{P}.csv") == len(book.get("purchases", [])) + len(book.get("sales", []))
+              and z.read(f"mushak-6.10-{P}.csv").decode("utf-8-sig").splitlines()[0].split(",")[0] == "Part",
+              "R7.2: the 6.10 member is the same book the register endpoint serves (purchases + sales, part column first)")
+        s62 = z.read(f"mushak-6.2-sales-{P}.csv").decode("utf-8-sig").splitlines()
+        check(s62[0] == "Date,Invoice,Challan,Customer,BIN,Mode,Value,SD,VAT,Total,Status"
+              and (len(s62) == 1 or (s62[1].split(",")[0].startswith(P) and s62[1].split(",")[-1] in ("Draft", "Approved", "Cancelled"))),
+              "R7.2: the sales register member is a CSV of the period's invoices, Excel's BOM first")
+        cl = z.read(f"checklist-{P}.txt")
+        check(b"\r\n" in cl and cl.decode().splitlines()[0] == f"Compliance pack — {P}"
+              and f"mushak-6.2-sales-{P}.csv" in cl.decode(),
+              "R7.2: the checklist is a CRLF hand-over note naming every member")
 
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")

@@ -966,6 +966,32 @@ register only listed it. The budget each June publishes the next year's schedule
   replacing its rows and switching back); `e2e_s3.py` drives the dialog end to end and proves the CSV export
   re-imports losslessly.
 
+## R7.2 — the monthly compliance pack
+
+The compliance centre could show a period but not *hand it over*: preparing for an officer's visit (or archiving a
+filed month) meant exporting each register one by one. **`GET /vat/compliance/pack?period=YYYY-MM`** now answers
+with one zip, `application/zip` attachment `compliance-pack-<period>.zip`, built from the same live data the centre
+shows — no second computation:
+
+- **Eight members**: `manifest-<period>.json` (the compliance centre's own summary plus the file list with row
+  counts), `checklist-<period>.txt` (a CRLF hand-over note naming everything inside), the **Mushak 6.2 sales** and
+  **6.1 purchases** registers as CSV (every invoice dated in the period, status column included),
+  **Mushak 6.10**, the period's **TR-6** challans and **VDS 6.6** certificates as CSV, and the **9.1 return** as it
+  stands (JSON — the manifest flags it absent when none is started).
+- **One builder, both runtimes**: `src/lib/compliance-pack.ts` writes the zip (STORED entries, CRC-32, UTF-8
+  names — no dependency) and assembles the members; the mock's route and the native controller both pass it their
+  own copies of the same collections, the same `complianceAnswer` and the same `mushak610Book` range (the period's
+  own first-to-last day), so the bytes cannot drift — the A/B check compares the two runtimes' zips member by
+  member. Period validation is the centre's own (422 `outOfRange`), and the endpoint is a plain signed-in GET, so
+  the browser downloads it with the session cookie — no token plumbing.
+- **The UI** is a **Download pack** button beside the return card's main action on the compliance hub, in every
+  period state.
+- `api_native.py` drills it (zip attachment headers, the 422, eight stored members with CRCs intact, the manifest
+  echoing the centre's summary, row counts matching the CSVs, the 9.1 member's presence matching `notStarted`,
+  the 6.10 member matching the register endpoint, the sales register's shape, the CRLF checklist); `e2e_s3.py`
+  asserts the button and downloads the zip through the browser session; `contract.py` pins the endpoint (zip
+  content type) on both runtimes.
+
 ## Tables
 
 | Table | Purpose |

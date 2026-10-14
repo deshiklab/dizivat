@@ -30,6 +30,7 @@ import { WriteBack, type Delta } from "../common/writeback"
 import { db, type Tx } from "../db/client"
 import { vatReturns, vatSettings } from "../db/schema"
 import { compat, G, mirror } from "../state"
+import { compliancePack } from "@/lib/compliance-pack"
 import { vatSource } from "./vat"
 import { AuditService } from "./audit"
 
@@ -309,7 +310,7 @@ export class PeriodsController {
   }
 }
 
-/** The compliance centre: one period's return, deposits and VDS. */
+/** The compliance centre: one period's return, deposits and VDS — and R7.2's one-click submission set. */
 @Controller("api/v1/vat/compliance")
 export class ComplianceController {
   @Get() @Authed()
@@ -317,6 +318,28 @@ export class ComplianceController {
     const answer = compat().complianceAnswer(searchParams(req).get("period") || compat().currentPeriod(), await returnSource())
     if ("title" in answer) throw new Problem(answer.status, answer.title, answer.errors)
     res.json(answer)
+  }
+
+  /**
+   * R7.2 — the period's compliance pack: a zip with the sales and purchase registers, Mushak 6.10, the TR-6
+   * challans and VDS certificates of the period, the 9.1 return as it stands, and a manifest + checklist.
+   * The file set and the zip itself are the shared `src/lib/compliance-pack.ts` the mock's route also runs.
+   */
+  @Get("pack") @Authed()
+  async pack(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const period = searchParams(req).get("period") || c.currentPeriod()
+    const src = await returnSource()
+    const answer = c.complianceAnswer(period, src)
+    if ("title" in answer) throw new Problem(answer.status, answer.title, answer.errors)
+    const [y, m] = period.split("-").map(Number)
+    const m610 = c.mushak610Book({ from: `${period}-01`, to: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) }, src, mirror.company())
+    if ("status" in m610) throw new Problem(m610.status, m610.title, m610.errors)
+    const zip = compliancePack(period, { sales: src.sales, purchases: src.purchases, treasury: src.treasury, vds: src.vds, returns: src.returns },
+      mirror.company(), { summary: answer, m610 })
+    res.setHeader("content-type", "application/zip")
+    res.setHeader("content-disposition", `attachment; filename="compliance-pack-${period}.zip"`)
+    res.end(zip)
   }
 }
 

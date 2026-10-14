@@ -70,7 +70,7 @@ const invalid = (errors: Record<string, string[]>) => problem(422, "Validation f
 const has = (e: Record<string, string[]>) => Object.keys(e).length > 0
 const ISO = /^\d{4}-\d{2}-\d{2}$/
 const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5)
-const CURRENT = periodOf(TODAY)
+export const CURRENT = periodOf(TODAY)
 
 /* ── Period lock (Mushak 9.1 submitted) & accounting close ─────────────── */
 

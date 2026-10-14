@@ -211,6 +211,25 @@ async def main():
             ok(f"tariff import: the CSV export re-imports losslessly ({before} lines, the year active again)")
         except Exception as e: fail(5, e)
 
+        # ── 5b. R7.2: the compliance pack download ────────────────────
+        try:
+            await ap.goto(BASE + "/en/vat/mushak", wait_until="networkidle")
+            await expect(ap.get_by_role("link", name="Download pack")).to_be_visible(); ok("compliance hub: the pack download button is there")
+            link = ap.get_by_role("link", name="Download pack")
+            href = await link.get_attribute("href")
+            assert href and "/api/v1/vat/compliance/pack" in href, href
+            r = await appr.request.get(BASE + href)
+            body = await r.body()
+            assert (r.status == 200 and r.headers["content-type"].startswith("application/zip")
+                    and r.headers["content-disposition"].startswith("attachment; filename=\"compliance-pack-")), (r.status, dict(r.headers))
+            assert body[:2] == b"PK" and body.count(b"PK\x03\x04") == 8, len(body)
+            import zipfile as _zf
+            names = _zf.ZipFile(__import__("io").BytesIO(body)).namelist()
+            assert names[0].startswith("manifest-") and any(n.startswith("mushak-6.2-sales-") for n in names) and any(n.startswith("return-9.1-") for n in names), names
+            ok(f"compliance pack: the zip downloads through the browser session ({len(names)} members, manifest first)")
+            await settle(ap); await ap.screenshot(path=f"{OUT}/55c_compliance_pack.png")
+        except Exception as e: fail(5, e)
+
         # ── 6. Audit trail ────────────────────────────────────────────
         try:
             await ap.goto(BASE + "/en/master/audit?entity=company", wait_until="networkidle")

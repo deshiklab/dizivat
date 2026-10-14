@@ -166,6 +166,7 @@ ENDPOINTS = [
     # R4 — NBR VAT
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
+    E("GET", "/vat/compliance/pack?period=2026-08", None, "R7.2: the period's submission set as one zip (application/zip, attachment `compliance-pack-<period>.zip`): Mushak 6.2 sales / 6.1 purchases / 6.10 / TR-6 / VDS 6.6 registers as CSV, the 9.1 return as it stands (JSON, manifest marks it absent when not started), a manifest (summary + file list with row counts) and a hand-over checklist; same period validation as the compliance centre (422 outOfRange)", ctype="application/zip"),
     E("GET", "/vat/returns", None, "Mushak 9.1 returns — Page<VatReturnRow> + periods; facets status/type", page=True, csv=True),
     E("POST", "/vat/returns", "doc.create", "Start a return {period} (409 if it exists or the previous period is not submitted)"),
     E("GET", "/vat/returns/{period}", None, "The return for a period: every note (1–68) computed live from approved documents, manual notes, shortfall, lock state; 404 for unknown periods"),
@@ -444,6 +445,7 @@ def run():
         ("arif", "GET", "/accounting/statement?kind=customer&party=c1&from=2026-09-10&to=2026-09-01", None, 422, "to"),
         # R4 — NBR VAT
         ("arif", "GET", "/vat/compliance?period=2019-01", None, 422, "period"),
+        ("arif", "GET", "/vat/compliance/pack?period=2019-01", None, 422, "period"),
         ("arif", "GET", "/vat/returns/2031-01", None, 404, None),
         ("arif", "POST", "/vat/returns", {}, 422, "period"),
         ("arif", "POST", "/vat/returns", {"period": "2026-08"}, 409, None),
