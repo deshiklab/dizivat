@@ -1100,6 +1100,33 @@ R7.4 brought the stock and the purchases; a going concern's year also has sales 
 - `api_native.py` drills the drafts, the receivable, the stock-that-did-not-move, the export defaults, the table
   rows and the audit events; `e2e_r62.py` runs the story against both runtimes; `contract.py` carries the row.
 
+## R8.1 — the e-invoice QR: every Mushak 6.3 verifiable
+
+Finance Bill 2026 allows enlisted ERP software to issue the Mushak 6.3 itself; an issued invoice should be
+checkable. Every 6.3 the app prints now carries a **QR** in the top-left corner — a link to a public
+verification page whose token is a signed digest of the invoice. No new tables: the signature is computed
+over existing columns whenever a detail is read.
+
+- **The token** (`src/lib/invoice-qr.ts`, shared by both runtimes): `<invoiceNo>.<YYYYMMDD>.<netTotal
+  poisha>.<vat poisha>.<sig>` where `sig` is the first 20 hex chars of HMAC-SHA256 (the session secret's
+  discipline) over the invoice number, date, net total, VAT, the seller's BIN and name. Sale details
+  (`GET /sales/:id`) carry it as `qr`; the 6.3 template renders it as a QR of
+  `/verify/mushak-63?t=<token>` (a query parameter, not a path segment — the middleware matcher skips
+  dotted paths, so a segment would never be locale-routed).
+- **`GET /api/v1/verify/invoice?token=`** is public (no session — buyers, banks and NBR hold the printed
+  copy, not a login). It re-computes the signature over the invoice as it stands and answers
+  `{token, valid, reason?, invoice?}`: a genuine copy of an unaltered invoice verifies — cancelled included,
+  with its status shown; a doctored token answers `badSignature`; a genuinely printed copy of a since-edited
+  draft answers `altered`; unknown numbers `notFound`; foreign QRs `malformed`. The `invoice` member is the
+  public core only (number, date, seller, buyer, totals, process).
+- **The page** `/verify/mushak-63?t=` (public, en + bn, exempted from the session gate in the middleware)
+  renders the answer as a card; in the static GitHub Pages demo it says plainly that verification runs on
+  the live app. The middleware's session gate skips `/verify/*`, and the QR's path is dot-free so the
+  locale-less URL a phone scans is redirected to the scanner's default locale.
+- `api_native.py` drills the token, the public verify, tamper, edit-then-check (`altered`), malformed and
+  notFound; `e2e_r3.py` opens the print view (QR present) and the public page for a real and a doctored
+  token; `contract.py` carries the public row.
+
 ## Tables
 
 | Table | Purpose |

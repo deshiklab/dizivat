@@ -1,5 +1,7 @@
 import { addHistory, branchLabels, db, nextDocId, nextNo, postStock, stockShortfall } from "@/lib/mock/db"
 import { diff } from "@/lib/mock/audit"
+import { company } from "@/lib/mock/company"
+import { invoiceQrToken, saleQrCore } from "@/lib/invoice-qr"
 import { buildPurchaseFields, unknownBranch, unknownItems, unknownServices } from "@/lib/mock/build"
 import { delay } from "@/lib/mock/query"
 import { cancelInput, importInput, purchaseInput, realisationInput } from "@/lib/schemas"
@@ -339,7 +341,10 @@ export function docRoutes(k: Kind) {
     const { id } = await params
     await delay(120)
     const d = find(k, id)
-    return d ? json(d) : problem(404, `${label(k)} not found`)
+    if (!d) return problem(404, `${label(k)} not found`)
+    // R8.1 (e-invoice): sale details carry the signed QR token the 6.3 prints (built from the row as it stands)
+    if (k === "sale") return json({ ...d, qr: await invoiceQrToken(saleQrCore(d as Sale, { bin: company.bin, name: company.name })) })
+    return json(d)
   })
 
   /** Edit a draft (full replacement). Optional approve-on-save. */

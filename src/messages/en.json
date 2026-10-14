@@ -4816,5 +4816,28 @@
       "amendHint": "Found an error in this return?",
       "applyAmend": "Apply to amend (Mushak 9.4)"
     }
+  },
+  "verify": {
+    "title": "Tax invoice verification",
+    "subtitle": "Mushak 6.3 · e-invoice QR check",
+    "authentic": "Authentic — this copy matches the books",
+    "invalid": "This copy does not verify",
+    "malformed": "This is not a DiziVAT invoice QR — scan the QR printed on the tax invoice itself.",
+    "notFound": "No invoice with this number is on file. It may have been issued by another system, or the draft was deleted before approval.",
+    "altered": "The signature is genuine, but the invoice has changed since this copy was printed — the figures on the books no longer match it.",
+    "badSignature": "The signature does not check out — this token was not issued by the seller's system.",
+    "invoiceNo": "Invoice no",
+    "issueDate": "Issue date",
+    "seller": "Seller",
+    "buyer": "Buyer",
+    "netTotal": "Value incl. all duties & taxes",
+    "vat": "VAT",
+    "status": "Status",
+    "approved": "Approved",
+    "cancelled": "Cancelled",
+    "draft": "Draft (not yet effective)",
+    "cancelledNote": "This invoice was later cancelled — it is not a valid tax document.",
+    "footnote": "Verified against the seller's books at the moment you opened this page. The signature covers the invoice number, date, totals and the seller's identity.",
+    "demo": "This is the static demo — invoice verification runs on the live app."
   }
 }

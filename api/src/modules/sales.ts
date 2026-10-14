@@ -33,6 +33,7 @@ import { WriteBack, type Delta } from "../common/writeback"
 import { db, type Tx } from "../db/client"
 import { items, saleLines, saleRealisations, sales } from "../db/schema"
 import { compat, mirror } from "../state"
+import { invoiceQrToken, saleQrCore, verifyInvoiceAnswer } from "@/lib/invoice-qr"
 import { AuditService } from "./audit"
 import { markItems, revertItemCounters } from "./items"
 
@@ -384,6 +385,23 @@ export class SalesService {
  * The eleven sale endpoints. The behaviour is shared with the mock handlers (see the header); this class only adds
  * storage, the state guard and the audit trail.
  */
+/**
+ * R8.1 (e-invoice): public verification of a Mushak 6.3 — no @Authed(), anyone holding a printed copy can
+ * check it. The mock serves the identical document from the same shared code (src/app/api/v1/verify/invoice).
+ */
+@Controller("api/v1/verify")
+export class VerifyController {
+  constructor(@Inject(SalesService) private readonly svc: SalesService) {}
+
+  @Get("invoice")
+  async invoice(@Req() req: Request, @Res() res: Response) {
+    const token = searchParams(req).get("token") ?? ""
+    const sale = await this.svc.find(token.split(".")[0])
+    const c = mirror.company()
+    res.json(await verifyInvoiceAnswer(token, sale ?? null, { bin: c.bin, name: c.name }))
+  }
+}
+
 @Controller("api/v1/sales")
 export class SalesController {
   constructor(
@@ -466,7 +484,9 @@ export class SalesController {
   async one(@Param("id") id: string, @Res() res: Response) {
     const d = await this.svc.find(id)
     if (!d) throw new Problem(404, `${LABEL} not found`)
-    res.json(d)
+    // R8.1 (e-invoice): the signed QR token the 6.3 prints rides on the detail, built from the row as it stands
+    const c = mirror.company()
+    res.json({ ...d, qr: await invoiceQrToken(saleQrCore(d, { bin: c.bin, name: c.name })) })
   }
 
   /** Edit a draft (full replacement). Optional approve-on-save. */

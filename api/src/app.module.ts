@@ -16,7 +16,7 @@ import { CreditNotesController, DebitNotesController, NotesService } from "./mod
 import { OpeningsController, OpeningsService } from "./modules/openings"
 import { BomsController, BomsService, ProductionConfigController, ProductionConfigService } from "./modules/production"
 import { PurchasesController, PurchasesService } from "./modules/purchases"
-import { SalesController, SalesService } from "./modules/sales"
+import { SalesController, VerifyController, SalesService } from "./modules/sales"
 import { WorkOrdersController, WorkOrdersService } from "./modules/workorders"
 import { CompanyController, TariffController, UnitsController, UnitsService } from "./modules/reference"
 import { UdFitController, UdsController, UdsService } from "./modules/uds"
@@ -42,7 +42,7 @@ const NATIVE_CONTROLLERS = [
   BomsController, ProductionConfigController, WorkOrdersController,
   MoneyAccountsController, ReceiptsController, PaymentsController, OpenInvoicesController, StatementController, AccountingConfigController,
   StockController, ItemLedgerController, LotsController, SubcontractController,
-  SalesController,
+  SalesController, VerifyController,
   // `vat/vds/eligible` is registered before `vat/vds/:id`: Express matches a dynamic segment first otherwise, and
   // "eligible" would be read as a certificate number
   TreasuryController, VdsEligibleController, VdsController, AdjustmentsController,

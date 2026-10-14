@@ -16,10 +16,11 @@ export const REGISTRY = {
   "lists-and-preferences": { category: "gettingStarted", related: ["navigation"] },
   "using-this-help": { category: "gettingStarted", routes: ["/help"], related: ["welcome", "faq"] },
 
-  "sales-invoices": { category: "sales", routes: ["/sales"], related: ["credit-notes", "document-lifecycle", "purchase-sales-books"] },
+  "sales-invoices": { category: "sales", routes: ["/sales"], related: ["credit-notes", "document-lifecycle", "purchase-sales-books", "invoice-qr"] },
   "service-sales": { category: "sales", routes: ["/sales/services"], related: ["sales-invoices", "vds-certificates"] },
   "exports": { category: "sales", routes: ["/sales/exports"], related: ["sales-invoices", "vat-return-9-1"] },
   "credit-notes": { category: "sales", routes: ["/sales/credit-notes"], related: ["sales-invoices", "debit-notes"] },
+  "invoice-qr": { category: "sales", routes: ["/sales"], related: ["sales-invoices", "exports"] },
 
   "local-purchases": { category: "purchase", routes: ["/purchases"], related: ["service-purchases-vds", "debit-notes", "purchase-sales-books"] },
   "service-purchases-vds": { category: "purchase", routes: ["/purchases/services"], related: ["vds-certificates", "local-purchases"] },

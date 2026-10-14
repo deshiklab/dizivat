@@ -13,7 +13,8 @@ export default async function middleware(req: NextRequest) {
     const [, locale, rest = "/"] = m
     const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value)
     const isLogin = rest === "/login"
-    if (!session && !isLogin) {
+    // R8.1: the QR verification page is public (buyers and NBR hold the printed copy, not a login)
+    if (!session && !isLogin && !rest.startsWith("/verify/")) {
       const url = new URL(`/${locale}/login`, req.url)
       const next = rest + req.nextUrl.search
       if (next !== "/") url.searchParams.set("next", next)

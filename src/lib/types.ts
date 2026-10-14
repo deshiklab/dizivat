@@ -125,6 +125,8 @@ interface DocBase {
 export interface Sale extends DocBase {
   invoiceNo: string
   challanNo: string
+  /** R8.1 (e-invoice): signed verification token for the Mushak 6.3 QR — on detail reads, built from the row as it stands */
+  qr?: string
   issueTime: string
   customerId: string
   customerName: string

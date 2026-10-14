@@ -5304,6 +5304,36 @@ def run():
         check(any(r.get("ref") in (srow["invoiceNo"], xrow["invoiceNo"]) for r in auditS.get("data", [])),
               "R7.6: each created draft is one audit event naming its invoice")
 
+        # ── R8.1: the e-invoice QR on the Mushak 6.3 ────────────────────────────────────────────────
+        print("\nR8.1: the e-invoice QR on the Mushak 6.3")
+        seeded = admin.get(f"{BASE}/sales", params={"process": "Approved", "size": 1}).json()["data"][0]
+        det = admin.get(f"{BASE}/sales/{seeded['id']}").json()
+        check("qr" in det and det["qr"].startswith(seeded["invoiceNo"] + "."),
+              "R8.1: a sale's detail carries a QR token that names its own invoice")
+        anon = requests.Session()  # no login — the whole point: buyers and NBR hold the copy, not a session
+        pub = anon.get(f"{BASE}/verify/invoice", params={"token": det["qr"]}).json()
+        check(pub.get("valid") is True and pub.get("invoice", {}).get("invoiceNo") == seeded["invoiceNo"]
+              and pub["invoice"]["seller"]["bin"] and pub["invoice"]["netTotal"] == seeded["netTotal"],
+              "R8.1: the public endpoint verifies a genuine token without a session and answers the invoice's public core")
+        parts = det["qr"].split("."); parts[2] = str(int(parts[2]) + 1)
+        tam = ".".join(parts)
+        tj = anon.get(f"{BASE}/verify/invoice", params={"token": tam}).json()
+        check(tj == {"token": tam, "valid": False, "reason": "badSignature"},
+              "R8.1: a token whose figures were doctored fails the signature")
+        qrBefore = admin.get(f"{BASE}/sales/{srow['id']}").json()["qr"]  # the R7.6 draft — still Created, still editable
+        check(qrBefore.startswith(srow["invoiceNo"] + "."), "R8.1: a draft carries a token too — the copy it prints is checkable")
+        body = {k: v for k, v in admin.get(f"{BASE}/sales/{srow['id']}").json().items()
+                if k not in ("qr", "history", "createdAt", "due", "netTotal", "vat", "subtotal", "sd", "id", "invoiceNo", "challanNo")}
+        body["lines"][0]["qty"] = (body["lines"][0]["qty"] or 0) + 1
+        r = admin.put(f"{BASE}/sales/{srow['id']}", json=body)
+        check(r.status_code == 200, "R8.1: the draft can be edited (the token predates the edit)")
+        alt = anon.get(f"{BASE}/verify/invoice", params={"token": qrBefore}).json()
+        check(alt == {"token": qrBefore, "valid": False, "reason": "altered"},
+              "R8.1: a genuinely printed copy whose invoice was edited afterwards answers 'altered', not 'authentic'")
+        for token, reason in (("garbage", "malformed"), ("S-99999999.20260715.100.15.0123456789012345abcd", "notFound")):
+            j = anon.get(f"{BASE}/verify/invoice", params={"token": token}).json()
+            check(j.get("valid") is False and j.get("reason") == reason, f"R8.1: a {reason} token answers {reason}")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
