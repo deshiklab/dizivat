@@ -3,7 +3,7 @@
 import { useLocale, useTranslations } from "next-intl"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { parseAsString, useQueryState } from "nuqs"
-import { AlertTriangle, ArrowRight, BookOpen, CalendarClock, FileArchive, FileCheck2, FileSpreadsheet, Landmark, Lock, ReceiptText, Scale, Settings2, ShieldCheck } from "lucide-react"
+import { AlertTriangle, ArrowRight, BookOpen, CalendarClock, FileArchive, FileCheck2, FileJson, FileSpreadsheet, Landmark, Lock, ReceiptText, Scale, Settings2, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -93,6 +93,7 @@ export function ComplianceHub() {
                   <div className="flex flex-wrap gap-2">
                     <Button render={<Link href={`/vat/return-9-1?period=${d.period}`} />}>{d.locked ? t("viewReturn") : d.notStarted ? t("prepareReturn") : t("continueReturn")} <ArrowRight /></Button>
                     <Button variant="outline" render={<a href={api.vat.compliancePackUrl(d.period)} download={`compliance-pack-${d.period}.zip`} />}><FileArchive /> {t("downloadPack")}</Button>
+                    <Button variant="outline" render={<a href={api.vat.complianceEfilingUrl(d.period)} download={`efiling-9.1-${d.period}.json`} />}><FileJson /> {t("downloadEfiling")}</Button>
                     {!d.locked && short > 0 && can("doc.create") && <Button variant="outline" render={<Link href={`/vat/tr-6?new=1&period=${d.period}&head=${c.shortVat ? "vat" : "sd"}&amount=${Math.ceil(c.shortVat || c.shortSd)}`} />}><Landmark /> {t("deposit")}</Button>}
                   </div>
                 </CardContent>

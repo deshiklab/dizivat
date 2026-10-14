@@ -3231,6 +3231,7 @@
     "continueReturn": "রিটার্ন চালিয়ে যান",
     "deposit": "জমা (টিআর-৬)",
     "downloadPack": "কমপ্লায়েন্স প্যাক ডাউনলোড",
+    "downloadEfiling": "ই-ফাইলিং JSON",
     "deposits": "ট্রেজারি জমা",
     "depositsBody": "{n}টি অনুমোদিত চালান ·",
     "depositsPending": "{n}টি খসড়া এখনও গণনায় নেই",

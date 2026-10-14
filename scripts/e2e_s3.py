@@ -1,6 +1,6 @@
 """Sprint 3 end-to-end checks: users & roles, forced password change, company profile, tariff + HS lookup,
 audit trail, notifications. Run after e2e_s2.py (it mutates users; restart the server for a fresh seed)."""
-import asyncio, os, random, re
+import asyncio, json, os, random, re
 from playwright.async_api import async_playwright, expect
 from _auth import BASE, login_ctx
 
@@ -222,11 +222,19 @@ async def main():
             body = await r.body()
             assert (r.status == 200 and r.headers["content-type"].startswith("application/zip")
                     and r.headers["content-disposition"].startswith("attachment; filename=\"compliance-pack-")), (r.status, dict(r.headers))
-            assert body[:2] == b"PK" and body.count(b"PK\x03\x04") == 8, len(body)
+            assert body[:2] == b"PK" and body.count(b"PK\x03\x04") == 9, len(body)
             import zipfile as _zf
             names = _zf.ZipFile(__import__("io").BytesIO(body)).namelist()
             assert names[0].startswith("manifest-") and any(n.startswith("mushak-6.2-sales-") for n in names) and any(n.startswith("return-9.1-") for n in names), names
             ok(f"compliance pack: the zip downloads through the browser session ({len(names)} members, manifest first)")
+            ef = ap.get_by_role("link", name="e-Filing JSON")
+            ehref = await ef.get_attribute("href")
+            assert ehref and "/api/v1/vat/compliance/efiling" in ehref, ehref
+            er = await appr.request.get(BASE + ehref)
+            ebody = json.loads(await er.body())
+            assert (er.status == 200 and er.headers["content-type"].startswith("application/json")
+                    and ebody["format"] == "dizivat-efiling-9.1/1" and ebody["taxPeriod"] and "figures" in ebody), (er.status, ebody.get("format"))
+            ok("e-filing document: the JSON downloads through the browser session with the 9.1's figures")
             await settle(ap); await ap.screenshot(path=f"{OUT}/55c_compliance_pack.png")
         except Exception as e: fail(5, e)
 

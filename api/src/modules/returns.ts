@@ -31,6 +31,7 @@ import { db, type Tx } from "../db/client"
 import { vatReturns, vatSettings } from "../db/schema"
 import { compat, G, mirror } from "../state"
 import { compliancePack } from "@/lib/compliance-pack"
+import { efilingDocument } from "@/lib/efiling"
 import { vatSource } from "./vat"
 import { AuditService } from "./audit"
 
@@ -340,6 +341,26 @@ export class ComplianceController {
     res.setHeader("content-type", "application/zip")
     res.setHeader("content-disposition", `attachment; filename="compliance-pack-${period}.zip"`)
     res.end(zip)
+  }
+
+  /**
+   * R7.5 — the e-filing document: the 9.1's figures as one JSON named the way the VAT portal asks for
+   * them (BIN, tax period, output/input VAT, rate-wise turnover, the TR-6 deposits with economic codes).
+   * The same shared `src/lib/efiling.ts` the mock's route runs; the figures are the compliance centre's
+   * own answer, never a second computation.
+   */
+  @Get("efiling") @Authed()
+  async efiling(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const period = searchParams(req).get("period") || c.currentPeriod()
+    const src = await returnSource()
+    const answer = c.complianceAnswer(period, src)
+    if ("title" in answer) throw new Problem(answer.status, answer.title, answer.errors)
+    const doc = efilingDocument(period, { sales: src.sales, purchases: src.purchases, treasury: src.treasury, vds: src.vds, returns: src.returns },
+      mirror.company(), { summary: answer, software: "DiziVAT" })
+    res.setHeader("content-type", "application/json")
+    res.setHeader("content-disposition", `attachment; filename="efiling-9.1-${period}.json"`)
+    res.json(doc)
   }
 }
 

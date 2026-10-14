@@ -333,6 +333,7 @@ export const api = {
     compliance: (period?: string) => req<ComplianceSummary>(`/vat/compliance${qs({ period })}`),
     /** R7.2 — the period's submission set as a zip (registers, 6.10, TR-6, VDS, return, manifest). */
     compliancePackUrl: (period: string) => `${BASE}/vat/compliance/pack${qs({ period })}`,
+    complianceEfilingUrl: (period: string) => `${BASE}/vat/compliance/efiling${qs({ period })}`,
     settings: () => req<VatSettings>("/vat/settings"),
     saveSettings: (b: VatSettingsInput) => req<VatSettings>("/vat/settings", { method: "PUT", body: JSON.stringify(b) }),
     /** R6 (RMG): export & deemed-export register */

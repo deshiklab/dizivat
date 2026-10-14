@@ -5073,12 +5073,12 @@ def run():
               "R7.2: the pack validates its period exactly like the compliance centre (422 outOfRange)")
         z = zipfile.ZipFile(io.BytesIO(pack.content))
         names = z.namelist()
-        check(z.testzip() is None and len(z.infolist()) == 8 and all(i.compress_type == zipfile.ZIP_STORED for i in z.infolist())
+        check(z.testzip() is None and len(z.infolist()) == 9 and all(i.compress_type == zipfile.ZIP_STORED for i in z.infolist())
               and names[0] == f"manifest-{P}.json" and names[1] == f"checklist-{P}.txt"
               and f"mushak-6.2-sales-{P}.csv" in names and f"mushak-6.1-purchases-{P}.csv" in names
               and f"mushak-6.10-{P}.csv" in names and f"tr-6-{P}.csv" in names and f"vds-6.6-{P}.csv" in names
-              and f"return-9.1-{P}.json" in names,
-              f"R7.2: the zip carries the eight members, stored uncompressed, CRCs intact (got {names})")
+              and f"return-9.1-{P}.json" in names and f"efiling-9.1-{P}.json" in names,
+              f"R7.2: the zip carries the nine members, stored uncompressed, CRCs intact (got {names})")
         man = json.loads(z.read(f"manifest-{P}.json"))
         rows_of = {f["name"]: f.get("rows") for f in man.get("files", [])}
         csv_rows = lambda n: len(z.read(n).decode("utf-8-sig").strip("\n").split("\n")) - 1
@@ -5102,6 +5102,55 @@ def run():
         check(b"\r\n" in cl and cl.decode().splitlines()[0] == f"Compliance pack — {P}"
               and f"mushak-6.2-sales-{P}.csv" in cl.decode(),
               "R7.2: the checklist is a CRLF hand-over note naming every member")
+
+        # ── R7.5: the e-filing document ────────────────────────────────────────────────────────────
+        print("\nR7.5: the e-filing document")
+        ef = admin.get(f"{BASE}/vat/compliance/efiling", params={"period": P})
+        check(ef.status_code == 200 and ef.headers.get("content-type", "").startswith("application/json")
+              and ef.headers.get("content-disposition", "") == f'attachment; filename="efiling-9.1-{P}.json"',
+              f"R7.5: the document answers as a JSON attachment (got {ef.status_code}, {ef.headers.get('content-type')})")
+        efd = ef.json()
+        check(efd.get("format") == "dizivat-efiling-9.1/1" and efd.get("taxPeriod") == P
+              and efd.get("taxpayer", {}).get("bin") == admin.get(f"{BASE}/company").json().get("bin")
+              and efd.get("returnStatus") == hub.get("status") and efd.get("dueDate") == hub.get("due"),
+              "R7.5: it identifies the taxpayer, the period and the return the compliance centre sees")
+        f_ = efd.get("figures", {})
+        cc = hub.get("computation", {})
+        pairs = {"outputVat": "outputVat", "inputTaxCredit": "inputVat", "increasingAdjustments": "increasing",
+                 "decreasingAdjustments": "decreasing", "netVat": "netVat", "payableVat": "payableVat", "payableSd": "payableSd",
+                 "depositedVat": "depositedVat", "shortfallVat": "shortVat", "shortfallSd": "shortSd",
+                 "openingCredit": "openingVat", "closingCredit": "closingVat", "draftDocumentsNotCounted": "drafts"}
+        check(all(f_.get(fk) == cc.get(ck) for fk, ck in pairs.items()),
+              "R7.5: the figures are the compliance centre's own computation, not a second one")
+        okd = efd.get("deposits", [])
+        tr6rows = [r.split(",") for r in z.read(f"tr-6-{P}.csv").decode("utf-8-sig").strip().splitlines()[1:]]
+        check(len(okd) == len(tr6rows) and abs(sum(d["amount"] for d in okd) - sum(float(r[4]) for r in tr6rows)) < 0.011
+              and all(d.get("economicCode") for d in okd),
+              "R7.5: the deposits listed are the period's TR-6 challans, economic codes and all")
+        sbr = efd.get("salesByVatRate", [])
+        pbr = efd.get("purchasesByVatRate", [])
+        check(sbr == sorted(sbr, key=lambda b: -b["rate"]) and pbr == sorted(pbr, key=lambda b: -b["rate"]),
+              "R7.5: the rate buckets are ordered, highest rate first")
+        if DB_URL:
+            sv, sval = psql(f"select round(sum(l.vat), 2), round(sum(l.subtotal), 2) from sale_lines l join sales s on s.id = l.sale_id"
+                            f" where s.issue_date >= '{P}-01' and s.issue_date < date '{P}-01' + interval '1 month' and s.process = 'Approved'").split("\t")
+            check(abs(sum(b["vat"] for b in sbr) - float(sv)) < 0.011 and abs(sum(b["value"] for b in sbr) - float(sval)) < 0.011,
+                  "R7.5: the rate-wise sales turnover is the period's approved invoice lines to the taka (deemed exports included)")
+            pv, pval = psql(f"select round(sum(l.vat), 2), round(sum(l.subtotal), 2) from purchase_lines l join purchases p on p.id = l.purchase_id"
+                            f" where p.issue_date >= '{P}-01' and p.issue_date < date '{P}-01' + interval '1 month' and p.process = 'Approved'").split("\t")
+            check(abs(sum(b["vat"] for b in pbr) - float(pv)) < 0.011 and abs(sum(b["value"] for b in pbr) - float(pval)) < 0.011,
+                  "R7.5: …and the purchase buckets to the same total, service invoices included")
+        reg = efd.get("registers", {})
+        check(reg.get("sales", {}).get("count") == csv_rows(f"mushak-6.2-sales-{P}.csv")
+              and reg.get("purchases", {}).get("count") == csv_rows(f"mushak-6.1-purchases-{P}.csv"),
+              "R7.5: the register counts match the pack's CSVs row for row")
+        pack_ef = json.loads(z.read(f"efiling-9.1-{P}.json"))
+        pack_ef.pop("generatedAt", None); efd2 = dict(efd); efd2.pop("generatedAt", None)
+        check(pack_ef == efd2, "R7.5: the pack's efiling member is the same document the endpoint serves (modulo the timestamp)")
+        check(admin.get(f"{BASE}/vat/compliance/efiling", params={"period": "2019-01"}).status_code == 422,
+              "R7.5: the document validates its period exactly like the compliance centre (422 outOfRange)")
+        check(isinstance(efd.get("toKey"), list) and len(efd["toKey"]) >= 3 and all(isinstance(x, str) for x in efd["toKey"]),
+              "R7.5: it closes with a plain what-to-key checklist")
 
         # ── R7.3: the dashboard's 12-month insight ────────────────────────────────────────────────
         print("\nR7.3: the dashboard's 12-month insight")

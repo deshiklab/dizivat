@@ -1,3 +1,4 @@
+import { efilingDocument } from "./efiling"
 import { toCSV } from "./mock/query"
 import type { ComplianceSummary, Company, M610Row, Purchase, Sale, TreasuryDeposit, VdsEntry, VatReturn } from "./types"
 
@@ -121,6 +122,7 @@ export function compliancePack(period: string, src: PackSource, company: Company
         { name: `tr-6-${period}.csv`, rows: tr6.length },
         { name: `vds-6.6-${period}.csv`, rows: vds.length },
         { name: `return-9.1-${period}.json`, present: !!ret },
+        { name: `efiling-9.1-${period}.json`, present: true },
       ],
     }, null, 2) },
     { name: `checklist-${period}.txt`, content: [
@@ -145,6 +147,7 @@ export function compliancePack(period: string, src: PackSource, company: Company
       `  tr-6-${period}.csv                    the period's treasury challans (${tr6.length})`,
       `  vds-6.6-${period}.csv                 the period's VDS certificates (${vds.length})`,
       ret ? `  return-9.1-${period}.json           the 9.1 return as it stands` : "  (no 9.1 return started yet — the manifest marks it absent)",
+      `  efiling-9.1-${period}.json           the 9.1's figures keyed for the VAT portal`,
     ].join("\r\n") + "\r\n" },
     { name: `mushak-6.2-sales-${period}.csv`, content: salesCsv },
     { name: `mushak-6.1-purchases-${period}.csv`, content: purchasesCsv },
@@ -152,6 +155,8 @@ export function compliancePack(period: string, src: PackSource, company: Company
     { name: `tr-6-${period}.csv`, content: tr6Csv },
     { name: `vds-6.6-${period}.csv`, content: vdsCsv },
     { name: `return-9.1-${period}.json`, content: JSON.stringify(ret, null, 2) },
+    { name: `efiling-9.1-${period}.json`, content: JSON.stringify(
+      efilingDocument(period, src, company, { summary: extra.summary, software: "DiziVAT" }), null, 2) },
   ]
   return zipStore(files)
 }

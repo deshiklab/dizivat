@@ -167,6 +167,7 @@ ENDPOINTS = [
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
     E("GET", "/vat/compliance/pack?period=2026-08", None, "R7.2: the period's submission set as one zip (application/zip, attachment `compliance-pack-<period>.zip`): Mushak 6.2 sales / 6.1 purchases / 6.10 / TR-6 / VDS 6.6 registers as CSV, the 9.1 return as it stands (JSON, manifest marks it absent when not started), a manifest (summary + file list with row counts) and a hand-over checklist; same period validation as the compliance centre (422 outOfRange)", ctype="application/zip"),
+    E("GET", "/vat/compliance/efiling?period=2026-08", None, "R7.5: the 9.1's figures as one e-filing JSON (application/json, attachment `efiling-9.1-<period>.json`, format dizivat-efiling-9.1/1): BIN + tax period, the compliance computation verbatim (outputVat, inputTaxCredit, adjustments, payable, deposited, shortfall, credits), approved-invoice mode splits and rate-wise turnover, the TR-6 deposits with economic codes, register counts, VDS totals and a what-to-key checklist; also a member of the compliance pack; same period validation as the compliance centre (422 outOfRange)", ctype="application/json"),
     E("GET", "/vat/returns", None, "Mushak 9.1 returns — Page<VatReturnRow> + periods; facets status/type", page=True, csv=True),
     E("POST", "/vat/returns", "doc.create", "Start a return {period} (409 if it exists or the previous period is not submitted)"),
     E("GET", "/vat/returns/{period}", None, "The return for a period: every note (1–68) computed live from approved documents, manual notes, shortfall, lock state; 404 for unknown periods"),
@@ -448,6 +449,7 @@ def run():
         # R4 — NBR VAT
         ("arif", "GET", "/vat/compliance?period=2019-01", None, 422, "period"),
         ("arif", "GET", "/vat/compliance/pack?period=2019-01", None, 422, "period"),
+        ("arif", "GET", "/vat/compliance/efiling?period=2019-01", None, 422, "period"),
         ("arif", "GET", "/vat/returns/2031-01", None, 404, None),
         ("arif", "POST", "/vat/returns", {}, 422, "period"),
         ("arif", "POST", "/vat/returns", {"period": "2026-08"}, 409, None),

@@ -1043,6 +1043,35 @@ way. No new tables; the drafts are ordinary `opening_entries` and `purchase` row
   the stock-that-did-not-move, the table rows and the audit event; `contract.py`'s row and two 422 cases cover
   the shape.
 
+## R7.5 — the e-filing document: the 9.1 keyed for the VAT portal
+
+The compliance pack archives a month; the filer still has to key the 9.1 into NBR's VAT portal (vat.gov.bd),
+which asks for BIN, tax period, the output/input figures and — for businesses with many invoices — bulk
+invoice details. NBR publishes no open schema, so DiziVAT ships its own stable, versioned format
+(`dizivat-efiling-9.1/1`): one JSON that says everything the portal asks, named the way the portal asks it.
+
+- **`GET /vat/compliance/efiling?period=`** (and an **e-Filing JSON** button beside the pack's on the
+  compliance hub) answers `efiling-9.1-<period>.json`:
+  - identification — BIN, taxpayer name, tax period, due date, the return's status (and submission date /
+    acknowledgement when filed);
+  - **`figures`** — the compliance centre's own computation verbatim (output VAT, input tax credit, the
+    increasing/decreasing adjustments, payable, deposited, shortfall, opening/closing credit, drafts not
+    counted) plus the registers' mode splits: local / imported / non-registered purchase value and VAT,
+    local sale and export value and VAT;
+  - **`salesByVatRate` / `purchasesByVatRate`** — rate-wise turnover of the period's approved invoices, for
+    the portal's rate boxes and bulk uploads;
+  - **`deposits`** — the period's TR-6 challans with their economic codes; **`registers`** — the counts and
+    totals of the pack's two CSV members; **`vds`** — the certificates to issue / awaited;
+  - **`toKey`** — a plain what-to-key-where checklist in filing order.
+- The document is computed by the shared `src/lib/efiling.ts` from the same collections and the same
+  compliance answer both runtimes already serve — never a second computation — and the two builds serve
+  byte-identical documents (modulo `generatedAt`). It is also the ninth member of the compliance pack, so
+  the monthly zip carries it without a second download. Period validation matches the compliance centre
+  (422 outOfRange).
+- `api_native.py` drills it (identification, figures-vs-centre, deposits vs the computation, rate buckets vs
+  the registers' totals, member-of-pack equality, 422); `e2e_s3.py` downloads it through the browser
+  session; `contract.py` carries the row and the 422 case.
+
 ## Tables
 
 | Table | Purpose |
