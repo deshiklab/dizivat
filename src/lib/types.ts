@@ -1001,7 +1001,8 @@ export interface PenaltyQuote { input: PenaltyInput; result: PenaltyResult; basi
 export interface PenaltyExposureRow { period: string; dueDate: string; status: "submitted" | "draft" | "none"; submittedOn?: string; shortVat: number; shortSd: number; lateFiling: boolean; result: PenaltyResult }
 export interface BackupVerify { id: string; ok: boolean; sha256: string; size: number; checkedAt: string }
 
-export type ImportEntity = "items" | "customers" | "vendors"
+/** R7.4: the onboarding entities — rows become draft opening entries / draft purchase invoices */
+export type ImportEntity = "items" | "customers" | "vendors" | "openingStock" | "purchases"
 export interface ImportIssue { row: number; field: string; message: string }
 export interface ImportResult { entity: ImportEntity; dryRun: boolean; total: number; valid: number; created: number; duplicates: number; issues: ImportIssue[] }
 

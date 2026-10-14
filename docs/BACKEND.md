@@ -1014,6 +1014,35 @@ no new tables, no new endpoints.
   table); `e2e_s4.py` asserts all three charts render and the new cards are there; `contract.py`'s row now names
   the whole shape.
 
+## R7.4 — onboarding a going concern: opening stock and past purchases as drafts
+
+R6.2's bulk import loads masters; a business switching to DiziVAT mid-year brings more — the stock on the floor on
+day one and the invoices already bought that year. Keying months of purchases by hand is the pain; both now come
+through the same `/import` page, and both land as **drafts** so nothing moves until they are approved the ordinary
+way. No new tables; the drafts are ordinary `opening_entries` and `purchase` rows.
+
+- **`POST /import`** takes two more entities (`master.edit`, same as the rest of the page):
+  - `openingStock` — one row per item × branch: SKU, branch (blank = the factory), date (the go-live date),
+    input-tax class (`standard | reduced | zero | exempt`), counted qty, unit price, VAT already paid, note.
+    A duplicate (same item + branch + date, not cancelled) is skipped, and `vatPaid` lands on the draft.
+  - `purchases` — one row per invoice line. Rows sharing an **`invoiceNo`** (case-insensitive) are one invoice;
+    the first row's shared fields win and a date conflict inside a group is refused (`conflictInInvoice`). The
+    vendor resolves by name or BIN (foreign vendors are refused — rebateable inputs come from local registered
+    suppliers), payment method by alias (`cash`, `bkash`, …, default Bank), `challanNo` defaults to the invoice
+    no, and blank `vatRate`/`sdRate` take the item's own. An invoice already on file skips the whole group.
+  - The rules are shared: `importOnboarding` (in `src/app/api/v1/_r62.ts`, the compat entry) plans every row
+    against a small `OnboardingWorld` snapshot, maps problems to `{row, field, message}` with `lines.N.itemId`
+    collapsed to the offending row's `item` column, and only then writes — all-or-nothing, through
+    `OpeningsService.create` / `PurchasesService.create` on the native side and the mock's own create path, so
+    each draft is stamped and journalled exactly like a keyed one. `issuedBy` is the importer; a date in a
+    period whose 9.1 is already submitted is refused (`periodLocked`). Each import writes per-doc `created`
+    audit rows plus one `import` event — `"{entity} · N created"`.
+- The UI gains the two entities on the same page (two more cards in the picker, their columns in the preview,
+  the same validate-then-import flow); `e2e_r62.py` runs the whole story against both runtimes — unknown
+  branch/vendor reported, one invoice from two rows, duplicate skipped; `api_native.py` drills the drafts,
+  the stock-that-did-not-move, the table rows and the audit event; `contract.py`'s row and two 422 cases cover
+  the shape.
+
 ## Tables
 
 | Table | Purpose |

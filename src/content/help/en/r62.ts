@@ -77,6 +77,13 @@ export default {
         "When all rows pass, click **Import**. Nothing is saved until every row passes.",
       ),
       p("Records already on file (same SKU, BIN or name) are skipped. A garment business can load the **RMG starter catalogue** (31 common inputs, trims, packaging and garments with HS codes) instead of a file, then set prices."),
+      h("Bringing an existing business on board"),
+      p("The same page also imports what a going concern starts with — **Opening stock** and **Purchases** — so the books do not have to be keyed by hand:"),
+      list(
+        "**Opening stock**: one row per item and branch — SKU, branch (blank = the factory), the go-live date, the input-tax class, the counted quantity, its unit cost and any VAT already paid on it.",
+        "**Purchases**: one row per invoice line. Rows sharing an **invoice no** become one invoice; the vendor must already be on file (import vendors first), and an item's own VAT / SD rates apply when the columns are left blank.",
+      ),
+      p("Both arrive as **drafts**: nothing moves in stock and no return counts them until each draft is approved the ordinary way. A date inside a tax period whose 9.1 return is already submitted is refused — key invoices for closed periods into their period's amendment flow instead."),
       warn("Check each HS code against the current tariff after importing — see [Items and HS codes](help:items-and-hs-codes)."),
     ],
   },

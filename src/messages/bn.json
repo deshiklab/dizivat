@@ -3835,12 +3835,16 @@
     "e": {
       "items": "পণ্য",
       "customers": "গ্রাহক",
-      "vendors": "সরবরাহকারী"
+      "vendors": "সরবরাহকারী",
+      "openingStock": "ওপেনিং স্টক",
+      "purchases": "ক্রয়"
     },
     "eHint": {
       "items": "এইচএস কোড ও ভ্যাট হারসহ পণ্য, উপকরণ ও প্যাকিং সামগ্রী",
       "customers": "রপ্তানিকারক ও তাদের বন্ড লাইসেন্সসহ ক্রেতা",
-      "vendors": "পণ্য ও সেবার সরবরাহকারী"
+      "vendors": "পণ্য ও সেবার সরবরাহকারী",
+      "openingStock": "উন্মুক্তকরণ সমতা — প্রতি পণ্য ও শাখায় এক সারি, খসড়া হিসেবে তৈরি",
+      "purchases": "পূর্ববর্তী ক্রয় চালান — একই চালান নম্বরের সারিগুলো তার লাইন হয়"
     },
     "choose": "ফাইল বাছুন",
     "template": "টেমপ্লেট ডাউনলোড",
@@ -3849,7 +3853,9 @@
     "colsHint": {
       "items": "আবশ্যক: name, sku, hsCode (৮ অঙ্ক), group (Raw Material / Consumable / Packing Materials / Finished Goods), unit (একক তালিকা থেকে)। ভ্যাট স্বয়ংক্রিয়ভাবে ১৫ %।",
       "customers": "আবশ্যক: name, address; স্থানীয় গ্রাহকের বিআইএন (000000000-0000)। mode = Local বা Foreign; exporterType = direct বা deemed।",
-      "vendors": "আবশ্যক: name, address; স্থানীয় সরবরাহকারীর বিআইএন। mode = Local, Foreign বা Non-registered (এনআইডি)।"
+      "vendors": "আবশ্যক: name, address; স্থানীয় সরবরাহকারীর বিআইএন। mode = Local, Foreign বা Non-registered (এনআইডি)।",
+      "openingStock": "item = পণ্য তালিকায় যেমন আছে সেই SKU। branch = শাখার নাম (ফাঁকা = কারখানা)। inputTax = standard | reduced | zero | exempt (ফাঁকা = standard)। qty ও price = গণনাকৃত পরিমাণ ও একক ব্যয়; vatPaid = এর ওপর আগেই দেওয়া ভ্যাট।",
+      "purchases": "একই invoiceNo-এর সারিগুলো একটি চালান। vendor = আগে থেকে ফাইলে থাকা সরবরাহকারীর নাম (বা বিআইএন) — আগে সরবরাহকারী ইমপোর্ট করুন। item = SKU; qty ও price = লাইনের পরিমাণ ও একক মূল্য। vatRate / sdRate ফাঁকা = পণ্যের নিজের হার। method = Cash | Bank | Cheque | Mobile | Transaction (ফাঁকা = Bank)।"
     },
     "noRows": "শিটে কোনো ডেটা সারি নেই।",
     "unsupported": "কেবল .csv ও .xlsx ফাইল সমর্থিত।",
@@ -3906,7 +3912,15 @@
     "err": {
       "hs8": "এইচএস কোড ৮ অঙ্কের হতে হবে।",
       "unknownUnit": "একক তালিকায় এই একক নেই।",
-      "duplicateInFile": "ফাইলে দুইবার আছে।"
+      "duplicateInFile": "ফাইলে দুইবার আছে।",
+      "unknownItem": "অজানা SKU — আগে পণ্যের অধীনে ইমপোর্ট করুন",
+      "unknownBranch": "অজানা শাখার নাম",
+      "unknownInputTax": "inputTax হতে হবে standard, reduced, zero বা exempt",
+      "unknownVendor": "অজানা সরবরাহকারী — আগে সরবরাহকারীর অধীনে ইমপোর্ট করুন",
+      "foreignVendor": "বিদেশি সরবরাহকারীর জন্য বিল অব এন্ট্রি লাগে — চালানটি হাতে লিখুন",
+      "unknownMethod": "method হতে হবে Cash, Bank, Cheque, Mobile বা Transaction",
+      "conflictInInvoice": "এক চালানের সারিগুলোতে অমিল",
+      "periodLocked": "তারিখটি এমন কর মেয়াদে পড়ে যার রিটার্ন আগেই দাখিল হয়ে গেছে"
     }
   },
   "backup": {

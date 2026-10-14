@@ -105,8 +105,14 @@ export const IMPORT_FIELDS: Record<ImportEntity, string[]> = {
   items: ["name", "sku", "hsCode", "group", "unit", "purchasePrice", "salePrice", "vatRate", "sdRate", "reorderLevel", "active"],
   customers: ["name", "mode", "bin", "country", "mobile", "email", "contactPerson", "address", "exporterType", "bondLicenseNo", "bondLicenseExpiry", "associationNo", "active"],
   vendors: ["name", "mode", "bin", "country", "mobile", "email", "contactPerson", "address", "active"],
+  openingStock: ["item", "branch", "date", "inputTax", "qty", "price", "vatPaid", "note"],
+  purchases: ["invoiceNo", "date", "vendor", "challanNo", "challanDate", "item", "qty", "price", "vatRate", "sdRate", "method", "paid", "narration"],
 }
-export const REQUIRED_FIELDS: Record<ImportEntity, string[]> = { items: ["name", "sku", "hsCode", "group", "unit"], customers: ["name", "address"], vendors: ["name", "address"] }
+export const REQUIRED_FIELDS: Record<ImportEntity, string[]> = {
+  items: ["name", "sku", "hsCode", "group", "unit"], customers: ["name", "address"], vendors: ["name", "address"],
+  openingStock: ["item", "date", "qty", "price"],
+  purchases: ["invoiceNo", "date", "vendor", "item", "qty", "price"],
+}
 
 const ALIASES: Record<string, string> = {
   itemname: "name", description: "name", product: "name", partyname: "name", customer: "name", vendor: "name", supplier: "name",
@@ -116,6 +122,12 @@ const ALIASES: Record<string, string> = {
   type: "mode", registration: "mode", binnid: "bin", nid: "bin", phone: "mobile", contact: "contactPerson", contactperson: "contactPerson",
   exporter: "exporterType", exportertype: "exporterType", bond: "bondLicenseNo", bondlicence: "bondLicenseNo", bondlicense: "bondLicenseNo", bondlicenseno: "bondLicenseNo", bondlicenceno: "bondLicenseNo",
   bondexpiry: "bondLicenseExpiry", bondlicenseexpiry: "bondLicenseExpiry", bondlicenceexpiry: "bondLicenseExpiry", association: "associationNo", associationno: "associationNo", bgmea: "associationNo", bkmea: "associationNo",
+  // R7.4 — onboarding: opening stock and historical purchases (vat/sd/cost already map above)
+  sku: "item", itemno: "item", quantity: "qty", openingqty: "qty", rate: "price", unitprice: "price",
+  openingstockdate: "date", inputtaxclass: "inputTax", taxclass: "inputTax", vatpaid: "vatPaid", remark: "note",
+  invoiceno: "invoiceNo", billno: "invoiceNo", bill: "invoiceNo", vendorname: "vendor", suppliername: "vendor",
+  invoicedate: "date", issuedate: "date", challanno: "challanNo", challan: "challanNo", challandate: "challanDate",
+  payment: "method", paymentmethod: "method", paidamount: "paid", advance: "paid", remarks: "narration",
 }
 const norm = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, "")
 
@@ -132,7 +144,7 @@ export function mapRows(entity: ImportEntity, table: string[][]) {
   const missing = REQUIRED_FIELDS[entity].filter((f) => !cols.includes(f))
   const rows = body.map((r) => {
     const o: Record<string, string> = {}
-    cols.forEach((f, i) => { if (f) o[f] = f === "bondLicenseExpiry" ? excelDate(String(r[i] ?? "").trim()) : String(r[i] ?? "").trim() })
+    cols.forEach((f, i) => { if (f) o[f] = f === "bondLicenseExpiry" || f === "date" || f === "challanDate" ? excelDate(String(r[i] ?? "").trim()) : String(r[i] ?? "").trim() })
     return o
   })
   return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
@@ -176,6 +188,8 @@ export function templateCsv(entity: ImportEntity): string {
     items: ["Corrugated export carton, 5-ply", "CTN-5P-01", "48191000", "Finished Goods", "Pcs", "38", "52", "15", "0", "500", "yes"],
     customers: ["SAMPLE KNIT COMPOSITE LTD", "Local", "000000000-0101", "", "01711-000000", "accounts@example.com", "Accounts Manager", "Plot 1, Sample EPZ, Savar, Dhaka", "deemed", "", "", "BKMEA-0000", "yes"],
     vendors: ["SAMPLE TRIMS LTD", "Local", "000000000-0202", "", "01811-000000", "sales@example.com", "Sales Manager", "Road 2, Tongi I/A, Gazipur", "yes"],
+    openingStock: ["CTN-5P-01", "Factory", "2025-06-30", "standard", "400", "38", "0", "Go-live count"],
+    purchases: ["B-1001", "2025-06-12", "MEGHNA SPINNING & PROCESSING LTD", "C-4401", "2025-06-12", "YRN-30S", "1200", "410", "", "", "Bank", "0", "June yarn"],
   }
   const q = (v: string) => (/[",;\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
   return [IMPORT_FIELDS[entity].join(","), ex[entity].map(q).join(",")].join("\r\n") + "\r\n"

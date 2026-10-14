@@ -3835,12 +3835,16 @@
     "e": {
       "items": "Items",
       "customers": "Customers",
-      "vendors": "Vendors"
+      "vendors": "Vendors",
+      "openingStock": "Opening stock",
+      "purchases": "Purchases"
     },
     "eHint": {
       "items": "Products, inputs and packing materials with HS code and VAT rate",
       "customers": "Buyers, including exporters and their bond licences",
-      "vendors": "Suppliers of goods and services"
+      "vendors": "Suppliers of goods and services",
+      "openingStock": "Go-live balances per item and branch — one row each, created as drafts",
+      "purchases": "Historical purchase invoices — rows sharing an invoice number become its lines"
     },
     "choose": "Choose file",
     "template": "Download template",
@@ -3849,7 +3853,9 @@
     "colsHint": {
       "items": "Required: name, sku, hsCode (8 digits), group (Raw Material / Consumable / Packing Materials / Finished Goods), unit (from the Units master). VAT defaults to 15 %.",
       "customers": "Required: name, address; Local customers need a BIN (000000000-0000). mode = Local or Foreign; exporterType = direct or deemed.",
-      "vendors": "Required: name, address; Local vendors need a BIN. mode = Local, Foreign or Non-registered (NID)."
+      "vendors": "Required: name, address; Local vendors need a BIN. mode = Local, Foreign or Non-registered (NID).",
+      "openingStock": "item = the SKU as it is in Items. branch = the branch name (blank = the factory). inputTax = standard | reduced | zero | exempt (blank = standard). qty and price are the counted quantity and its unit cost; vatPaid is the VAT already paid on it.",
+      "purchases": "Rows with the same invoiceNo are one invoice. vendor = the name (or BIN) of a vendor already on file — import vendors first. item = the SKU; qty and price are the line's quantity and unit price. vatRate / sdRate blank = the item's own rates. method = Cash | Bank | Cheque | Mobile | Transaction (blank = Bank)."
     },
     "noRows": "The sheet has no data rows.",
     "unsupported": "Only .csv and .xlsx files are supported.",
@@ -3906,7 +3912,15 @@
     "err": {
       "hs8": "HS code must have 8 digits.",
       "unknownUnit": "Unit not in the Units master.",
-      "duplicateInFile": "Appears twice in the file."
+      "duplicateInFile": "Appears twice in the file.",
+      "unknownItem": "Unknown SKU — import it under Items first",
+      "unknownBranch": "Unknown branch name",
+      "unknownInputTax": "inputTax must be standard, reduced, zero or exempt",
+      "unknownVendor": "Unknown vendor — import it under Vendors first",
+      "foreignVendor": "Foreign vendors need a Bill of Entry — key the invoice instead",
+      "unknownMethod": "method must be Cash, Bank, Cheque, Mobile or Transaction",
+      "conflictInInvoice": "rows of one invoice disagree",
+      "periodLocked": "the date falls in a tax period whose return is already submitted"
     }
   },
   "backup": {

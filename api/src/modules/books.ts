@@ -23,7 +23,8 @@ import type { Request, Response } from "express"
 import type { ZodError } from "zod"
 import type { User } from "@/lib/auth/roles"
 import { toCSV } from "@/lib/mock/query"
-import type { Item, Party, Purchase, Sale } from "@/lib/types"
+import type { Item, OpeningEntry, Party, Purchase, Sale } from "@/lib/types"
+import type { OnboardingWorld } from "@/app/api/v1/_r62"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, zodErrors } from "../common/http"
 import { withStateLock } from "../common/lock"
@@ -39,6 +40,8 @@ import { applyPartyDelta, commitPartyDelta, partyDelta } from "./parties"
 import { applyItemDelta, applyMasterDelta, commitItemDelta, commitMasterDelta, itemDelta, masterDelta } from "./items"
 import type { MovementSource } from "@/lib/mock/db"
 import { returnSource, type ReturnSource } from "./returns"
+import { OpeningsService } from "./openings"
+import { PurchasesService } from "./purchases"
 
 type DashboardSource = MovementSource & ReturnSource
 /** What the ⌘K palette searches: the two invoice registers, the SKUs and both party books. */
@@ -129,7 +132,7 @@ export class BooksService {
   }
 
   /** One audit entry per thing the import created, and one for the import itself. */
-  record(user: User, e: { entity: "item" | "customer" | "vendor" | "import"; entityId?: string; ref: string; note?: string }) {
+  record(user: User, e: { entity: "item" | "customer" | "vendor" | "opening" | "purchase" | "import"; entityId?: string; ref: string; note?: string }) {
     return this.audits.record({
       at: new Date().toISOString(), actor: user, entity: e.entity, entityId: e.entityId ?? "", ref: e.ref,
       action: e.entity === "import" ? "imported" : "created", note: e.note,
@@ -232,7 +235,49 @@ export class SaleServicesController {
  */
 @Controller("api/v1/import")
 export class ImportController {
-  constructor(@Inject(BooksService) private readonly svc: BooksService) {}
+  constructor(
+    @Inject(BooksService) private readonly svc: BooksService,
+    @Inject(OpeningsService) private readonly openings: OpeningsService,
+    @Inject(PurchasesService) private readonly purchases: PurchasesService,
+  ) {}
+
+  /**
+   * R7.4: the onboarding import's world — the live registers it resolves names against, and the two creators
+   * that make the drafts through the opening and purchase services, so every row lands in the tables exactly
+   * the way a single keyed document does (own transaction, own number, own history).
+   */
+  private async onboardingWorld(): Promise<OnboardingWorld> {
+    const c = compat()
+    const ret = await returnSource()
+    const branches = mirror.company().branches
+    const main = (branches.find((b) => b.category === "factory") ?? branches[0]).id
+    return {
+      items: mirror.items(), vendors: mirror.parties("vendor"), openings: mirror.openings(), purchases: mirror.purchases(),
+      returns: ret.returns, branches, mainBranchId: main,
+      createOpening: async (body, user) => {
+        const built = c.buildOpening(body)
+        if ("status" in built) return built
+        const at = new Date().toISOString()
+        return this.openings.create(built.fields.date, (ident) => {
+          const o: OpeningEntry = { ...built.fields, ...ident, process: "Created", issuedBy: user.name, createdAt: at, history: [] }
+          c.claimOpeningId()
+          c.stampOpeningHistory(o, user.name, "created", undefined, at)
+          return o
+        })
+      },
+      createPurchase: async (body, user) => {
+        const r = c.parsePurchase(body)
+        if ("status" in r) return r
+        const fields = c.buildPurchaseFields(r.data, r.vendor)
+        const at = new Date().toISOString()
+        return this.purchases.create(r.data.category ?? "goods", r.data.issueDate, (ident) => {
+          const p: Purchase = { ...fields, ...ident, createdAt: at, process: "Created", history: [] }
+          c.stampDocHistory(p, user.name, "created", undefined, at)
+          return p
+        })
+      },
+    }
+  }
 
   @Post() @Authed("master.edit")
   async create(@Req() req: AuthedRequest, @Res() res: Response) {
@@ -240,8 +285,10 @@ export class ImportController {
     if (!parsed.success) throw new Problem(422, "Validation failed", zodErrors(parsed.error as ZodError))
     const { entity, dryRun, rows } = parsed.data
     const user = req.dz!.user
-    const r = await this.svc.save(() => compat().bulkImport(entity, rows, dryRun, user,
-      (e) => void this.svc.record(user, e), this.svc.importSource()))
+    const record = (e: Parameters<BooksService["record"]>[1]) => void this.svc.record(user, e)
+    const r = entity === "openingStock" || entity === "purchases"
+      ? await withStateLock(async () => compat().importOnboarding(entity, rows, dryRun, user, record, await this.onboardingWorld()))
+      : await this.svc.save(() => compat().bulkImport(entity, rows, dryRun, user, record, this.svc.importSource()))
     res.status(!dryRun && r.created ? 201 : 200).json(r)
   }
 }

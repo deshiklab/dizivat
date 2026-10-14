@@ -5127,6 +5127,66 @@ def run():
                               f" and process = 'Approved' and deleted_at is null and issue_date >= '2026-07-01'") or 0)
             check(abs(v["amount"] - want) < 0.011, f"R7.3: the top vendor's amount is the fiscal year's approved purchases ({v['amount']} vs {want})")
 
+        # ── R7.4: the onboarding import ────────────────────────────────────────────────────────────
+        print("\nR7.4: the onboarding import")
+        bad = admin.post(f"{BASE}/import", json={"entity": "openingStock", "dryRun": True, "rows": [
+            {"item": "NOPE", "date": "2025-06-30", "qty": "1", "price": "1"},
+            {"item": "CN-010", "date": "garbage", "qty": "1", "price": "1"},
+        ]}).json()
+        check(bad["created"] == 0 and {i["field"] for i in bad["issues"]} == {"item", "date"},
+              "R7.4: an opening dry run reports the unknown SKU and the bad date on their own rows")
+        before = next(x for x in admin.get(f"{BASE}/items?q=CN-010&size=1").json()["data"])
+        ap = admin.post(f"{BASE}/import", json={"entity": "openingStock", "dryRun": False, "rows": [
+            {"item": "CN-010", "date": "2025-06-30", "inputTax": "standard", "qty": "150", "price": "40", "vatPaid": "60", "note": "R7.4 drill"}]})
+        apj = ap.json()
+        check(ap.status_code == 201 and apj["created"] == 1 and not apj["issues"],
+              "R7.4: a clean opening file applies as one draft entry (201)")
+        mine = [r for r in admin.get(f"{BASE}/opening-stock?size=100").json()["data"] if r["sku"] == "CN-010" and r["date"] == "2025-06-30"]
+        check(len(mine) == 1 and mine[0]["process"] == "Created" and mine[0]["vatPaid"] == 60 and mine[0]["branchName"].startswith("Factory"),
+              "R7.4: the draft opening entry is in the register — blank branch meant the factory")
+        after = next(x for x in admin.get(f"{BASE}/items?q=CN-010&size=1").json()["data"])
+        check(after["opening"] == before["opening"],
+              "R7.4: a draft moves no stock — the item's opening quantity waits for the approval")
+        dup = admin.post(f"{BASE}/import", json={"entity": "openingStock", "dryRun": False, "rows": [{"item": "CN-010", "date": "2025-06-30", "qty": "150", "price": "40"}]}).json()
+        check(dup["created"] == 0 and dup["duplicates"] == 1, "R7.4: re-uploading the same opening is skipped as a duplicate")
+        inv = "IMP-98-001"
+        pu = admin.post(f"{BASE}/import", json={"entity": "purchases", "dryRun": True, "rows": [
+            {"invoiceNo": inv, "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-010", "qty": "1", "price": "1"},
+            {"invoiceNo": inv, "date": "2025-06-13", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-013", "qty": "1", "price": "1"},
+            {"invoiceNo": inv + "2", "date": "2026-08-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-010", "qty": "1", "price": "1"},
+        ]}).json()
+        check(pu["created"] == 0 and {i["message"] for i in pu["issues"]} == {"conflictInInvoice", "periodLocked"},
+              "R7.4: a purchase dry run flags a date conflict inside one invoice and a submitted period's date")
+        ap2 = admin.post(f"{BASE}/import", json={"entity": "purchases", "dryRun": False, "rows": [
+            {"invoiceNo": inv, "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-010", "qty": "1200", "price": "38.5", "challanNo": "C-98-001", "paid": "5000"},
+            {"invoiceNo": inv, "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-013", "qty": "10", "price": "900"}]}).json()
+        check(ap2["created"] == 1 and ap2["valid"] == 2 and not ap2["issues"],
+              "R7.4: two rows of one bill apply as a single draft purchase")
+        row = admin.get(f"{BASE}/purchases?q=C-98-001&size=1").json()["data"][0]
+        rates = {r["sku"]: r["vatRate"] for r in admin.get(f"{BASE}/items?size=200").json()["data"] if r["sku"] in ("CN-010", "CN-013")}
+        check(row["process"] == "Created" and len(row["lines"]) == 2 and row["challanNo"] == "C-98-001"
+              and row["vendorName"] == "BENGAL DYES & CHEMICALS LTD" and row["paid"] == 5000,
+              "R7.4: the imported invoice carries both lines, the challan, the vendor and the payment")
+        check(abs(row["lines"][0]["vat"] - 1200 * 38.5 * rates["CN-010"] / 100) < 0.011
+              and abs(row["netTotal"] - (1200 * 38.5 * (1 + rates["CN-010"] / 100) + 10 * 900 * (1 + rates["CN-013"] / 100))) < 0.011,
+              "R7.4: the line VAT and the net total are the same math a keyed invoice gets")
+        dup2 = admin.post(f"{BASE}/import", json={"entity": "purchases", "dryRun": False, "rows": [
+            {"invoiceNo": inv, "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-010", "qty": "1", "price": "1", "challanNo": "C-98-001"}]}).json()
+        check(dup2["created"] == 0 and dup2["duplicates"] == 1, "R7.4: re-uploading the same bill is skipped — the challan is already on file")
+        fresh = admin.post(f"{BASE}/import", json={"entity": "purchases", "dryRun": False, "rows": [
+            {"invoiceNo": "IMP-98-002", "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-013", "qty": "2", "price": "7"}]}).json()
+        dup3 = admin.post(f"{BASE}/import", json={"entity": "purchases", "dryRun": False, "rows": [
+            {"invoiceNo": "IMP-98-002", "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-013", "qty": "2", "price": "7"}]}).json()
+        check(fresh["created"] == 1 and dup3["created"] == 0 and dup3["duplicates"] == 1,
+              "R7.4: a sheet without challan columns dedups on the bill number alone — it became the challan")
+        if DB_URL:
+            check(psql(f"select count(*) from purchases where challan_no = 'C-98-001' and process = 'Created'") == "1"
+                  and psql(f"select count(*) from purchase_lines where purchase_id = '{row['id']}'") == "2",
+                  "R7.4: the draft and its two lines are rows in the tables, written by the purchase service")
+        auditI = admin.get(f"{BASE}/audit", params={"entity": "import", "size": 3}).json()
+        check(auditI.get("total", 0) >= 1 and any("openingStock" in (r.get("ref") or "") or "purchases" in (r.get("ref") or "") for r in auditI.get("data", [])),
+              "R7.4: each import is one audit event naming what it created")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
