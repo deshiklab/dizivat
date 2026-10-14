@@ -17,6 +17,7 @@ import { db, branchSplit, mainBranchId, stockBranches, withStock, type MovementS
 import { runQuery, type QuerySpec } from "@/lib/mock/query"
 import { computeReturn } from "@/lib/mock/vat-return"
 import { periodOf, returnDue } from "@/lib/r4"
+import { taxPeriods } from "./_r4"
 import type { Branch, DashboardData, Item, ItemLedger, LedgerEntry, MushakBook, Party, Purchase, Sale, SearchHit, StockRow } from "@/lib/types"
 import { round2 } from "@/lib/vat"
 import { ledgerRows, sortRows, buildBook } from "./_ledger"
@@ -223,6 +224,15 @@ export function dashboardAnswer(src: DashboardSource = db): DashboardData {
     e.amount += s.netTotal; e.count++
     byCustomer.set(s.customerId, e)
   }
+  // R7.3: the spend side of the same fiscal year — vendors mirror customers, purchases mirror sales
+  const byVendor = new Map<string, { name: string; amount: number; count: number }>()
+  for (const p of livePur.filter((p) => p.issueDate >= fyStart)) {
+    const e = byVendor.get(p.vendorId) ?? { name: p.vendorName, amount: 0, count: 0 }
+    e.amount += p.netTotal; e.count++
+    byVendor.set(p.vendorId, e)
+  }
+  // R7.3: the TR-6 deposits counted toward a tax period (the 9.1's own note-58 view of a month)
+  const dep = (k: string) => round2(sum(src.treasury.filter((t) => t.process === "Approved" && t.taxPeriod === k), (t) => t.amount))
   const mix = new Map<string, number>()
   for (const s of live.filter((s) => s.issueDate >= fyStart)) for (const l of s.lines) {
     const it = src.items.find((i) => i.id === l.itemId)
@@ -243,8 +253,11 @@ export function dashboardAnswer(src: DashboardSource = db): DashboardData {
       pendingApproval: src.sales.filter((s) => s.process === "Created").length + src.purchases.filter((p) => p.process === "Created").length + src.debitNotes.filter((n) => n.process === "Created").length
         + src.creditNotes.filter((n) => n.process === "Created").length + src.batches.filter((b) => b.process === "Created").length,
     },
-    monthly: months.map((k) => { const x = kpi(k); return { month: k, sales: x.sales, purchases: x.purchases, outputVat: x.outputVat, inputVat: x.inputVat } }),
+    monthly: months.map((k) => { const x = kpi(k); return { month: k, sales: x.sales, purchases: x.purchases, outputVat: x.outputVat, inputVat: x.inputVat, netPayable: x.netPayable, deposited: dep(k) } }),
     topCustomers: [...byCustomer.values()].sort((a, b) => b.amount - a.amount).slice(0, 5).map((x) => ({ ...x, amount: round2(x.amount) })),
+    topVendors: [...byVendor.values()].sort((a, b) => b.amount - a.amount).slice(0, 5).map((x) => ({ ...x, amount: round2(x.amount) })),
+    // R7.3: the filing strip — the last 12 tax periods exactly as /vat/periods serves them
+    periods: taxPeriods(src).slice(0, 12),
     mix: [...mix.entries()].map(([name, value]) => ({ name, value: round2(value) })).sort((a, b) => b.value - a.value).slice(0, 5),
     // Ordered by the `createdAt` string, as the demo data set wrote it: the seed stamps some invoices `…T14:19:00+06:00`
     // and others `toISOString()`, so the two shapes do not sort together, and the sales table (R5.3) renders every

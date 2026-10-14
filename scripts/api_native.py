@@ -5103,6 +5103,30 @@ def run():
               and f"mushak-6.2-sales-{P}.csv" in cl.decode(),
               "R7.2: the checklist is a CRLF hand-over note naming every member")
 
+        # ── R7.3: the dashboard's 12-month insight ────────────────────────────────────────────────
+        print("\nR7.3: the dashboard's 12-month insight")
+        dash = admin.get(f"{BASE}/dashboard").json()
+        mon = dash.get("monthly", [])
+        check(len(mon) == 12 and all(set(("netPayable", "deposited")) <= set(x) for x in mon)
+              and all(abs(x["netPayable"] - (x["outputVat"] - x["inputVat"])) < 0.011 for x in mon),
+              "R7.3: the trend rows carry the month's net VAT (output − input) and its deposits, twelve months back")
+        if DB_URL:
+            for x in mon[:3]:
+                want = float(psql(f"select coalesce(sum(amount), 0) from treasury_deposits where tax_period = '{x['month']}' and process = 'Approved'") or 0)
+                check(abs(x["deposited"] - want) < 0.011, f"R7.3: {x['month']}'s deposited is the approved TR-6 sum ({x['deposited']} vs {want})")
+        strip = dash.get("periods", [])
+        want = admin.get(f"{BASE}/vat/periods").json()[:12]
+        check(len(strip) == 12 and [(p["period"], p["status"]) for p in strip] == [(p["period"], p["status"]) for p in want],
+              "R7.3: the filing strip is the first dozen of /vat/periods — statuses and all")
+        ven = dash.get("topVendors", [])
+        check(ven and all(ven[i]["amount"] >= ven[i + 1]["amount"] for i in range(len(ven) - 1)) and len(ven) <= 5,
+              "R7.3: the year's top vendors ride along, best first, five at most")
+        if DB_URL and ven:
+            v = ven[0]
+            want = float(psql(f"select coalesce(sum(net_total), 0) from purchases where vendor_name = '{v['name'].replace(chr(39), chr(39) * 2)}'"
+                              f" and process = 'Approved' and deleted_at is null and issue_date >= '2026-07-01'") or 0)
+            check(abs(v["amount"] - want) < 0.011, f"R7.3: the top vendor's amount is the fiscal year's approved purchases ({v['amount']} vs {want})")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")

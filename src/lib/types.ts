@@ -213,9 +213,14 @@ export interface DashboardData {
     receivable: number; payable: number
     pendingApproval: number
   }
-  monthly: { month: string; sales: number; purchases: number; outputVat: number; inputVat: number }[]
+  /** R7.3: the trend rows also carry the month's net VAT and the TR-6 deposits counted to it */
+  monthly: { month: string; sales: number; purchases: number; outputVat: number; inputVat: number; netPayable: number; deposited: number }[]
   topCustomers: { name: string; amount: number; count: number }[]
+  /** R7.3: the spend side of the year's best customers */
+  topVendors: { name: string; amount: number; count: number }[]
   mix: { name: string; value: number }[]
+  /** R7.3: the last 12 tax periods and where each return stands — the filing strip */
+  periods: TaxPeriod[]
   recentSales: Sale[]
   lowStock: ItemWithStock[]
   deadlines: { id: string; title: string; due: string; status: "due" | "done" | "overdue"; href?: string }[]

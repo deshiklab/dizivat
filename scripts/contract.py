@@ -22,7 +22,7 @@ ENDPOINTS = [
     E("POST", "/me/views", None, "Save a list view {table, name, query}"),
     E("DELETE", "/me/views?table=sales&name=x", None, "Delete a saved view"),
     E("PUT", "/me/password", None, "Change own password {current, next, confirm}; other sessions revoked"),
-    E("GET", "/dashboard", None, "KPIs, charts, deadlines, low stock for the current VAT period"),
+    E("GET", "/dashboard", None, "The home screen: KPIs vs last period, three 12-month trends (sales vs purchases, output vs input VAT, R7.3 net VAT vs TR-6 deposits), the R7.3 filing strip (last 12 tax periods with return status), deadlines, top customers and vendors, product mix, low stock, recent sales"),
     E("GET", "/search?q=bay", None, "Global search (invoices, parties, items)"),
     E("GET", "/notifications", None, "Notifications for the current user {items, unread}"),
     E("POST", "/notifications/read", None, "Mark read {ids} | {all: true}"),

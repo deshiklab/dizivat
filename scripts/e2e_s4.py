@@ -177,7 +177,16 @@ async def main():
         try:
             await pg.goto(BASE + "/en", wait_until="domcontentloaded")
             await expect(pg.locator(".recharts-surface").first).to_be_visible(timeout=15000)
-            await expect(pg.locator(".recharts-wrapper")).to_have_count(2); ok("both dashboard charts render (deferred chunk)")
+            await expect(pg.locator(".recharts-wrapper")).to_have_count(3); ok("all three dashboard charts render (deferred chunk)")
+            # R7.3: the insights — net vs deposits chart, the filing strip, top vendors and top products
+            await expect(pg.get_by_text("Net VAT vs deposits")).to_be_visible()
+            await expect(pg.get_by_text("Filing status")).to_be_visible()
+            strip = pg.get_by_role("region", name="Filing status").locator("a")
+            await expect(strip).to_have_count(12)
+            first = await strip.first.get_attribute("href")
+            assert first and "return-9-1?period=" in first, first
+            await expect(pg.get_by_text("Top vendors")).to_be_visible()
+            await expect(pg.get_by_text("Top products")).to_be_visible(); ok("R7.3: filing strip (12 months → the 9.1), top vendors and top products on the dashboard")
         except Exception as e: fail(7, e)
 
         # ── 8. Bangla ─────────────────────────────────────────────────

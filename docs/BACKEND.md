@@ -992,6 +992,28 @@ shows — no second computation:
   asserts the button and downloads the zip through the browser session; `contract.py` pins the endpoint (zip
   content type) on both runtimes.
 
+## R7.3 — the dashboard's 12-month insight
+
+The dashboard showed the current month and the year's best customers, but not the shape of the year: whether
+deposits track liability, who the big vendors are, and where filing stands month by month. All of it is derived —
+no new tables, no new endpoints.
+
+- **`GET /dashboard`** answers three more things, computed by the same shared `dashboardAnswer` both runtimes run:
+  - the 12-month trend rows gain the month's **net VAT** (`outputVat − inputVat`, notes and all, exactly as the
+    KPI computes it) and the **TR-6 deposits counted to that period** (approved challans by `taxPeriod` — the 9.1's
+    own note-58 view of a month). A third chart plots the two: the gap between the lines is what still has to be
+    deposited.
+  - **`topVendors`** — the fiscal year's biggest suppliers, the exact mirror of `topCustomers` (approved purchases
+    by vendor). The product **mix** (`mix`) was already computed; the dashboard now shows it.
+  - **`periods`** — the first dozen of `/vat/periods` (statuses and all): the **filing strip**, one tile per tax
+    period, each opening that month's 9.1.
+- The UI keeps the page's rhythm: three charts in the trend row (each still a chart *or* an accessible table), the
+  strip under them, then the existing cards plus **Top vendors** and **Top products** rows.
+- `api_native.py` drills it (trend rows carry net and deposits, the deposit column equals the approved
+  `treasury_deposits` sum per period, the strip equals `/vat/periods` head, vendor ranking against the purchases
+  table); `e2e_s4.py` asserts all three charts render and the new cards are there; `contract.py`'s row now names
+  the whole shape.
+
 ## Tables
 
 | Table | Purpose |
