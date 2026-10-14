@@ -173,7 +173,7 @@ async def main():
             # ── R7.1: the tariff import dialog (dry run → preview → apply → restore) ──
             await ap.goto(BASE + "/en/vat/tariff", wait_until="networkidle")
             before = (await (await appr.request.get(BASE + "/api/v1/tariff?size=1")).json())["total"]
-            beforeCsv = (await (await appr.request.get(BASE + "/api/v1/tariff?format=csv")).text()).strip()
+            beforeCsv = (await (await appr.request.get(BASE + "/api/v1/tariff?format=csv")).text()).strip().lstrip("\ufeff")  # Excel-friendly BOM
             sheet = ("hsCode,description,cd,sd,vat,ait,rd,at\r\n"
                      "61091000,\"T-shirts, singlets and other vests, knitted, of cotton\",25,0,15,5,3,0\r\n"
                      "52062300,\"Woven fabrics of synthetic staple fibres, dyed\",10,0,15,5,3,0\r\n")
