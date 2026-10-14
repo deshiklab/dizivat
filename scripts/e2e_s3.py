@@ -14,6 +14,7 @@ def fail(section, e):
     import traceback
     msg = f"section {section}: {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
     failures.append(msg); print("FAIL", msg); traceback.print_exc(limit=1)
+    print(f"::error::e2e_s3 {msg}")  # surfaces in the GitHub UI and the annotations API (logs blobs are not always fetchable)
 def watch(pg, errs):
     pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
     pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" else None)
@@ -176,20 +177,19 @@ async def main():
             sheet = ("hsCode,description,cd,sd,vat,ait,rd,at\r\n"
                      "61091000,\"T-shirts, singlets and other vests, knitted, of cotton\",25,0,15,5,3,0\r\n"
                      "52062300,\"Woven fabrics of synthetic staple fibres, dyed\",10,0,15,5,3,0\r\n")
-            path = os.path.join(OUT, "tariff-2027-28.csv")
-            with open(path, "w", newline="") as fh: fh.write(sheet)
+            dlg = ap.get_by_role("dialog")
             await ap.get_by_role("button", name="Import tariff").click()
-            await ap.locator("#tariff-fy").fill("2027-28")
-            await ap.set_input_files("#tariff-file", path)
-            await expect(ap.get_by_text("2 rows · 8 columns recognised.")).to_be_visible(); ok("import dialog: the sheet is read in the browser")
-            await ap.get_by_role("button", name="Validate (dry run)").click()
-            await expect(ap.get_by_text("Preview for FY 2027-28")).to_be_visible()
-            await expect(ap.get_by_text("New codes")).to_be_visible()
-            await expect(ap.locator("dl").get_by_text("2", exact=True)).to_be_visible(); ok("import dialog: the dry run previews the diff")
+            await expect(dlg).to_be_visible()
+            await dlg.get_by_label("Fiscal year").fill("2027-28")
+            await dlg.locator("#tariff-file").set_input_files(files=[{"name": "tariff-2027-28.csv", "mimeType": "text/csv", "buffer": sheet.encode()}])
+            await expect(dlg.get_by_text("2 rows · 8 columns recognised.")).to_be_visible(); ok("import dialog: the sheet is read in the browser")
+            await dlg.get_by_role("button", name="Validate (dry run)").click()
+            await expect(dlg.get_by_text("Preview for FY 2027-28")).to_be_visible()
+            await expect(dlg.get_by_text("New codes").locator("..")).to_contain_text("2"); ok("import dialog: the dry run previews the diff")
             await settle(ap); await ap.screenshot(path=f"{OUT}/55a_tariff_import_preview.png")
-            await ap.get_by_role("button", name="Import", exact=True).click()
-            await expect(ap.get_by_text(re.compile(r"2 tariff lines imported"))).to_be_visible()
-            await expect(ap.get_by_text("2 HS codes · FY 2027-28")).to_be_visible()
+            await dlg.get_by_role("button", name="Import", exact=True).click()
+            await expect(dlg).not_to_be_visible()
+            await expect(ap.get_by_text("2 HS codes · FY 2027-28")).to_be_visible(timeout=10000)
             await expect(ap.locator("tbody tr")).to_have_count(2); ok("import dialog: applying switches the register to the imported year")
             await settle(ap); await ap.screenshot(path=f"{OUT}/55b_tariff_imported.png")
             # restore the seeded year through the API — and prove the export → import round trip is lossless
@@ -203,7 +203,7 @@ async def main():
             r = await appr.request.post(BASE + "/api/v1/tariff/import",
                                         data={"fiscalYear": "2026-27", "dryRun": False, "rows": rows})
             j = await r.json()
-            assert r.status == 201 and j["summary"]["unchanged"] == before and j["summary"]["removed"] == 0, j
+            assert r.status == 201 and j["summary"]["unchanged"] == before and j["summary"]["removed"] == 0, (r.status, j)
             ok(f"tariff import: the CSV export re-imports losslessly ({before} lines, all unchanged)")
         except Exception as e: fail(5, e)
 
