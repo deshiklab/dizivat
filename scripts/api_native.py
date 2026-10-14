@@ -5130,24 +5130,24 @@ def run():
         # ── R7.4: the onboarding import ────────────────────────────────────────────────────────────
         print("\nR7.4: the onboarding import")
         bad = admin.post(f"{BASE}/import", json={"entity": "openingStock", "dryRun": True, "rows": [
-            {"item": "NOPE", "date": "2025-06-30", "qty": "1", "price": "1"},
+            {"item": "NOPE", "date": "2025-06-15", "qty": "1", "price": "1"},
             {"item": "CN-010", "date": "garbage", "qty": "1", "price": "1"},
         ]}).json()
         check(bad["created"] == 0 and {i["field"] for i in bad["issues"]} == {"item", "date"},
               "R7.4: an opening dry run reports the unknown SKU and the bad date on their own rows")
         before = next(x for x in admin.get(f"{BASE}/items?q=CN-010&size=1").json()["data"])
         ap = admin.post(f"{BASE}/import", json={"entity": "openingStock", "dryRun": False, "rows": [
-            {"item": "CN-010", "date": "2025-06-30", "inputTax": "standard", "qty": "150", "price": "40", "vatPaid": "60", "note": "R7.4 drill"}]})
+            {"item": "CN-010", "date": "2025-06-15", "inputTax": "standard", "qty": "150", "price": "40", "vatPaid": "60", "note": "R7.4 drill"}]})
         apj = ap.json()
         check(ap.status_code == 201 and apj["created"] == 1 and not apj["issues"],
               "R7.4: a clean opening file applies as one draft entry (201)")
-        mine = [r for r in admin.get(f"{BASE}/opening-stock?size=100").json()["data"] if r["sku"] == "CN-010" and r["date"] == "2025-06-30"]
+        mine = [r for r in admin.get(f"{BASE}/opening-stock?size=100").json()["data"] if r["sku"] == "CN-010" and r["date"] == "2025-06-15"]
         check(len(mine) == 1 and mine[0]["process"] == "Created" and mine[0]["vatPaid"] == 60 and mine[0]["branchName"].startswith("Factory"),
               "R7.4: the draft opening entry is in the register — blank branch meant the factory")
         after = next(x for x in admin.get(f"{BASE}/items?q=CN-010&size=1").json()["data"])
         check(after["opening"] == before["opening"],
               "R7.4: a draft moves no stock — the item's opening quantity waits for the approval")
-        dup = admin.post(f"{BASE}/import", json={"entity": "openingStock", "dryRun": False, "rows": [{"item": "CN-010", "date": "2025-06-30", "qty": "150", "price": "40"}]}).json()
+        dup = admin.post(f"{BASE}/import", json={"entity": "openingStock", "dryRun": False, "rows": [{"item": "CN-010", "date": "2025-06-15", "qty": "150", "price": "40"}]}).json()
         check(dup["created"] == 0 and dup["duplicates"] == 1, "R7.4: re-uploading the same opening is skipped as a duplicate")
         inv = "IMP-98-001"
         pu = admin.post(f"{BASE}/import", json={"entity": "purchases", "dryRun": True, "rows": [
