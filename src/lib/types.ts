@@ -1002,7 +1002,7 @@ export interface PenaltyExposureRow { period: string; dueDate: string; status: "
 export interface BackupVerify { id: string; ok: boolean; sha256: string; size: number; checkedAt: string }
 
 /** R7.4: the onboarding entities — rows become draft opening entries / draft purchase invoices */
-export type ImportEntity = "items" | "customers" | "vendors" | "openingStock" | "purchases"
+export type ImportEntity = "items" | "customers" | "vendors" | "openingStock" | "purchases" | "sales"
 export interface ImportIssue { row: number; field: string; message: string }
 export interface ImportResult { entity: ImportEntity; dryRun: boolean; total: number; valid: number; created: number; duplicates: number; issues: ImportIssue[] }
 

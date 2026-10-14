@@ -25,7 +25,8 @@ import { buildItem, newItemId } from "./_items"
 import { invalidRule, type RuleProblem } from "./_lib"
 import { newPartyId } from "./_parties"
 import { buildOpening, claimOpeningId, openingIdentity } from "./_r2"
-import { parsePurchase, purchaseIdentity, stampDocHistory, stampOpeningHistory } from "./_docs"
+import { parsePurchase, purchaseIdentity, saleIdentity, stampDocHistory, stampOpeningHistory } from "./_docs"
+import { parseSale } from "./_r3"
 import { buildPurchaseFields } from "@/lib/mock/build"
 import { mainBranchId } from "@/lib/mock/db"
 import { company } from "@/lib/mock/company"
@@ -367,11 +368,14 @@ export interface OnboardingWorld {
   vendors: Party[]
   openings: OpeningEntry[]
   purchases: Purchase[]
+  customers: Party[]
+  sales: Sale[]
   returns: VatReturn[]
   branches: { id: string; name: string }[]
   mainBranchId: string
   createOpening: (body: unknown, actor: User) => Promise<RuleProblem | OpeningEntry>
   createPurchase: (body: unknown, actor: User) => Promise<RuleProblem | Purchase>
+  createSale: (body: unknown, actor: User) => Promise<RuleProblem | Sale>
 }
 
 const INPUT_TAXES = ["standard", "reduced", "zero", "exempt"]
@@ -480,30 +484,116 @@ function planPurchases(rows: Record<string, unknown>[], world: OnboardingWorld) 
   return { bodies, issues, duplicates }
 }
 
+const SALE_METHODS: Record<string, Sale["method"]> = {
+  cash: "Cash", bank: "Bank", cheque: "Cheque", mobile: "Mobile", bkash: "Mobile", nagad: "Mobile", card: "Bank",
+}
+
+/**
+ * Spreadsheet rows → draft sale-invoice bodies (R7.6 — the sales half of the onboarding import). Like the
+ * purchases planner it only resolves names and de-duplicates; every rule check is `parseSale` itself — the
+ * POST's own validation. Goods only (a sale sells finished goods); a foreign customer makes the invoice a
+ * direct export — zero-rated, with the LC block filled from the sheet (or the bill number and date). The old
+ * system's invoice number rides in the narration as `[old …]` — that marker is what a re-upload skips on.
+ */
+function planSales(rows: Record<string, unknown>[], world: OnboardingWorld) {
+  const issues: ImportIssue[] = []
+  const bodies: { row: number; body: Record<string, unknown> }[] = []
+  let duplicates = 0
+  const groups = new Map<string, { raw: Record<string, unknown>; row: number }[]>()
+  rows.forEach((raw, i) => {
+    const row = i + 2
+    const invoiceNo = str(raw.invoiceNo).toUpperCase()
+    if (!invoiceNo) return issues.push({ row, field: "invoiceNo", message: "required" })
+    const g = groups.get(invoiceNo) ?? []
+    g.push({ raw, row })
+    groups.set(invoiceNo, g)
+  })
+  const fieldOf = (f: string) => f.startsWith("export.") ? f.slice(7) : f === "customerId" ? "customer" : f === "issueDate" || f === "issueTime" ? "date" : f
+  for (const [invoiceNo, g] of groups) {
+    const first = g[0]
+    const date = str(first.raw.date)
+    const custKey = str(first.raw.customer).trim().toLowerCase()
+    for (const { raw, row } of g.slice(1)) {
+      if (str(raw.date) && str(raw.date) !== date) issues.push({ row, field: "date", message: "conflictInInvoice" })
+      if (str(raw.customer).trim().toLowerCase() && str(raw.customer).trim().toLowerCase() !== custKey) issues.push({ row, field: "customer", message: "conflictInInvoice" })
+    }
+    const all = (field: string, message: string) => { for (const { row } of g) issues.push({ row, field, message }) }
+    if (!date) { all("date", "required"); continue }
+    if (!custKey) { all("customer", "required"); continue }
+    const cust = world.customers.find((c) => c.name.trim().toLowerCase() === custKey || (c.bin.replace(/^NID /, "") && c.bin.replace(/^NID /, "") === str(first.raw.customer).trim()))
+    if (!cust) { all("customer", "unknownCustomer"); continue }
+    const marker = `[OLD ${invoiceNo}]`
+    if (world.sales.some((x) => x.process !== "Cancelled" && x.customerId === cust.id && (x.narration ?? "").toUpperCase().includes(marker))) { duplicates += g.length; continue }
+    const methodRaw = str(first.raw.method).toLowerCase()
+    const method = methodRaw ? SALE_METHODS[methodRaw] : "Bank"
+    if (!method) { issues.push({ row: first.row, field: "method", message: "unknownMethod" }); continue }
+    const lines: Record<string, unknown>[] = []
+    const lineRows: number[] = []
+    for (const { raw, row } of g) {
+      const sku = str(raw.item).toLowerCase()
+      if (!sku) { issues.push({ row, field: "item", message: "required" }); continue }
+      const it = world.items.find((x) => x.sku.toLowerCase() === sku && x.active)
+      if (!it) { issues.push({ row, field: "item", message: "unknownItem" }); continue }
+      if (it.group !== "Finished Goods") { issues.push({ row, field: "item", message: "notFinishedGoods" }); continue }
+      lines.push({
+        itemId: it.id, qty: num(raw.qty, NaN), price: num(raw.price, NaN),
+        vatRate: str(raw.vatRate) === "" ? it.vatRate : num(raw.vatRate, NaN),
+        sdRate: str(raw.sdRate) === "" ? it.sdRate : num(raw.sdRate, NaN),
+      })
+      lineRows.push(row)
+    }
+    if (!lines.length) continue
+    const body = {
+      customerId: cust.id, issueDate: date, issueTime: "00:00", method, discount: 0, paid: num(first.raw.paid, 0), vds: false,
+      narration: `${marker} ${str(first.raw.narration)}`.trim(), process: "Created", branchId: "", category: "goods",
+      issuedBy: "Bulk import", designation: "Bulk import", // the importer's own name is stamped at create time
+      lines,
+      ...(cust.mode === "Foreign" ? { export: {
+        deemed: false, lcNo: str(first.raw.lcNo) || invoiceNo, lcDate: str(first.raw.lcDate) || date,
+        customsHouse: str(first.raw.customsHouse), country: str(first.raw.country) || cust.country || "",
+        billNo: str(first.raw.billNo) || invoiceNo, billDate: str(first.raw.billDate) || date, shippingAddress: cust.address,
+      } } : {}),
+    }
+    const parsed = parseSale(body) // the POST's own validation — zod, the customer, the items, the export block, the period lock
+    if ("status" in parsed) {
+      for (const [f, ms] of Object.entries(parsed.errors ?? {})) {
+        const m = /^lines\.(\d+)\.(.*)$/.exec(f)
+        const row = m ? (lineRows[Number(m[1])] ?? first.row) : first.row
+        const field = m ? (m[2] === "itemId" ? "item" : m[2]) : fieldOf(f)
+        for (const msg of ms) issues.push({ row, field, message: msg })
+      }
+      continue
+    }
+    bodies.push({ row: first.row, body })
+  }
+  return { bodies, issues, duplicates }
+}
+
 /**
  * The onboarding import: dry-run validates every row (and reports the issues on the spreadsheet's own row
  * numbers), an apply creates the drafts — all of them or none, exactly like the master-data import. What is
  * created goes through the creators, so stock does not move and no return counts it until the drafts are
  * approved the ordinary way.
  */
-export async function importOnboarding(entity: "openingStock" | "purchases", rows: Record<string, unknown>[], dryRun: boolean, actor: User,
-  audit: (e: { entity: "opening" | "purchase" | "import"; entityId?: string; ref: string; note?: string }) => void,
+export async function importOnboarding(entity: "openingStock" | "purchases" | "sales", rows: Record<string, unknown>[], dryRun: boolean, actor: User,
+  audit: (e: { entity: "opening" | "purchase" | "sale" | "import"; entityId?: string; ref: string; note?: string }) => void,
   world: OnboardingWorld): Promise<ImportResult> {
-  const plan = entity === "openingStock" ? planOpeningStock(rows, world) : planPurchases(rows, world)
+  const plan = entity === "openingStock" ? planOpeningStock(rows, world) : entity === "purchases" ? planPurchases(rows, world) : planSales(rows, world)
   const valid = rows.length - new Set(plan.issues.map((x) => x.row)).size
   const clean = plan.issues.length === 0
   let created = 0
   if (clean && !dryRun) {
     for (const p of plan.bodies) {
       const body = { ...p.body, issuedBy: actor.name, designation: actor.designation || "Import" }
-      const made = entity === "openingStock" ? await world.createOpening(body, actor) : await world.createPurchase(body, actor)
+      const made = entity === "openingStock" ? await world.createOpening(body, actor) : entity === "purchases" ? await world.createPurchase(body, actor) : await world.createSale(body, actor)
       if ("status" in made) {
         // the rule refused what the plan cleared — surface it on the row that asked for it (should not happen)
         for (const [f, ms] of Object.entries(made.errors ?? {})) for (const m of ms) plan.issues.push({ row: p.row, field: f, message: m })
         continue
       }
       created++
-      audit({ entity: entity === "openingStock" ? "opening" : "purchase", entityId: made.id, ref: entity === "openingStock" ? (made as OpeningEntry).no : (made as Purchase).invoiceNo, note: "Bulk import" })
+      audit({ entity: entity === "openingStock" ? "opening" : entity === "purchases" ? "purchase" : "sale", entityId: made.id,
+        ref: entity === "openingStock" ? (made as OpeningEntry).no : entity === "purchases" ? (made as Purchase).invoiceNo : (made as Sale).invoiceNo, note: "Bulk import" })
     }
     if (created) audit({ entity: "import", ref: `${entity} · ${created} created`, note: `${rows.length} rows, ${plan.duplicates} already on file (skipped)` })
   }
@@ -534,13 +624,28 @@ export function mockCreatePurchase(body: unknown, actor: User): RuleProblem | Pu
   return p
 }
 
+/** The mock's sale creator — the exact code path a POST /sales takes (a draft: no stock moves). */
+export function mockCreateSale(body: unknown, actor: User): RuleProblem | Sale {
+  const parsed = parseSale(body)
+  if ("status" in parsed) return parsed
+  const s: Sale = {
+    ...parsed.fields, ...saleIdentity(parsed.data.category ?? "goods", parsed.data.issueDate),
+    createdAt: new Date().toISOString(), process: "Created", history: [],
+  }
+  stampDocHistory(s, actor.name, "created")
+  db.sales.push(s)
+  return s
+}
+
 /** The mock's onboarding world: the in-memory db itself. */
 export function mockOnboardingWorld(): OnboardingWorld {
   return {
-    items: db.items, vendors: db.vendors, openings: db.openings, purchases: db.purchases, returns: db.returns,
+    items: db.items, vendors: db.vendors, openings: db.openings, purchases: db.purchases,
+    customers: db.customers, sales: db.sales, returns: db.returns,
     branches: company.branches, mainBranchId: mainBranchId(),
     createOpening: (body, actor) => Promise.resolve(mockCreateOpening(body, actor)),
     createPurchase: (body, actor) => Promise.resolve(mockCreatePurchase(body, actor)),
+    createSale: (body, actor) => Promise.resolve(mockCreateSale(body, actor)),
   }
 }
 

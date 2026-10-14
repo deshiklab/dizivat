@@ -1072,6 +1072,34 @@ invoice details. NBR publishes no open schema, so DiziVAT ships its own stable, 
   the registers' totals, member-of-pack equality, 422); `e2e_s3.py` downloads it through the browser
   session; `contract.py` carries the row and the 422 case.
 
+## R7.6 — the sales half of the onboarding: historical invoices as drafts
+
+R7.4 brought the stock and the purchases; a going concern's year also has sales already made. The same
+`/import` page now takes `sales` — historical finished-goods invoices — and lands each as an ordinary draft
+`sales` row: no new tables, no stock movement, nothing in a return, until it is approved the ordinary way.
+
+- One row per invoice line; rows sharing an **`invoiceNo`** (the old system's number, case-insensitive) are one
+  invoice, the first row's shared fields win, and a date or customer conflict inside a group is refused
+  (`conflictInInvoice`).
+- The **customer resolves by name or BIN** (import customers first) and its mode decides the invoice: a local
+  customer is a normal-rated sale; a foreign customer is a **zero-rated direct export**, its LC / bill of export
+  block filled from the sheet — `lcNo` defaults to the old invoice no, `lcDate` / `billDate` to the invoice date,
+  the country and shipping address from the customer, `billNo` defaults to the old invoice no, and the customs
+  house is required (`customsHouse`). Deemed exports are not imported — they need UD references and are keyed by
+  hand; service invoices are out of scope (a sale sells finished goods, `notFinishedGoods` otherwise).
+- The **`paid` column is the amount already received** on the old invoice, so the draft's due — `netTotal − paid`
+  — is the customer's opening receivable once approved. There is no separate opening-AR mechanism.
+- The old invoice number has no free field on a sale (the system issues its own `S-` serial), so it rides in the
+  narration as `[OLD <invoiceNo>]` — and that marker is the **duplicate key**: an invoice already on file (same
+  customer, same marker, not cancelled) skips the whole group.
+- Payment method maps by alias (`cash | bank | cheque | mobile | bkash | nagad` → the sale methods, `card` →
+  Bank, blank = Bank); blank `vatRate` / `sdRate` take the item's own. Every rule is `parseSale` itself — the
+  POST's own validation — so a locked period (`periodLocked`), a bad method or an unknown customer is reported on
+  the sheet's own row; `issuedBy` is the importer. Drafts are written through `SalesService.create` on the native
+  side and the mock's own create path; each is a `sale created` audit row plus one `import` event.
+- `api_native.py` drills the drafts, the receivable, the stock-that-did-not-move, the export defaults, the table
+  rows and the audit events; `e2e_r62.py` runs the story against both runtimes; `contract.py` carries the row.
+
 ## Tables
 
 | Table | Purpose |

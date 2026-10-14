@@ -3838,14 +3838,16 @@
       "customers": "Customers",
       "vendors": "Vendors",
       "openingStock": "Opening stock",
-      "purchases": "Purchases"
+      "purchases": "Purchases",
+      "sales": "Sales"
     },
     "eHint": {
       "items": "Products, inputs and packing materials with HS code and VAT rate",
       "customers": "Buyers, including exporters and their bond licences",
       "vendors": "Suppliers of goods and services",
       "openingStock": "Go-live balances per item and branch — one row each, created as drafts",
-      "purchases": "Historical purchase invoices — rows sharing an invoice number become its lines"
+      "purchases": "Historical purchase invoices — rows sharing an invoice number become its lines",
+      "sales": "Historical invoices before go-live — finished goods, one row per line, one invoice number per bill"
     },
     "choose": "Choose file",
     "template": "Download template",
@@ -3921,7 +3923,9 @@
       "foreignVendor": "Foreign vendors need a Bill of Entry — key the invoice instead",
       "unknownMethod": "method must be Cash, Bank, Cheque, Mobile or Transaction",
       "conflictInInvoice": "rows of one invoice disagree",
-      "periodLocked": "the date falls in a tax period whose return is already submitted"
+      "periodLocked": "the date falls in a tax period whose return is already submitted",
+      "unknownCustomer": "No active customer with that name or BIN",
+      "notFinishedGoods": "A sale sells finished goods — this SKU is not one"
     }
   },
   "backup": {

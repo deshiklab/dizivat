@@ -619,7 +619,7 @@ export type RealisationInput = z.input<typeof realisationInput>
 
 /** Bulk import: one call validates (dryRun) or creates every row; rows are the already-parsed spreadsheet records. */
 export const bulkImportInput = z.object({
-  entity: z.enum(["items", "customers", "vendors", "openingStock", "purchases"]),
+  entity: z.enum(["items", "customers", "vendors", "openingStock", "purchases", "sales"]),
   dryRun: z.boolean().default(true),
   rows: z.array(z.record(z.string(), z.unknown())).min(1, "atLeastOneRow").max(2000, "tooManyRows"),
 })

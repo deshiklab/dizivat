@@ -5240,6 +5240,70 @@ def run():
         check(auditI.get("total", 0) >= 1 and any("openingStock" in (r.get("ref") or "") or "purchases" in (r.get("ref") or "") for r in auditI.get("data", [])),
               "R7.4: each import is one audit event naming what it created")
 
+        # ── R7.6: the sales onboarding import ──────────────────────────────────────────────────────
+        print("\nR7.6: the sales onboarding import")
+        bads = admin.post(f"{BASE}/import", json={"entity": "sales", "dryRun": True, "rows": [
+            {"invoiceNo": "IMP-S-BAD", "date": "2025-06-20", "customer": "NOBODY LTD", "item": "FG-017", "qty": "1", "price": "1"},
+            {"invoiceNo": "IMP-S-BAD2", "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "RM-001", "qty": "1", "price": "1"},
+            {"invoiceNo": "IMP-S-BAD3", "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "1", "price": "1", "method": "rtgs"},
+            {"invoiceNo": "IMP-S-BAD4", "date": "2026-08-12", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "1", "price": "1"},
+        ]}).json()
+        check(bads["created"] == 0 and {(i["field"], i["message"]) for i in bads["issues"]} ==
+              {("customer", "unknownCustomer"), ("item", "notFinishedGoods"), ("method", "unknownMethod"), ("date", "periodLocked")},
+              "R7.6: a sales dry run reports the unknown customer, the non-finished-goods item, the bad method and the locked period on their own rows")
+        sinv = "IMP-SALE-001"
+        beforeS = next(x for x in admin.get(f"{BASE}/items?q=FG-017&size=1").json()["data"])
+        dryS = admin.post(f"{BASE}/import", json={"entity": "sales", "dryRun": True, "rows": [
+            {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "100", "price": "610", "paid": "20000", "narration": "June wholesale"},
+            {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-018", "qty": "10", "price": "880"},
+        ]}).json()
+        check(dryS["valid"] == 2 and dryS["created"] == 0 and not dryS["issues"],
+              "R7.6: a two-line historical invoice dry-runs clean")
+        apS = admin.post(f"{BASE}/import", json={"entity": "sales", "dryRun": False, "rows": [
+            {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "100", "price": "610", "paid": "20000", "narration": "June wholesale"},
+            {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-018", "qty": "10", "price": "880"},
+        ]})
+        apSj = apS.json()
+        check(apS.status_code == 201 and apSj["created"] == 1 and apSj["valid"] == 2 and not apSj["issues"],
+              "R7.6: two rows of one bill apply as a single draft sale invoice (201)")
+        mineS = [r for r in admin.get(f"{BASE}/sales?from=2025-06-20&to=2025-06-20&size=100").json()["data"]
+                 if f"[OLD {sinv}]" in (r.get("narration") or "")]
+        check(len(mineS) == 1, "R7.6: the draft is in the register, found by the old invoice number riding in the narration")
+        srow = mineS[0]
+        fg = {r["sku"]: r["vatRate"] for r in admin.get(f"{BASE}/items?size=300").json()["data"] if r["sku"] in ("FG-017", "FG-018")}
+        wantNet = 100 * 610 * (1 + fg["FG-017"] / 100) + 10 * 880 * (1 + fg["FG-018"] / 100)
+        check(srow["process"] == "Created" and len(srow["lines"]) == 2 and srow["customerName"] == "SUNRISE FASHION RETAIL LTD"
+              and srow["paid"] == 20000 and abs(srow["netTotal"] - wantNet) < 0.011 and abs(srow["due"] - (wantNet - 20000)) < 0.011,
+              "R7.6: the imported invoice carries both lines, the customer, the payment — and the unpaid part is the customer's opening receivable")
+        afterS = next(x for x in admin.get(f"{BASE}/items?q=FG-017&size=1").json()["data"])
+        check(afterS["sold"] == beforeS["sold"],
+              "R7.6: a draft moves no stock — the sale waits for the approval")
+        dupS = admin.post(f"{BASE}/import", json={"entity": "sales", "dryRun": False, "rows": [
+            {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "1", "price": "1"}]}).json()
+        check(dupS["created"] == 0 and dupS["duplicates"] == 1,
+              "R7.6: re-uploading the same bill is skipped — the old number in the narration is already on file")
+        xinv = "IMP-SEX-001"
+        noPort = admin.post(f"{BASE}/import", json={"entity": "sales", "dryRun": True, "rows": [
+            {"invoiceNo": xinv, "date": "2025-06-22", "customer": "DESERT ROSE TEXTILE TRADING LLC", "item": "FG-017", "qty": "1", "price": "1"}]}).json()
+        check(any(i["field"] == "customsHouse" for i in noPort["issues"]),
+              "R7.6: a foreign customer makes an export — the customs house is asked for")
+        apX = admin.post(f"{BASE}/import", json={"entity": "sales", "dryRun": False, "rows": [
+            {"invoiceNo": xinv, "date": "2025-06-22", "customer": "DESERT ROSE TEXTILE TRADING LLC", "item": "FG-017", "qty": "500", "price": "610", "lcNo": "LC-SEX-1", "customsHouse": "DHAKA"}]}).json()
+        check(apX["created"] == 1 and not apX["issues"], "R7.6: the export applies once the port is there")
+        xrow = next(r for r in admin.get(f"{BASE}/sales?from=2025-06-22&to=2025-06-22&size=100").json()["data"]
+                    if f"[OLD {xinv}]" in (r.get("narration") or ""))
+        check(xrow["mode"] == "Foreign" and xrow["vat"] == 0 and xrow["export"]["lcNo"] == "LC-SEX-1"
+              and xrow["export"]["country"] and xrow["export"]["billNo"] == xinv and xrow["export"]["billDate"] == "2025-06-22",
+              "R7.6: the export is zero-rated, the LC and bill of export filled — the bill number defaults to the old invoice, its date to the invoice date")
+        if DB_URL:
+            check(psql(f"select count(*) from sales where narration like '%[OLD {sinv}]%' and process = 'Created'") == "1"
+                  and psql(f"select count(*) from sale_lines where sale_id = '{srow['id']}'") == "2"
+                  and psql(f"select count(*) from sales where invoice_no = '{xrow['invoiceNo']}' and mode = 'Foreign'") == "1",
+                  "R7.6: the drafts and their lines are rows in the tables, written by the sale service")
+        auditS = admin.get(f"{BASE}/audit", params={"entity": "sale", "size": 5}).json()
+        check(any(r.get("ref") in (srow["invoiceNo"], xrow["invoiceNo"]) for r in auditS.get("data", [])),
+              "R7.6: each created draft is one audit event naming its invoice")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")

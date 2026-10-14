@@ -217,6 +217,29 @@ async def main():
             one = await jget(admin, f"/purchases?q={inv}")
             assert one["total"] == 1, one["total"]
             ok("R7.4 onboarding: opening stock + purchases import as drafts (unknown branch/vendor reported, duplicate bill skipped, one invoice from two rows)")
+            # R7.6 — onboarding: historical sales become draft invoices
+            sinv = f"E2E-SALE-{RUN}"
+            st, sx = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": True, "rows": [
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "NOBODY LTD", "item": "FG-017", "qty": "1", "price": "1"}]})
+            assert st == 200 and any(i["message"] == "unknownCustomer" for i in sx["issues"]), sx
+            st, sx = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": False, "rows": [
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "100", "price": "610", "paid": "20000"},
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-018", "qty": "10", "price": "880"}]})
+            assert st == 201 and sx["created"] == 1 and sx["valid"] == 2 and not sx["issues"], sx
+            mine = [r for r in (await jget(admin, "/sales?from=2025-06-20&to=2025-06-20&size=100"))["data"]
+                    if f"[OLD {sinv}]" in (r.get("narration") or "")]
+            assert len(mine) == 1 and mine[0]["process"] == "Created" and len(mine[0]["lines"]) == 2 and mine[0]["due"] > 0, mine
+            st, sx2 = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": False, "rows": [
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "1", "price": "1"}]})
+            assert sx2["created"] == 0 and sx2["duplicates"] == 1, sx2
+            xinv = f"E2E-EXP-{RUN}"
+            st, se = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": False, "rows": [
+                {"invoiceNo": xinv, "date": "2025-06-22", "customer": "DESERT ROSE TEXTILE TRADING LLC", "item": "FG-017", "qty": "500", "price": "610", "lcNo": f"LC-{RUN}", "customsHouse": "DHAKA"}]})
+            assert st == 201 and se["created"] == 1 and not se["issues"], se
+            xrow = next(r for r in (await jget(admin, "/sales?from=2025-06-22&to=2025-06-22&size=100"))["data"]
+                        if f"[OLD {xinv}]" in (r.get("narration") or ""))
+            assert xrow["mode"] == "Foreign" and xrow["vat"] == 0 and xrow["export"]["lcNo"] == f"LC-{RUN}", xrow
+            ok("R7.6 onboarding: historical sales import as drafts (unknown customer reported, one invoice from two rows, the paid column leaves a receivable, exports zero-rated, duplicate old invoice skipped)")
         except Exception as e: fail(5, e)
 
         # ── 6. Backups (API) ─────────────────────────────────────────────

@@ -42,6 +42,7 @@ import type { MovementSource } from "@/lib/mock/db"
 import { returnSource, type ReturnSource } from "./returns"
 import { OpeningsService } from "./openings"
 import { PurchasesService } from "./purchases"
+import { SalesService } from "./sales"
 
 type DashboardSource = MovementSource & ReturnSource
 /** What the ⌘K palette searches: the two invoice registers, the SKUs and both party books. */
@@ -132,7 +133,7 @@ export class BooksService {
   }
 
   /** One audit entry per thing the import created, and one for the import itself. */
-  record(user: User, e: { entity: "item" | "customer" | "vendor" | "opening" | "purchase" | "import"; entityId?: string; ref: string; note?: string }) {
+  record(user: User, e: { entity: "item" | "customer" | "vendor" | "opening" | "purchase" | "sale" | "import"; entityId?: string; ref: string; note?: string }) {
     return this.audits.record({
       at: new Date().toISOString(), actor: user, entity: e.entity, entityId: e.entityId ?? "", ref: e.ref,
       action: e.entity === "import" ? "imported" : "created", note: e.note,
@@ -239,6 +240,7 @@ export class ImportController {
     @Inject(BooksService) private readonly svc: BooksService,
     @Inject(OpeningsService) private readonly openings: OpeningsService,
     @Inject(PurchasesService) private readonly purchases: PurchasesService,
+    @Inject(SalesService) private readonly sales: SalesService,
   ) {}
 
   /**
@@ -253,6 +255,7 @@ export class ImportController {
     const main = (branches.find((b) => b.category === "factory") ?? branches[0]).id
     return {
       items: mirror.items(), vendors: mirror.parties("vendor"), openings: mirror.openings(), purchases: mirror.purchases(),
+      customers: mirror.parties("customer"), sales: mirror.sales(),
       returns: ret.returns, branches, mainBranchId: main,
       createOpening: async (body, user) => {
         const built = c.buildOpening(body)
@@ -276,6 +279,16 @@ export class ImportController {
           return p
         })
       },
+      createSale: async (body, user) => {
+        const r = c.parseSale(body)
+        if ("status" in r) return r
+        const at = new Date().toISOString()
+        return this.sales.create(r.data.category ?? "goods", r.data.issueDate, (ident) => {
+          const s: Sale = { ...r.fields, ...ident, createdAt: at, process: "Created", history: [] }
+          c.stampDocHistory(s, user.name, "created", undefined, at)
+          return s
+        })
+      },
     }
   }
 
@@ -286,7 +299,7 @@ export class ImportController {
     const { entity, dryRun, rows } = parsed.data
     const user = req.dz!.user
     const record = (e: Parameters<BooksService["record"]>[1]) => void this.svc.record(user, e)
-    const r = entity === "openingStock" || entity === "purchases"
+    const r = entity === "openingStock" || entity === "purchases" || entity === "sales"
       ? await withStateLock(async () => compat().importOnboarding(entity, rows, dryRun, user, record, await this.onboardingWorld()))
       : await this.svc.save(() => compat().bulkImport(entity, rows, dryRun, user, record, this.svc.importSource()))
     res.status(!dryRun && r.created ? 201 : 200).json(r)
