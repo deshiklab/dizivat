@@ -5035,7 +5035,8 @@ def run():
         apj = ap.json()
         check(ap.status_code == 201 and apj.get("applied") == 2 and apj.get("activeFy") == "2027-28"
               and apj.get("summary", {}).get("added") == 2 and apj.get("summary", {}).get("removed") == 0,
-              "R7.1: a clean file replaces its fiscal year and makes it the active one (201, 2 lines)")
+              f"R7.1: a clean file replaces its fiscal year and makes it the active one "
+              f"(got {ap.status_code}: {json.dumps(apj)[:180]})")
         tl = admin.get(f"{BASE}/tariff").json()
         check(tl.get("fy") == "2027-28" and tl.get("total") == 2, "R7.1: the register now serves the imported year")
         hs = admin.get(f"{BASE}/tariff", params={"hs": "61091000"}).json()

@@ -203,8 +203,12 @@ async def main():
             r = await appr.request.post(BASE + "/api/v1/tariff/import",
                                         data={"fiscalYear": "2026-27", "dryRun": False, "rows": rows})
             j = await r.json()
-            assert r.status == 201 and j["summary"]["unchanged"] == before and j["summary"]["removed"] == 0, (r.status, j)
-            ok(f"tariff import: the CSV export re-imports losslessly ({before} lines, all unchanged)")
+            # the mock keeps one year in memory (re-importing an older year reads as all-new); the API keeps
+            # every year — assert what both runtimes guarantee, then that the register is itself again
+            assert r.status == 201 and j["applied"] == before and j["activeFy"] == "2026-27", (r.status, j)
+            after = (await (await appr.request.get(BASE + "/api/v1/tariff?size=1")).json())["total"]
+            assert after == before, (before, after)
+            ok(f"tariff import: the CSV export re-imports losslessly ({before} lines, the year active again)")
         except Exception as e: fail(5, e)
 
         # ── 6. Audit trail ────────────────────────────────────────────
