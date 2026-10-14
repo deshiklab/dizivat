@@ -5132,12 +5132,16 @@ def run():
         check(sbr == sorted(sbr, key=lambda b: -b["rate"]) and pbr == sorted(pbr, key=lambda b: -b["rate"]),
               "R7.5: the rate buckets are ordered, highest rate first")
         if DB_URL:
-            sv, sval = psql(f"select round(sum(l.vat), 2), round(sum(l.subtotal), 2) from sale_lines l join sales s on s.id = l.sale_id"
-                            f" where s.issue_date >= '{P}-01' and s.issue_date < date '{P}-01' + interval '1 month' and s.process = 'Approved'").split("\t")
+            sv = psql(f"select coalesce(round(sum(l.vat), 2), 0) from sale_lines l join sales s on s.id = l.sale_id"
+                      f" where s.issue_date >= '{P}-01' and s.issue_date < date '{P}-01' + interval '1 month' and s.process = 'Approved'")
+            sval = psql(f"select coalesce(round(sum(l.subtotal), 2), 0) from sale_lines l join sales s on s.id = l.sale_id"
+                        f" where s.issue_date >= '{P}-01' and s.issue_date < date '{P}-01' + interval '1 month' and s.process = 'Approved'")
             check(abs(sum(b["vat"] for b in sbr) - float(sv)) < 0.011 and abs(sum(b["value"] for b in sbr) - float(sval)) < 0.011,
                   "R7.5: the rate-wise sales turnover is the period's approved invoice lines to the taka (deemed exports included)")
-            pv, pval = psql(f"select round(sum(l.vat), 2), round(sum(l.subtotal), 2) from purchase_lines l join purchases p on p.id = l.purchase_id"
-                            f" where p.issue_date >= '{P}-01' and p.issue_date < date '{P}-01' + interval '1 month' and p.process = 'Approved'").split("\t")
+            pv = psql(f"select coalesce(round(sum(l.vat), 2), 0) from purchase_lines l join purchases p on p.id = l.purchase_id"
+                      f" where p.issue_date >= '{P}-01' and p.issue_date < date '{P}-01' + interval '1 month' and p.process = 'Approved'")
+            pval = psql(f"select coalesce(round(sum(l.subtotal), 2), 0) from purchase_lines l join purchases p on p.id = l.purchase_id"
+                        f" where p.issue_date >= '{P}-01' and p.issue_date < date '{P}-01' + interval '1 month' and p.process = 'Approved'")
             check(abs(sum(b["vat"] for b in pbr) - float(pv)) < 0.011 and abs(sum(b["value"] for b in pbr) - float(pval)) < 0.011,
                   "R7.5: …and the purchase buckets to the same total, service invoices included")
         reg = efd.get("registers", {})
