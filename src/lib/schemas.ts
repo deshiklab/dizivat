@@ -757,3 +757,11 @@ export const amendActionInput = z.object({
   amount: z.number().positive("positive").optional(),
 })
 export type AmendActionInputT = z.input<typeof amendActionInput>
+
+/** R7.1 — the NBR tariff import: the official sheet for one fiscal year, previewed (dryRun) or applied. */
+export const tariffImportInput = z.object({
+  fiscalYear: z.string().trim().regex(/^\d{4}-\d{2}$/, "fiscalYear"),
+  rows: z.array(z.record(z.string(), z.unknown())).min(1, "rows").max(7500, "rows"),
+  dryRun: z.boolean().default(false),
+})
+export type TariffImportInputT = z.input<typeof tariffImportInput>

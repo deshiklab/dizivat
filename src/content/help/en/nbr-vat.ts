@@ -182,8 +182,8 @@ export default {
 
   "vat-settings-and-tariff": {
     title: "VAT settings and the tariff",
-    summary: "Set your VAT zone code, see the economic codes and where each 9.1 note comes from, and look up HS-code rates.",
-    keywords: ["vat settings", "zone code", "economic code", "tariff", "hs code", "duty rates", "cd", "rd", "ait", "at", "tti", "note sources"],
+    summary: "Set your VAT zone code, see the economic codes and where each 9.1 note comes from, look up HS-code rates and import each fiscal year's official tariff.",
+    keywords: ["vat settings", "zone code", "economic code", "tariff", "hs code", "duty rates", "cd", "rd", "ait", "at", "tti", "note sources", "import tariff", "fiscal year"],
     body: [
       h("VAT settings"),
       p("[VAT settings](/vat/settings) (administrators) holds:"),
@@ -194,6 +194,7 @@ export default {
       ),
       h("Tariff & HS codes"),
       p("[Tariff & HS codes](/vat/tariff) lists NBR customs and VAT rates by HS code, filterable by VAT rate, chapter and SD."),
+      p("**Importing the new year's tariff** (master-data editors): the budget each June publishes the next fiscal year's schedule. On the tariff page, **Import tariff** loads the official sheet (CSV or .xlsx — the template link shows the columns). A dry run previews the diff — new codes, changed rates, unchanged lines and the rows the file omits — before **Import** replaces that year's rows and makes it the year the app looks at. Item and master-item profiles are never re-pointed; a stored difference from the tariff was already flagged with its reason."),
       table(["Rate", "Meaning"],
         ["CD", "Customs duty"],
         ["SD", "Supplementary duty"],

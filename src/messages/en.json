@@ -1257,6 +1257,31 @@
       "vat": "VAT rate",
       "chapter": "Chapter",
       "sd": "Supplementary duty"
+    },
+    "imp": {
+      "open": "Import tariff",
+      "title": "Import the NBR tariff",
+      "description": "Load the official tariff for a fiscal year. The file replaces that year's rows and becomes the year the app looks at.",
+      "fy": "Fiscal year",
+      "fyHelp": "July–June, written like 2026-27. The budget each June publishes the next year's schedule.",
+      "file": "File (CSV or .xlsx)",
+      "choose": "Choose a file…",
+      "template": "Download the template (header + two example lines)",
+      "noRows": "The sheet has no rows.",
+      "readFailed": "The file could not be read. Use the template's columns (CSV or .xlsx).",
+      "missing": "Required columns are missing: {fields}.",
+      "loaded": "{n} rows · {columns} columns recognised.",
+      "unknown": "{n} column(s) ignored.",
+      "preview": "Preview for FY {fy}",
+      "added": "New codes",
+      "updated": "Changed rates",
+      "unchanged": "Unchanged",
+      "removed": "Removed",
+      "issue": "Row {row}: {field} — {message}",
+      "moreIssues": "+{n} more",
+      "validate": "Validate (dry run)",
+      "apply": "Import",
+      "applied": "{n} tariff lines imported — FY {fy} is now active."
     }
   },
   "audit": {
@@ -1333,7 +1358,8 @@
       "drawbackClaim": "Drawback claim",
       "prcBatch": "Bank PRC file",
       "lateFiling": "Mushak 9.3 application",
-      "returnAmendment": "Mushak 9.4 application"
+      "returnAmendment": "Mushak 9.4 application",
+      "tariff": "Tariff"
     },
     "facet": {
       "entity": "Record type",

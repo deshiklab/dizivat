@@ -939,6 +939,33 @@ every ported slice drained a family at a time — has no tenants left, so the la
   backup snapshot and the audit writes. Scaling out is a story about moving the mirror's reads to the tables,
   one family at a time — the same discipline this whole port ran on.
 
+## R7.1 — the NBR tariff import
+
+The tariff was the last read-only reference: the seed wrote `tariff_lines` for the demo's fiscal year and the
+register only listed it. The budget each June publishes the next year's schedule, so the page can now load it.
+
+- **`POST /vat/tariff/import`** (`master.edit`): `{fiscalYear, rows, dryRun}` — the file is the authority for
+  the year. Its lines replace that year's rows (the ones it omits are removed), the year becomes the active one
+  (`meta.tariff_fy`), and every year already imported stays on file beside it. TTI is computed by the shared
+  NBR method, never uploaded. All-or-nothing like the master-data import: `dryRun` previews the diff
+  (`summary {added, updated, unchanged, removed}` + per-row issues), an apply with any issue is a 422, and a
+  clean apply is one transaction — delete, chunked insert, `meta` upsert — followed by a single audit event
+  (`entity tariff`, the year as its id, the counts in the note).
+- **The rules are shared, not copied**: `src/lib/tariff-import.ts` (header mapping in `src/lib/sheet.ts`) is
+  the same code the mock's route runs, so a file that validates against one runtime validates against the
+  other. The mock keeps one year in memory and switches it; the API keeps every year in `tariff_lines`.
+- **Master items are not re-pointed.** A stored difference from the tariff was already flagged as an override
+  with a reason (R5.2); an import neither changes item profiles nor clears override flags — the register
+  compares profiles against the *active* year on the fly.
+- **The UI** is a dialog on the tariff page: fiscal year, file (parsed in the browser, CSV or .xlsx, template
+  link), dry-run preview with the diff and row-level issues, then apply. The audit viewer links `tariff`
+  events to the register.
+- `api_native.py` drills it (dry-run issues, the 422, the 403 for an operator, the apply, the register and the
+  HS lookup on the new year, the rows in `tariff_lines` with the old year kept, `meta.tariff_fy` switched with
+  no snapshot anywhere, the idempotent re-import preview, the audit event, and re-importing an older year
+  replacing its rows and switching back); `e2e_s3.py` drives the dialog end to end and proves the CSV export
+  re-imports losslessly.
+
 ## Tables
 
 | Table | Purpose |
@@ -949,7 +976,7 @@ every ported slice drained a family at a time — has no tenants left, so the la
 | `saved_views` | list views per user and table |
 | `company` (single row) + `branches` | company profile printed on Mushak forms |
 | `units` | units of measure; ids from `unit_id_seq` |
-| `tariff_lines` | NBR tariff per fiscal year (`numeric` rates) |
+| `tariff_lines` | NBR tariff per fiscal year (`numeric` rates); **R7.1** imported at runtime (`/vat/tariff/import`) — a year's rows are replaced wholesale and `meta.tariff_fy` names the year the app reads |
 | `audit_events` | append-only audit trail (indexed by time, Dhaka day, record, record type). **R6:** every row is sealed with `prev_hash` + `hash` (SHA-256 chain); triggers refuse UPDATE / DELETE / TRUNCATE — see [NBR_ENLISTMENT.md](NBR_ENLISTMENT.md) |
 | `backups` | **R6.2:** scheduled / manual snapshots (`bytea` gzip JSON, SHA-256, row counts); last 30 kept; one scheduled row per slot (partial unique index) |
 | `parties` | **R5.2:** customers and vendors (`kind`), exporter details, seeded credit terms; `deleted_at` is the undo trash; unique per kind on name and BIN |
@@ -1035,7 +1062,7 @@ API_RESTART_CMD=api/scripts/serve.sh API_LOG=/tmp/dizivat-api.log DATABASE_URL=�
   python3 scripts/api_native.py
 ```
 
-It runs 793 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
+It runs 805 checks: real sign-out, revocation on password change, reset and deactivation, forged tokens, lockout,
 scrypt-only storage, audit rows and the append-only triggers, the R6.2 officer access window, the restore drill into a
 fresh database, and that **records, preferences, views, sessions, revocations, lockouts, changed passwords and audit
 ids survive an API restart**. Since R5.2 it also checks master data where it now lives — rows in `parties`, `items` and

@@ -138,6 +138,38 @@ export function mapRows(entity: ImportEntity, table: string[][]) {
   return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
 }
 
+/* ── the NBR tariff sheet (R7.1) — a separate import with its own endpoint (/vat/tariff/import) ── */
+
+export const TARIFF_FIELDS = ["hsCode", "description", "cd", "sd", "vat", "ait", "rd", "at"]
+const TARIFF_ALIASES: Record<string, string> = {
+  hs: "hsCode", hscode: "hsCode", hcode: "hsCode", desc: "description", item: "description", product: "description",
+  customs: "cd", customsduy: "cd", cduty: "cd", supplementary: "sd", supplementaryduty: "sd",
+  valueadded: "vat", valueaddedtax: "vat", advanceincometax: "ait", incometax: "ait",
+  regulatory: "rd", regulatoryduty: "rd", advancetax: "at", additional: "at",
+}
+
+/** Header row → tariff records (the same normalisation as the master-data import). */
+export function mapTariffRows(table: string[][]) {
+  const [head = [], ...body] = table
+  const byNorm = new Map(TARIFF_FIELDS.map((f) => [norm(f), f]))
+  const cols = head.map((h) => { const n = norm(String(h)); const f = byNorm.get(n) ?? TARIFF_ALIASES[n]; return f && TARIFF_FIELDS.includes(f) ? f : null })
+  const unknown = head.filter((_, i) => !cols[i]).map(String).filter((h) => h.trim())
+  const missing = ["hsCode", "description"].filter((f) => !cols.includes(f))
+  const rows = body.map((r) => {
+    const o: Record<string, string> = {}
+    cols.forEach((f, i) => { if (f) o[f] = String(r[i] ?? "").trim() })
+    return o
+  })
+  return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
+}
+
+/** CSV template for the tariff (header + two example lines). */
+export function tariffTemplateCsv(): string {
+  const ex = [["52062300", "Woven fabrics of synthetic staple fibres, dyed", "10", "0", "15", "5", "3", "0"],
+              ["61091000", "T-shirts, singlets and other vests, knitted, of cotton", "25", "0", "15", "5", "3", "0"]]
+  return [TARIFF_FIELDS.join(","), ...ex.map((r) => r.join(","))].join("\r\n") + "\r\n"
+}
+
 /** CSV template for an entity (header + one example row). */
 export function templateCsv(entity: ImportEntity): string {
   const ex: Record<ImportEntity, string[]> = {

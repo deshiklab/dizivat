@@ -1,4 +1,4 @@
-import {
+import { BookOpenCheck,
   ArrowRightLeft, Building2, CheckCheck, PackageX, Ruler, CircleDot, FilePen, FilePlus2, KeyRound, LogIn, LogOut, Pencil, Power, PowerOff, RotateCcw,
   Send, ShieldAlert, ShieldCheck, Trash2, UserPlus, XCircle, Eye, Banknote, DatabaseBackup, Download, Upload, FileCheck2, type LucideIcon,
 } from "lucide-react"
@@ -14,7 +14,7 @@ export const AUDIT_ENTITIES: AuditEntity[] = [
   "sale", "purchase", "creditNote", "debitNote", "opening", "transfer", "damage", "bom", "workOrder", "batch", "productionConfig",
   "receipt", "payment", "account", "accountingConfig", "vatReturn", "treasury", "vds", "adjustment", "vatSettings",
   "customer", "vendor", "item", "masterItem", "unit", "user", "company", "session",
-  "ud", "backup", "access", "import",
+  "ud", "backup", "access", "import", "tariff",
 ]
 
 export const ACTION_ICON: Record<AuditAction, LucideIcon> = {
@@ -28,7 +28,7 @@ export const ACTION_TONE: Partial<Record<AuditAction, Tone>> = {
   passwordReset: "warning", roleChanged: "warning", created: "info", invited: "info", submitted: "success",
   realised: "success", backedUp: "success", imported: "info", downloaded: "warning",
 }
-export const entityIcon = (e: AuditEntity): LucideIcon => (e === "company" ? Building2 : e === "session" ? LogIn : e === "user" ? UserPlus : e === "transfer" ? ArrowRightLeft : e === "damage" ? PackageX : e === "unit" ? Ruler : e === "ud" ? FileCheck2 : e === "backup" ? DatabaseBackup : e === "access" ? Eye : e === "import" ? Upload : CircleDot)
+export const entityIcon = (e: AuditEntity): LucideIcon => (e === "company" ? Building2 : e === "session" ? LogIn : e === "user" ? UserPlus : e === "transfer" ? ArrowRightLeft : e === "damage" ? PackageX : e === "unit" ? Ruler : e === "ud" ? FileCheck2 : e === "backup" ? DatabaseBackup : e === "access" ? Eye : e === "import" ? Upload : e === "tariff" ? BookOpenCheck : CircleDot)
 
 /** Where a record lives in the app (null when there is no page, e.g. sign-ins or deleted records). */
 export function entityHref(e: AuditEvent): string | null {
@@ -64,6 +64,7 @@ export function entityHref(e: AuditEvent): string | null {
     case "ud": return `/vat/ud-register?view=${e.entityId}`
     case "backup": return "/master/backups"
     case "import": return "/master/import"
+    case "tariff": return "/vat/tariff"
     case "access": return `/master/users?edit=${e.entityId}`
     default: return null
   }

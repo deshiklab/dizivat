@@ -1,4 +1,4 @@
-import type { BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
 import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
@@ -118,6 +118,9 @@ export const api = {
     list: (p: ListParams) => req<ListResult<TariffLine> & { fy: string }>(`/tariff${qs({ ...p, view: "table" })}`),
     lookup: (hs: string) => req<TariffLine>(`/tariff${qs({ hs })}`),
     csvUrl: (p: ListParams) => `${BASE}/tariff${qs({ ...p, view: "table", page: undefined, size: undefined, format: "csv" })}`,
+    /** R7.1 — the sheet template, and the import (preview with dryRun, apply without) */
+    sampleUrl: () => `${BASE}/tariff/sample`,
+    import: (b: { fiscalYear: string; rows: Record<string, unknown>[]; dryRun: boolean }) => req<TariffImportResult>("/tariff/import", { method: "POST", body: JSON.stringify(b) }),
   },
   audit: {
     list: (p: ListParams) => req<ListResult<AuditEvent>>(`/audit${qs(p)}`),

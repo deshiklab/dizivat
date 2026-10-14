@@ -85,6 +85,8 @@ ENDPOINTS = [
     E("GET", "/company", None, "Company profile"),
     E("PUT", "/company", "settings.manage", "Update company profile (BIN/TIN/NID validated)"),
     E("GET", "/tariff?view=table", None, "NBR tariff — Page<TariffLine>; ?hs=12345678 → one line or 404", page=True, csv=True),
+    E("GET", "/tariff/sample", None, "R7.1: the tariff sheet's template (CSV — the header and two example lines)", ctype="text/csv"),
+    E("POST", "/tariff/import", "master.edit", "R7.1: import the official tariff for a fiscal year {fiscalYear YYYY-YY, rows[{hsCode, description, cd?, sd?, vat?, ait?, rd?, at?}] (≤ 7500), dryRun} → {total, valid, issues[], summary {added, updated, unchanged, removed}, applied, activeFy}; the file is the authority for the year (its lines replace that year's rows, the ones it omits are removed, and the year becomes the one the app looks at); TTI is computed, never uploaded; all-or-nothing: 422 rows.issues on apply when any row fails, dryRun previews only"),
     # R2 — purchase & inventory
     E("GET", "/purchases?category=service", None, "Service purchases (R2) — same Page<Purchase>; category=goods (default) | service | all", page=True, csv=True),
     E("GET", "/services", None, "NBR service codes for service purchases [{id, code, name, vatRate, vds, unit}]"),
@@ -340,6 +342,9 @@ def run():
         ("arif", "POST", "/customers", {}, 422, "name"),
         ("arif", "DELETE", "/customers/c1", None, 409, None),
         ("arif", "GET", "/tariff?hs=99999999", None, 404, None),
+        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026-27"}, 422, "rows"),
+        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026/27", "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 422, "fiscalYear"),
+        ("kamal", "POST", "/tariff/import", {"fiscalYear": "2027-28", "dryRun": True, "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 403, None),
         ("arif", "POST", "/notifications/read", {}, 422, None),
         ("arif", "PUT", "/me/password", {"current": "wrong-one", "next": "abcd12345", "confirm": "abcd12345"}, 422, "current"),
         ("arif", "PUT", "/me/password", {"current": PW, "next": "short", "confirm": "short"}, 422, "next"),

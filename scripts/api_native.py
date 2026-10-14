@@ -5006,6 +5006,60 @@ def run():
               and all(r.get("id") != clw.get("id") for r in arif.get(f"{BASE}/vat/drawback-claims").json().get("rows", [])),
               "…and a deleted draft is stamped, not removed — the register no longer lists it, and its exports are claimable again")
 
+        # ── R7.1: the NBR tariff import ───────────────────────────────────────────────────────────
+        print("\nR7.1: the NBR tariff import")
+        before = admin.get(f"{BASE}/tariff").json()
+        bad = admin.post(f"{BASE}/tariff/import", json={"fiscalYear": "2027-28", "dryRun": True, "rows": [
+            {"hsCode": "123", "description": "bad HS code"},
+            {"hsCode": "61091000", "description": "T-shirts, singlets and other vests, knitted, of cotton", "cd": 25, "vat": 15, "ait": 5, "rd": 3},
+            {"hsCode": "61091000", "description": "duplicate HS in the file", "cd": 25, "vat": 15},
+            {"hsCode": "61109100", "description": "x"},
+        ]})
+        badj = bad.json()
+        check(bad.status_code == 200 and badj.get("dryRun") is True and badj.get("valid") == 1
+              and {x["field"] for x in badj.get("issues", [])} == {"hsCode", "description"}
+              and psql("select value from meta where key = 'tariff_fy'") == "2026-27",
+              "R7.1: a dry run reports every issue (bad HS, duplicate, short description) and applies nothing")
+        check(admin.post(f"{BASE}/tariff/import", json={"fiscalYear": "2027-28", "dryRun": False, "rows": [
+            {"hsCode": "1", "description": "x"}]}).status_code == 422,
+              "R7.1: an apply with any issue is refused (all-or-nothing)")
+        check(session("kamal").post(f"{BASE}/tariff/import", json={"fiscalYear": "2027-28", "dryRun": True, "rows": [
+            {"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}).status_code == 403,
+              "R7.1: the import needs master.edit (an operator is refused)")
+        sample = admin.get(f"{BASE}/tariff/sample")
+        check(sample.status_code == 200 and sample.text.startswith("hsCode,description,cd,sd,vat,ait,rd,at")
+              and len(sample.text.strip().splitlines()) == 3, "R7.1: the template CSV carries the header and two example lines")
+        good = [{"hsCode": "61091000", "description": "T-shirts, singlets and other vests, knitted, of cotton", "cd": 25, "sd": 0, "vat": 15, "ait": 5, "rd": 3, "at": 0},
+                {"hsCode": "52062300", "description": "Woven fabrics of synthetic staple fibres, dyed", "cd": 10, "sd": 0, "vat": 15, "ait": 5, "rd": 3, "at": 0}]
+        ap = admin.post(f"{BASE}/tariff/import", json={"fiscalYear": "2027-28", "dryRun": False, "rows": good})
+        apj = ap.json()
+        check(ap.status_code == 201 and apj.get("applied") == 2 and apj.get("activeFy") == "2027-28"
+              and apj.get("summary", {}).get("added") == 2 and apj.get("summary", {}).get("removed") == 0,
+              "R7.1: a clean file replaces its fiscal year and makes it the active one (201, 2 lines)")
+        tl = admin.get(f"{BASE}/tariff").json()
+        check(tl.get("fy") == "2027-28" and tl.get("total") == 2, "R7.1: the register now serves the imported year")
+        hs = admin.get(f"{BASE}/tariff", params={"hs": "61091000"}).json()
+        check(hs.get("tti") == 52.2 and hs.get("chapter") == "61", "R7.1: an HS lookup answers with the computed TTI (NBR method)")
+        if DB_URL:
+            check(psql("select count(*) from tariff_lines where fy = '2027-28'") == "2"
+                  and psql("select count(*) from tariff_lines where fy = '2026-27'") == str(before.get("total")),
+                  "R7.1: the year's rows are rows in tariff_lines — the old year kept beside the new")
+            check(psql("select value from meta where key = 'tariff_fy'") == "2027-28",
+                  "R7.1: meta.tariff_fy switched — no snapshot anywhere")
+        again = admin.post(f"{BASE}/tariff/import", json={"fiscalYear": "2027-28", "dryRun": True, "rows": good}).json()
+        check(again.get("summary", {}).get("added") == 0 and again.get("summary", {}).get("unchanged") == 2
+              and again.get("summary", {}).get("removed") == 0,
+              "R7.1: re-importing the same file previews as unchanged")
+        auditT = admin.get(f"{BASE}/audit", params={"entity": "tariff", "size": 5}).json()
+        check(auditT.get("total", 0) >= 1 and (auditT.get("data") or [{}])[0].get("action") == "imported",
+              "R7.1: the import is one audit event on the audit trail (entity tariff)")
+        # a smaller file for the OLD year: its rows replace (the omitted 65 are removed), and the year switches back
+        back = admin.post(f"{BASE}/tariff/import", json={"fiscalYear": "2026-27", "dryRun": False, "rows": [
+            {"hsCode": "52052300", "description": "Woven fabrics of synthetic staple fibres, combed, dyed", "cd": 5, "vat": 15, "ait": 5, "rd": 0}]}).json()
+        check(back.get("activeFy") == "2026-27" and back.get("summary", {}).get("removed") == before.get("total") - 1
+              and admin.get(f"{BASE}/tariff", params={"hs": "52052300"}).json().get("cd") == 5,
+              "R7.1: re-importing an older year replaces its rows and switches the app back to it")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")

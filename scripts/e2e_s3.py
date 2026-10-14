@@ -168,6 +168,43 @@ async def main():
             await expect(ap.locator("#sdRate")).to_have_value("20"); ok("'Use tariff rates' copies VAT/SD into the item")
             await settle(ap); await ap.screenshot(path=f"{OUT}/55_item_hs_lookup.png")
             await ap.keyboard.press("Escape")
+
+            # ── R7.1: the tariff import dialog (dry run → preview → apply → restore) ──
+            await ap.goto(BASE + "/en/vat/tariff", wait_until="networkidle")
+            before = (await (await appr.request.get(BASE + "/api/v1/tariff?size=1")).json())["total"]
+            beforeCsv = (await (await appr.request.get(BASE + "/api/v1/tariff?format=csv")).text()).strip()
+            sheet = ("hsCode,description,cd,sd,vat,ait,rd,at\r\n"
+                     "61091000,\"T-shirts, singlets and other vests, knitted, of cotton\",25,0,15,5,3,0\r\n"
+                     "52062300,\"Woven fabrics of synthetic staple fibres, dyed\",10,0,15,5,3,0\r\n")
+            path = os.path.join(OUT, "tariff-2027-28.csv")
+            with open(path, "w", newline="") as fh: fh.write(sheet)
+            await ap.get_by_role("button", name="Import tariff").click()
+            await ap.locator("#tariff-fy").fill("2027-28")
+            await ap.set_input_files("#tariff-file", path)
+            await expect(ap.get_by_text("2 rows · 8 columns recognised.")).to_be_visible(); ok("import dialog: the sheet is read in the browser")
+            await ap.get_by_role("button", name="Validate (dry run)").click()
+            await expect(ap.get_by_text("Preview for FY 2027-28")).to_be_visible()
+            await expect(ap.get_by_text("New codes")).to_be_visible()
+            await expect(ap.locator("dl").get_by_text("2", exact=True)).to_be_visible(); ok("import dialog: the dry run previews the diff")
+            await settle(ap); await ap.screenshot(path=f"{OUT}/55a_tariff_import_preview.png")
+            await ap.get_by_role("button", name="Import", exact=True).click()
+            await expect(ap.get_by_text(re.compile(r"2 tariff lines imported"))).to_be_visible()
+            await expect(ap.get_by_text("2 HS codes · FY 2027-28")).to_be_visible()
+            await expect(ap.locator("tbody tr")).to_have_count(2); ok("import dialog: applying switches the register to the imported year")
+            await settle(ap); await ap.screenshot(path=f"{OUT}/55b_tariff_imported.png")
+            # restore the seeded year through the API — and prove the export → import round trip is lossless
+            import csv as _csv, io as _io
+            rr = list(_csv.reader(_io.StringIO(beforeCsv)))
+            head, body = rr[0], [r for r in rr[1:] if r]
+            idx = {k: i for i, k in enumerate(head)}
+            rows = [{ "hsCode": r[idx["HS code"]], "description": r[idx["Description"]],
+                      "cd": r[idx["CD"]], "sd": r[idx["SD"]], "vat": r[idx["VAT"]], "ait": r[idx["AIT"]],
+                      "rd": r[idx["RD"]], "at": r[idx["AT"]] } for r in body]
+            r = await appr.request.post(BASE + "/api/v1/tariff/import",
+                                        data={"fiscalYear": "2026-27", "dryRun": False, "rows": rows})
+            j = await r.json()
+            assert r.status == 201 and j["summary"]["unchanged"] == before and j["summary"]["removed"] == 0, j
+            ok(f"tariff import: the CSV export re-imports losslessly ({before} lines, all unchanged)")
         except Exception as e: fail(5, e)
 
         # ── 6. Audit trail ────────────────────────────────────────────

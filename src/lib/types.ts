@@ -1,4 +1,5 @@
 /** Domain types — shaped to match the planned Symfony /api/v1 contract (see plan §5). */
+export type { TariffImportResult, TariffImportIssue, TariffDiffSummary } from "./tariff-import"
 
 export type Process = "Created" | "Approved" | "Cancelled"
 export type SalesMode = "Local" | "Foreign"
@@ -256,7 +257,7 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff"
   /** R6.2 */
   | "ud" | "backup" | "access" | "import"
   /** R6.5 */

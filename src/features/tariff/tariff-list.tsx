@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { Download, Info } from "lucide-react"
+import { Download, Info, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DataTable } from "@/components/data-table/data-table"
 import { useListState } from "@/components/data-table/use-list-state"
@@ -14,6 +14,8 @@ import { Pill } from "@/components/common/status-badge"
 import { api } from "@/lib/api/client"
 import { fmtHs, fmtNum, fmtPct } from "@/lib/format"
 import type { TariffLine } from "@/lib/types"
+import { useCan } from "@/components/auth/me-provider"
+import { TariffImportDialog } from "./tariff-import"
 
 const FACETS = ["vat", "chapter", "sd"] as const
 const RATES = ["cd", "sd", "vat", "ait", "rd", "at"] as const
@@ -23,6 +25,8 @@ export function TariffPage() {
   const t = useTranslations("tariff")
   const tt = useTranslations("table")
   const locale = useLocale()
+  const can = useCan()
+  const [importOpen, setImportOpen] = React.useState(false)
   const { state, set, params, clearAll, activeCount } = useListState(FACETS, { size: 50 })
   const q = useQuery({ queryKey: ["tariff", params], queryFn: () => api.tariff.list(params), placeholderData: keepPreviousData })
   const pct = React.useCallback((n: number) => <span className={n ? "tabular" : "tabular text-muted-foreground"}>{fmtPct(n, locale)}</span>, [locale])
@@ -70,7 +74,10 @@ export function TariffPage() {
           </>
         }
         chips={<FilterChips chips={chips} onClearAll={clearAll} />}
-        toolbarEnd={<Button variant="outline" size="sm" render={<a href={api.tariff.csvUrl(params)} download />}><Download /> <span className="hidden lg:inline">{tt("exportCsv")}</span></Button>}
+        toolbarEnd={<>
+          {can("master.edit") && <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}><Upload /> <span className="hidden lg:inline">{t("imp.open")}</span></Button>}
+          <Button variant="outline" size="sm" render={<a href={api.tariff.csvUrl(params)} download />}><Download /> <span className="hidden lg:inline">{tt("exportCsv")}</span></Button>
+        </>}
         mobileCard={(r) => (
           <div className="grid gap-1">
             <div className="flex items-center justify-between gap-2"><span className="tabular font-medium">{fmtHs(r.hsCode)}</span><Pill tone="info">{t("col.tti")} {fmtNum(r.tti, locale, 2)}%</Pill></div>
@@ -80,6 +87,7 @@ export function TariffPage() {
         )}
         emptyAction={activeCount > 0 ? <Button variant="outline" size="sm" onClick={clearAll}>{tt("clearAll")}</Button> : undefined}
       />
+      <TariffImportDialog open={importOpen} onOpenChange={setImportOpen} currentFy={q.data?.fy} />
     </>
   )
 }
