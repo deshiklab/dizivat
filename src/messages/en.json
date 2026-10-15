@@ -1369,7 +1369,8 @@
       "prcBatch": "Bank PRC file",
       "lateFiling": "Mushak 9.3 application",
       "returnAmendment": "Mushak 9.4 application",
-      "tariff": "Tariff"
+      "tariff": "Tariff",
+      "statement": "Bank statement"
     },
     "facet": {
       "entity": "Record type",

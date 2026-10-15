@@ -2,7 +2,7 @@
  * Language-neutral article registry: order, category, the app screens each article documents and related reading.
  * Small on purpose — the shell imports it for "Help for this page"; article text lives in ./en and ./bn.
  */
-export const HELP_UPDATED = "2026-10-02"
+export const HELP_UPDATED = "2026-10-15"
 
 export const CATEGORIES = ["gettingStarted", "sales", "purchase", "inventory", "production", "accounting", "nbrVat", "masterData", "reference"] as const
 export type Category = (typeof CATEGORIES)[number]

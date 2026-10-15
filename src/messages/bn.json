@@ -1369,7 +1369,8 @@
       "prcBatch": "ব্যাংকের পিআরসি ফাইল",
       "lateFiling": "মূসক ৯.৩ আবেদন",
       "returnAmendment": "মূসক ৯.৪ আবেদন",
-      "tariff": "ট্যারিফ"
+      "tariff": "ট্যারিফ",
+      "statement": "ব্যাংক স্টেটমেন্ট"
     },
     "facet": {
       "entity": "রেকর্ডের ধরন",
