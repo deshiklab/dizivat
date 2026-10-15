@@ -163,6 +163,11 @@ ENDPOINTS = [
     E("GET", "/accounting/statement?kind=customer&party=c1&from=2025-07-01&to=2026-09-25", None, "Party ledger {party, opening, rows[{date, type, ref, debit, credit, balance}], closing, ageing, open invoices, reconciled}; kind=customer|vendor; format=csv", csv=True),
     E("GET", "/accounting/config", None, "Accounting config (books closed up to, default accounts, receipt/voucher numbering)"),
     E("PUT", "/accounting/config", "settings.manage", "Update the accounting config"),
+    E("GET", "/accounting/statements", None, "R8.2: imported bank statements — Page<BankStatement>; facet account", page=True),
+    E("POST", "/accounting/statements", "doc.create", "R8.2: import a statement {accountId, source?, closingBalance?, dryRun, rows[{date, narration, reference?, chequeNo?, deposit, withdrawal}]} — dry-run answers the plan {valid, matched, open, issues, lines[]}; apply stores the statement and its lines all-or-nothing (422 on row-level issues; a line matches a TR-6 challan by number, a recorded receipt / payment by reference, cheque or exact date+amount, else stays open with a suggestion when the narration names a party)"),
+    E("GET", "/accounting/statements/{statement}", None, "R8.2: one statement with its lines and the books-vs-bank answer {statement, lines, books, statementBalance, difference, open}"),
+    E("PATCH", "/accounting/statements/{statement}/lines/{line}", "doc.edit", "R8.2: park an open line {status: charge|ignored, note?} or reopen it (409 matched / a receipt was already created)"),
+    E("POST", "/accounting/statements/{statement}/lines/{line}/receipt", "doc.create", "R8.2: create the money document an open line is about — {kind: receipt|payment} + the ordinary money body (reference / note prefilled from the line), stored as a draft and linked back to the line (409 matched / already created; 422 process Approved — approve it in the register)"),
     # R4 — NBR VAT
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
@@ -301,6 +306,24 @@ def run():
     fx["ud"] = S("arif").get(BASE + "/vat/uds").json()["rows"][0]["id"]
     adm = S("admin"); rows = adm.get(BASE + "/backups").json().get("rows") or []
     fx["backup"] = rows[0]["id"] if rows else adm.post(BASE + "/backups", json={}).json()["id"]
+    # R8.2 fixture: an imported statement built from the live books — a TR-6 deposit and a recorded receipt the
+    # matcher must find, an open customer line (the suggestion) and a bank charge
+    s82 = S("arif")
+    dep = [t for t in s82.get(BASE + "/vat/treasury?process=Approved&size=500").json()["data"] if t.get("accountId")]
+    rec = [m for m in s82.get(BASE + "/accounting/receipts?process=Approved&method=bankTransfer&size=500").json()["data"] if m.get("reference")]
+    acct82 = dep[0]["accountId"] if dep else rec[0]["accountId"]
+    rows82 = [{"date": dep[0]["challanDate"], "narration": f"VAT treasury challan {dep[0]['challanNo']}", "deposit": 0, "withdrawal": dep[0]["amount"]}]
+    m82 = next((m for m in rec if m["accountId"] == acct82), None)
+    if m82:
+        rows82.append({"date": m82["date"], "narration": f"Inward remittance {m82['reference']}", "reference": m82["reference"], "deposit": round(m82["amount"] - m82["charge"], 2), "withdrawal": 0})
+    cust82 = s82.get(BASE + "/customers?status=active&size=1").json()[0]
+    rows82.append({"date": "2026-09-30", "narration": f"TT from {cust82['name']}", "deposit": 12345.67, "withdrawal": 0})
+    rows82.append({"date": "2026-09-30", "narration": "Account maintenance fee", "deposit": 0, "withdrawal": 500})
+    st82 = s82.post(BASE + "/accounting/statements", json={"accountId": acct82, "source": "contract-fixture.csv", "dryRun": False, "rows": rows82}).json()
+    fx["statement"] = st82["id"]
+    lines82 = s82.get(BASE + f"/accounting/statements/{st82['id']}").json()["lines"]
+    fx["line"] = next(l["id"] for l in lines82 if l["status"] == "open")
+    fx["stMatchLine"] = next(l["id"] for l in lines82 if l["status"] == "matched")
     for e in ENDPOINTS:
         path = e["p"].format(**fx); url = BASE + path; m = e["m"]
         # 401 for anonymous
@@ -446,6 +469,13 @@ def run():
         ("arif", "POST", "/accounting/payments", {}, 422, "partyId"),
         ("arif", "DELETE", f"/accounting/payments/{fx['payment']}", None, 409, None),
         ("arif", "GET", "/accounting/statement?kind=customer&party=nope", None, 422, "party"),
+        # R8.2 — bank statements: schema 422s, an apply refused on row issues, and the state conflicts
+        ("arif", "POST", "/accounting/statements", {}, 422, "accountId"),
+        ("arif", "POST", "/accounting/statements", {"accountId": "ac1", "dryRun": False, "rows": [{"date": "2026-09-30", "narration": ""}]}, 422, "row 2"),
+        ("arif", "GET", "/accounting/statements/nope", None, 404, None),
+        ("arif", "PATCH", f"/accounting/statements/{fx['statement']}/lines/{fx['stMatchLine']}", {"status": "charge"}, 409, None),
+        ("arif", "PATCH", f"/accounting/statements/{fx['statement']}/lines/{fx['line']}", {"status": "wombat"}, 422, "status"),
+        ("arif", "POST", f"/accounting/statements/{fx['statement']}/lines/{fx['stMatchLine']}/receipt", {}, 409, None),
         ("arif", "GET", "/accounting/statement?kind=customer&party=c1&from=2026-09-10&to=2026-09-01", None, 422, "to"),
         # R4 — NBR VAT
         ("arif", "GET", "/vat/compliance?period=2019-01", None, 422, "period"),

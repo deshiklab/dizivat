@@ -177,6 +177,15 @@ export { lots, lotsAnswer, type LotSource } from "@/app/api/v1/_r3"
 export {
   SUBCON_CSV_COLUMNS, SUBCON_OVERDUE_DAYS, subconCsvName, subconParams, subconRegister, subconRows,
 } from "@/app/api/v1/_r62"
+// R8.2: the bank-statement rules — the matcher (what a line explains: a TR-6 challan, a receipt / payment
+// already on the books, or a party whose name the narration carries), the import planner (dry-run first,
+// all-or-nothing on apply) and the books-vs-bank answer, shared the same way so the two runtimes cannot drift.
+// The statements and their lines live in `bank_statements` and `bank_statement_lines`; the native module
+// stores through its own writers, the mock through its arrays.
+export {
+  booksBalanceAt, matchBankLine, planAnswer, planStatement, statementInput, statementView,
+  type PlannedLine, type StatementPlanResult,
+} from "@/app/api/v1/_r8"
 
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
 // duty per line) variants, priced by the same functions the mock and the static demo run.

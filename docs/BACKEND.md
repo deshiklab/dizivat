@@ -1127,6 +1127,48 @@ over existing columns whenever a detail is read.
   notFound; `e2e_r3.py` opens the print view (QR present) and the public page for a real and a doctored
   token; `contract.py` carries the public row.
 
+## R8.2 — bank statement import and reconciliation
+
+The books and the bank disagree until someone proves they agree. The reconcile screen imports the bank's
+statement file, matches its lines against what the books already hold (TR-6 challans, recorded receipts and
+payments), and turns what remains into ordinary money documents — created *from* the line, so the proof is
+on the record, not in someone's head.
+
+- **Two tables** (migration `0024`): `bank_statements` (one row per import: account, period, source file
+  name, optional keyed `closing_balance`, totals, importer) and `bank_statement_lines` (the rows, in file
+  order, with `status` `open → matched | receipt | charge | ignored`, what a line matched
+  (`match_kind`/`match_no`), and the money document created from it (`money_id`/`money_no`)). Unique on
+  `(statement_id, ord)`; the migration is idempotent (`if not exists`) because the upgrade drills rewind
+  the migration journal below it.
+- **`POST /accounting/statements`** (`doc.create`, the mock's rules through the compat bundle): the body
+  carries `accountId`, `rows` (date, narration, reference, cheque no, deposit, withdrawal — the parser is
+  lenient about column names, strict about types), `source`, `closingBalance` and `dryRun` (the default).
+  A dry run answers the plan — per line `valid`, what it would match, a party `suggestion` when the
+  narration names one, `issues` with row numbers for rows the file got wrong — without storing anything;
+  `dryRun: false` stores statement + lines all-or-nothing under a `BS-` number.
+- **Matching order** (mock `_r8.ts` + native `accounting.ts` share it): (1) TR-6 challan — a treasury
+  deposit on the account for the same amount whose challan number appears in the narration or reference
+  (or date + amount alone); (2) a recorded bank receipt or payment on the same account, same amount, same
+  date (±1 day — the bank books a TT or remittance a day or two after the books do); (3) open, with the
+  suggestion. The second import of the same lines also matches receipts *created from* an earlier
+  statement's lines — the `money_id` link explains them.
+- **`POST /accounting/statements/:id/lines/:line/receipt`** creates an ordinary receipt (or payment)
+  *from* the line: party, date, method, account and amount prefilled by the caller's dialog, the reference
+  defaulting to `BS line <rowNo>`, the note naming the statement. The line flips to `receipt` with the
+  document's id and number; a matched or already-linked line refuses (409), and so does a **parked** one
+  (charge/ignored — parking is the decision that the line is not a party movement; reopen first).
+- **`PATCH /accounting/statements/:id/lines/:line`** parks (`charge` with a note, `ignored`) or reopens
+  (`open`); the statement detail (`GET /accounting/statements/:id`) answers the lines plus the
+  books-vs-bank strip: `books` (the account's balance as the books have it), `bank` (the keyed closing
+  balance), `difference` and the open-line count. Audit: one `bankStatement` event per action.
+- **The screens**: `/accounting/reconcile` (import dialog with dry-run preview, statements list) and the
+  statement detail (lines table with per-line actions, the strip, a receipt dialog that opens with the
+  suggestion). In the static demo the page says reconciliation runs on the live app.
+- `e2e_r4.py` §14 walks the whole flow in the browser (import → dry-run preview → apply → receipt from
+  line → approve → second import matches → park/ignore/reopen → the 409s → the strip at zero);
+  `api_native.py` drills the same against PostgreSQL incl. the restart; `contract.py` carries the rows
+  for both runtimes (mock and native agree, validation order included).
+
 ## Tables
 
 | Table | Purpose |
@@ -1164,6 +1206,7 @@ over existing columns whenever a detail is read.
 | `work_order_lines` | **R5.5:** the finished goods a work order asks for — the quantity ordered and the progress the approved batches have made (issued, received, rejected, still owed), with checks that keep the two lifecycle columns and the quantities in agreement; primary key (work order, position) |
 | `money_accounts` | **R5.6:** the money accounts — bank, mobile wallet or cash box; the kind's own columns (branch and account type, wallet type and operator) guarded by checks; the balance is *derived*, not stored |
 | `money_docs` | **R5.6:** receipts (MR-) and payments (PV-) — `kind` tells them apart; the party as printed, the method, the account, the cheque block, the amount, the charge, what was allocated and what is on account, the process, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired; checks keep the cheque block with its method and the allocation within the amount |
+| `bank_statements` / `bank_statement_lines` | **R8.2:** an imported statement (account, period, keyed closing balance, totals) and its lines in file order, each `open / matched / receipt / charge / ignored` with what it matched and the money document created from it |
 | `money_allocations` | **R5.6:** the invoices a receipt or payment settles — the invoice's id, number, date and total beside the amount set against it, one row per invoice; primary key (document, position) |
 | `treasury_deposits` | **R5.6:** a treasury challan (TR-6) — the head and its economic code, the tax period, the challan number (unique) and date, the bank, the company account the money left, the amount and the depositor; `deleted_at` keeps a deleted draft's id and number retired |
 | `vds_entries` | **R5.6:** a VDS certificate (Mushak 6.6) — the invoice it was written against, the party as printed, the value and VAT subject to VDS, the amount withheld and what it settled (`settled`), and the treasury challan a purchase certificate was deposited with; the challan block belongs to `purchase` |

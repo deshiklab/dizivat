@@ -264,7 +264,7 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement"
   /** R6.2 */
   | "ud" | "backup" | "access" | "import"
   /** R6.5 */
@@ -694,6 +694,98 @@ export interface PartyStatement {
   /** closing = Σ invoice due − advances; true when the ledger agrees with the invoice registers */
   reconciled: boolean
   invoiceDue: number
+}
+
+/** R8.2 (bank reconciliation): one imported bank statement line. */
+export type BankLineStatus = "open" | "matched" | "receipt" | "charge" | "ignored"
+export type BankMatchKind = "treasury" | "receipt" | "payment"
+export interface BankStatementLine {
+  id: string
+  statementId: string
+  /** the line's place on the sheet, 1-based */
+  rowNo: number
+  date: string
+  narration: string
+  reference?: string
+  chequeNo?: string
+  /** money into the account (credit) */
+  deposit: number
+  /** money out (debit) */
+  withdrawal: number
+  status: BankLineStatus
+  /** what the matcher found, when it found something */
+  matchKind?: BankMatchKind
+  matchId?: string
+  matchNo?: string
+  /** the money document created from this line, when one was */
+  moneyId?: string
+  moneyNo?: string
+  note?: string
+}
+/** R8.2: an imported bank statement, its lines analysed against the books. */
+export interface BankStatement {
+  id: string
+  /** BS-MMYY#### */
+  no: string
+  accountId: string
+  accountName: string
+  /** file name or note the operator gave */
+  source: string
+  from: string
+  to: string
+  /** the balance the statement itself claims at its end (blank = derived from lines) */
+  closingBalance?: number
+  importedAt: string
+  importedBy: string
+  lineCount: number
+  totals: { deposit: number; withdrawal: number }
+  note?: string
+}
+/** R8.2: what the matcher says about one line (a dry run's answer, and each stored line's live state). */
+export interface BankLineMatch {
+  status: BankLineStatus
+  matchKind?: BankMatchKind
+  matchId?: string
+  matchNo?: string
+  /** a customer / vendor whose name the narration carries, with what they owe / are owed */
+  suggestion?: { kind: MoneyKind; partyId: string; partyName: string; due: number; invoices: number }
+}
+/** R8.2: what POST /accounting/statements answers — the dry-run plan and the stored statement's first view. */
+export interface StatementPlanAnswer {
+  accountId: string
+  accountName: string
+  total: number
+  valid: number
+  matched: number
+  open: number
+  issues: ImportIssue[]
+  lines: (BankStatementLine & BankLineMatch)[]
+  id?: string
+  no?: string
+}
+/** R8.2: GET /accounting/statements/{id} — the statement, its lines, and the books-vs-bank answer. */
+export interface StatementView {
+  statement: BankStatement
+  lines: (BankStatementLine & BankLineMatch)[]
+  /** what the account's ledger says at the statement's end */
+  books: number
+  /** what the statement says (keyed-in closing, or books less the unexplained lines) */
+  statementBalance: number
+  difference: number
+  open: number
+}
+
+/** R8.2: the import's answer — per-row issues like the other importers, plus the analysis. */
+export interface StatementPlan {
+  accountId: string
+  accountName: string
+  total: number
+  valid: number
+  /** lines that matched a TR-6 deposit, a receipt or a payment already on the books */
+  matched: number
+  open: number
+  issues: ImportIssue[]
+  lines: (BankStatementLine & BankLineMatch)[]
 }
 
 /** Treasury deposit (TR-6 challan) under an NBR economic code. */

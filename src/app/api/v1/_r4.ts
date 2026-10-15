@@ -148,7 +148,7 @@ export const stampLifeHistory = (d: { history?: HistoryEntry[]; updatedAt?: stri
   d.updatedAt = at
   return at
 }
-function history(entity: AuditEntity, d: LifeDoc, by: string, action: HistoryEntry["action"], note?: string, changes?: AuditChange[], ref = d.no, entityId = d.id) {
+export function history(entity: AuditEntity, d: LifeDoc, by: string, action: HistoryEntry["action"], note?: string, changes?: AuditChange[], ref = d.no, entityId = d.id) {
   const at = new Date().toISOString()
   d.history = [...(d.history ?? []), { at, by, action, note }]
   d.updatedAt = at

@@ -2,7 +2,7 @@ import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, 
 import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
-import type { BackupRow, BackupStatus, BackupVerify, ImportEntity, ImportResult, Sale as R62Sale, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
+import type { BackupRow, BackupStatus, BackupVerify, BankStatement, BankStatementLine, ImportEntity, ImportResult, Sale as R62Sale, StatementPlanAnswer, StatementView, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
 import type { RealisationInput, UdInput } from "../schemas"
 import type { UdFit } from "../rmg"
 import type { BondUdRegister, BondUdRow, DrawbackClaimList, DrawbackClaimRow } from "../types"
@@ -250,6 +250,15 @@ export const api = {
     openInvoices: (kind: "receipt" | "payment", party: string) => req<OpenInvoice[]>(`/accounting/open-invoices${qs({ kind, party })}`),
     statement: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => req<PartyStatement>(`/accounting/statement${qs(p)}`),
     statementCsvUrl: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => `${BASE}/accounting/statement${qs({ ...p, format: "csv" })}`,
+    /** R8.2: imported bank statements — list, import (dry-run / apply), one with its lines and the books-vs-bank answer */
+    bankStatements: (p: ListParams) => req<ListResult<BankStatement>>(`/accounting/statements${qs(p)}`),
+    bankStatement: (id: string) => req<StatementView>(`/accounting/statements/${id}`),
+    importBankStatement: (b: { accountId: string; source?: string; closingBalance?: number; dryRun: boolean; rows: Record<string, unknown>[] }) =>
+      req<StatementPlanAnswer & { id?: string; no?: string }>("/accounting/statements", { method: "POST", body: JSON.stringify(b) }),
+    patchBankLine: (id: string, lineId: string, b: { status: "open" | "charge" | "ignored"; note?: string }) =>
+      req<BankStatementLine>(`/accounting/statements/${id}/lines/${lineId}`, { method: "PATCH", body: JSON.stringify(b) }),
+    receiptFromLine: (id: string, lineId: string, b: Record<string, unknown>) =>
+      req<MoneyDoc>(`/accounting/statements/${id}/lines/${lineId}/receipt`, { method: "POST", body: JSON.stringify(b) }),
     config: () => req<AccountingConfig>("/accounting/config"),
     saveConfig: (b: AccountingConfigInput) => req<AccountingConfig>("/accounting/config", { method: "PUT", body: JSON.stringify(b) }),
   },

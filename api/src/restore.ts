@@ -95,7 +95,7 @@ async function freePort(): Promise<number> {
   })
 }
 
-async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number; treasury: number; vds: number; adjustments: number; uds: number; bondUds: number; lateFilings: number; returnAmendments: number; prcBatches: number; drawbackClaims: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
+async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number; treasury: number; vds: number; adjustments: number; uds: number; bondUds: number; lateFilings: number; returnAmendments: number; prcBatches: number; drawbackClaims: number; statements?: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
   const port = await freePort()
   const child: ChildProcess = spawn(process.execPath, [join(__dirname, "main.js")], {
     env: { ...process.env, DATABASE_URL: target, API_PORT: String(port), API_HOST: "127.0.0.1", BACKUPS: "off", DEMO_RESEED: "off", SESSION_SECRET: randomBytes(24).toString("hex") },
@@ -298,6 +298,7 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
         bondUds: live("bond_uds", "bondUds"),
         lateFilings: live("late_filings", "lateFilings"), returnAmendments: live("return_amendments", "returnAmendments"),
         prcBatches: live("prc_batches", "prcBatches"),
+        statements: live("bank_statements", "bankStatements"),
         drawbackClaims: live("drawback_claims", "drawbackClaims"),
       }, log)
     boot = r.ok ? "ok" : "failed"

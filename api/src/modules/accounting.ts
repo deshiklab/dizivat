@@ -28,7 +28,7 @@ import type { Request, Response } from "express"
 import { can, ROLE_PERMS, type Permission, type User } from "@/lib/auth/roles"
 import { runQuery, toCSV } from "@/lib/mock/query"
 import type {
-  AccountingConfig, Allocation, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, Party, PartyStatement, Purchase, Sale,
+  AccountingConfig, Allocation, BankStatement, BankStatementLine, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, Party, PartyStatement, Purchase, Sale,
 } from "@/lib/types"
 import type { AccountingSource } from "@/app/api/v1/_r4"
 import { Authed, type AuthedRequest } from "../common/auth"
@@ -36,7 +36,7 @@ import { jsonBody, Problem, searchParams, sendCsv, uniqueViolation } from "../co
 import { lockState } from "../common/state-guard"
 import { WriteBack, type Delta } from "../common/writeback"
 import { db, type Tx } from "../db/client"
-import { accountingConfig, moneyAccounts, moneyAllocations, moneyDocs } from "../db/schema"
+import { accountingConfig, bankStatementLines, bankStatements, moneyAccounts, moneyAllocations, moneyDocs } from "../db/schema"
 import { compat, mirror } from "../state"
 import { AuditService } from "./audit"
 import { applyPurchaseSettlement, revertPurchaseSettlement } from "./purchases"
@@ -772,5 +772,237 @@ export class AccountingConfigController {
       changes: c.accountingConfigDiff(before, saved),
     })
     res.json(saved)
+  }
+}
+
+/* ── R8.2: bank statements — import, match, reconcile ──────────────────── */
+
+type StatementDb = typeof bankStatements.$inferSelect
+type StatementLineDb = typeof bankStatementLines.$inferSelect
+
+/** Header row → contract shape. */
+const toBankStatement = (r: StatementDb): BankStatement => {
+  const s: BankStatement = {
+    id: r.id, no: r.no, accountId: r.accountId, accountName: r.accountName, source: r.source,
+    from: r.from, to: r.to, importedAt: r.importedAt.toISOString(), importedBy: r.importedBy,
+    lineCount: r.lineCount, totals: { deposit: r.depositTotal, withdrawal: r.withdrawalTotal },
+  }
+  if (r.closingBalance != null) s.closingBalance = r.closingBalance
+  if (r.note != null) s.note = r.note
+  return s
+}
+/** Contract shape → header row values (`ord` is the table's own). */
+const bankStatementValues = (s: BankStatement) => ({
+  id: s.id, no: s.no, accountId: s.accountId, accountName: s.accountName, source: s.source,
+  from: s.from, to: s.to, closingBalance: s.closingBalance ?? null, importedAt: new Date(s.importedAt),
+  importedBy: s.importedBy, lineCount: s.lineCount, depositTotal: s.totals.deposit, withdrawalTotal: s.totals.withdrawal,
+  note: s.note ?? null,
+})
+/** Line row → contract shape. */
+const toBankLine = (r: StatementLineDb): BankStatementLine => {
+  const l: BankStatementLine = {
+    id: r.id, statementId: r.statementId, rowNo: r.rowNo, date: r.date, narration: r.narration,
+    deposit: r.deposit, withdrawal: r.withdrawal, status: r.status,
+  }
+  if (r.reference != null) l.reference = r.reference
+  if (r.chequeNo != null) l.chequeNo = r.chequeNo
+  if (r.matchKind != null) l.matchKind = r.matchKind
+  if (r.matchId != null) l.matchId = r.matchId
+  if (r.matchNo != null) l.matchNo = r.matchNo
+  if (r.moneyId != null) l.moneyId = r.moneyId
+  if (r.moneyNo != null) l.moneyNo = r.moneyNo
+  if (r.note != null) l.note = r.note
+  return l
+}
+/** Contract shape → line row values (`ord` is the line's place on the sheet). */
+const bankLineValues = (l: BankStatementLine) => ({
+  id: l.id, statementId: l.statementId, ord: l.rowNo, rowNo: l.rowNo, date: l.date, narration: l.narration,
+  reference: l.reference ?? null, chequeNo: l.chequeNo ?? null, deposit: l.deposit, withdrawal: l.withdrawal,
+  status: l.status, matchKind: l.matchKind ?? null, matchId: l.matchId ?? null, matchNo: l.matchNo ?? null,
+  moneyId: l.moneyId ?? null, moneyNo: l.moneyNo ?? null, note: l.note ?? null,
+})
+
+@Injectable()
+export class BankStatementsService {
+  /** Every statement in insertion order, newest first on the register (the `no.desc` default sort). */
+  async all(): Promise<BankStatement[]> {
+    return (await db.select().from(bankStatements).orderBy(asc(bankStatements.ord))).map(toBankStatement)
+  }
+
+  async byId(id: string): Promise<BankStatement | undefined> {
+    const [row] = await db.select().from(bankStatements).where(eq(bankStatements.id, id))
+    return row ? toBankStatement(row) : undefined
+  }
+
+  async lines(statementId: string): Promise<BankStatementLine[]> {
+    return (await db.select().from(bankStatementLines).where(eq(bankStatementLines.statementId, statementId)).orderBy(asc(bankStatementLines.ord))).map(toBankLine)
+  }
+
+  /**
+   * Stores an applied import: the header and its lines in one transaction, the id and the number claimed inside
+   * the lock so two imports in flight cannot share either. `make` builds them with the identity it is handed.
+   */
+  async create(make: (ident: { id: string; no: string }) => { statement: BankStatement; lines: BankStatementLine[] }): Promise<{ statement: BankStatement; lines: BankStatementLine[] }> {
+    try {
+      return await db.transaction(async (tx) => {
+        await lockState(tx)
+        // the id counter the mock keeps in db.seq.statement, derived from the rows themselves
+        const [{ n }] = await tx.select({ n: sql<number>`coalesce(max(nullif(regexp_replace(${bankStatements.id}, '\\D', '', 'g'), '')::bigint), 0) + 1` }).from(bankStatements)
+        const built = make({ id: `bs${n}`, no: "" })
+        const nos = await tx.select({ no: bankStatements.no }).from(bankStatements)
+        built.statement.no = `BS-${built.statement.to.slice(5, 7)}${built.statement.to.slice(2, 4)}${String(
+          nos.reduce((m, r) => r.no.startsWith(`BS-${built.statement.to.slice(5, 7)}${built.statement.to.slice(2, 4)}`) ? Math.max(m, Number(r.no.slice(9)) || 0) : m, 0) + 1,
+        ).padStart(4, "0")}`
+        const lines = built.lines.map((l) => ({ ...l, statementId: built.statement.id, id: `bl${built.statement.id.slice(2)}-${l.rowNo}` }))
+        const [row] = await tx.insert(bankStatements).values(bankStatementValues(built.statement)).returning()
+        for (let i = 0; i < lines.length; i += 500) await tx.insert(bankStatementLines).values(lines.slice(i, i + 500).map(bankLineValues))
+        return { statement: toBankStatement(row), lines }
+      })
+    } catch (e) {
+      if (uniqueViolation(e) !== null) throw new Problem(409, "That statement number was just taken — please try again.")
+      throw e as Error
+    }
+  }
+
+  /** Park an open line (bank charge / ignore) or reopen it — one row, one transaction. */
+  async patchLine(statementId: string, lineId: string, patch: { status: BankStatementLine["status"]; note?: string }): Promise<BankStatementLine | undefined> {
+    const [row] = await db.update(bankStatementLines)
+      .set({ status: patch.status, note: patch.note || null })
+      .where(sql`${bankStatementLines.id} = ${lineId} and ${bankStatementLines.statementId} = ${statementId}`).returning()
+    return row ? toBankLine(row) : undefined
+  }
+
+  /** Link a money document back to the line it was created from. */
+  async linkLine(statementId: string, lineId: string, m: MoneyDoc): Promise<BankStatementLine | undefined> {
+    const [row] = await db.update(bankStatementLines)
+      .set({ status: "receipt", matchKind: m.kind, matchId: m.id, matchNo: m.no, moneyId: m.id, moneyNo: m.no })
+      .where(sql`${bankStatementLines.id} = ${lineId} and ${bankStatementLines.statementId} = ${statementId}`).returning()
+    return row ? toBankLine(row) : undefined
+  }
+}
+
+/** `accounting/statements` — the imported statements, their lines and the books-vs-bank answer. */
+@Controller("api/v1/accounting/statements")
+export class BankStatementsController {
+  constructor(
+    @Inject(BankStatementsService) private readonly svc: BankStatementsService,
+    @Inject(MoneyDocsService) private readonly money: MoneyDocsService,
+    @Inject(AuditService) private readonly audit: AuditService,
+  ) {}
+
+  /** The register: Page<BankStatement> with the `?account=` facet. */
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const sp = searchParams(req)
+    if (!sp.get("sort")) sp.set("sort", "no.desc")
+    const all = await this.svc.all()
+    const accounts = await db.select().from(moneyAccounts).orderBy(asc(moneyAccounts.ord))
+    const facetLabels = { account: Object.fromEntries(accounts.map((a) => [a.id, `${a.provider} · ${a.accountNo}`])) }
+    const q = (sp.get("q") ?? "").trim().toLowerCase()
+    const account = sp.get("account")
+    const date = (s: string) => s.slice(0, 10)
+    const from = sp.get("from"), to = sp.get("to")
+    const rows = all.filter((s) =>
+      (!q || `${s.no} ${s.accountName} ${s.source} ${s.importedBy}`.toLowerCase().includes(q)) &&
+      (!account || s.accountId === account) &&
+      (!from || date(s.importedAt) >= from) && (!to || date(s.importedAt) <= to))
+    const page = Math.max(1, Number(sp.get("page") ?? 1))
+    const size = Math.min(500, Math.max(1, Number(sp.get("size") ?? 25)))
+    res.json({ data: rows.slice((page - 1) * size, page * size), total: rows.length, page, size, totals: {}, facets: account ? {} : { account: Object.fromEntries([...new Set(rows.map((s) => s.accountId))].map((id) => [id, rows.filter((s) => s.accountId === id).length])) }, facetLabels })
+  }
+
+  /**
+   * Import a statement. `dryRun` (the default) analyses the rows and answers with the plan; `dryRun: false`
+   * stores the statement and its lines all-or-nothing. The rules — what a row may hold, what a line matches —
+   * are the mock's own, served through the compat bundle.
+   */
+  @Post() @Authed("doc.create")
+  async import(@Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const parsed = c.statementInput.safeParse(jsonBody(req))
+    if (!parsed.success) throw new Problem(422, "Validation failed", c.zodErrors(parsed.error))
+    const src = await accountingSource()
+    const planned = c.planStatement(parsed.data.accountId, parsed.data.rows, src)
+    if ("status" in planned) throw new Problem(planned.status, planned.title, planned.errors)
+    if (planned.plan.issues.length)
+      throw new Problem(422, "Validation failed", Object.fromEntries(planned.plan.issues.slice(0, 20).map((i) => [`row ${i.row}`, [i.message]])))
+    const answer = c.planAnswer(planned, { ...planned.plan, source: parsed.data.source }, parsed.data.rows.length)
+    if (parsed.data.dryRun) { res.json(answer); return }
+    const user = req.dz!.user
+    const at = new Date().toISOString()
+    const { statement, lines } = await this.svc.create((ident) => {
+      const s: BankStatement = {
+        id: ident.id, no: ident.no, accountId: planned.plan.accountId, accountName: planned.plan.accountName,
+        source: parsed.data.source || `statement-${planned.plan.to}`, from: planned.plan.from, to: planned.plan.to,
+        closingBalance: parsed.data.closingBalance, importedAt: at, importedBy: user.name,
+        lineCount: planned.plan.lines.length, totals: planned.plan.totals,
+      }
+      return { statement: s, lines: planned.plan.lines.map((l) => ({ ...l, suggestion: undefined })) }
+    })
+    await this.audit.record({ at, actor: user, entity: "statement", entityId: statement.id, ref: statement.no, action: "created", note: `${lines.length} lines, ${answer.matched} matched` })
+    res.status(201).json({ ...answer, id: statement.id, no: statement.no })
+  }
+
+  /** One statement with its lines and the books-vs-bank answer (open lines carry a fresh suggestion). */
+  @Get(":id") @Authed()
+  async one(@Param("id") id: string, @Res() res: Response) {
+    const c = compat()
+    const s = await this.svc.byId(id)
+    if (!s) throw new Problem(404, "Statement not found")
+    const src = await accountingSource()
+    const lines = (await this.svc.lines(id)).map((l) => ({ ...l, suggestion: l.status === "open" ? c.matchBankLine(l, s.accountId, src).suggestion : undefined }))
+    res.json(c.statementView(s, lines, src))
+  }
+
+  /** Park an open line as a bank charge, ignore it, or reopen it. */
+  @Patch(":id/lines/:lineId") @Authed("doc.edit")
+  async patchLine(@Req() req: AuthedRequest, @Param("id") id: string, @Param("lineId") lineId: string, @Res() res: Response) {
+    const body = jsonBody(req) as { status?: string; note?: string }
+    if (body.status !== "open" && body.status !== "charge" && body.status !== "ignored")
+      throw new Problem(422, "Validation failed", { status: ["invalid"] })
+    const existing = (await this.svc.lines(id)).find((l) => l.id === lineId)
+    if (!existing) throw new Problem(404, "Statement line not found")
+    if (existing.status === "matched") throw new Problem(409, "This line is already explained by the books.")
+    if (existing.moneyId) throw new Problem(409, `A money document was already created from this line (${existing.moneyNo}) — cancel it first.`)
+    const line = await this.svc.patchLine(id, lineId, { status: body.status, note: body.note })
+    if (!line) throw new Problem(404, "Statement line not found")
+    res.json(line)
+  }
+
+  /** Create the receipt / voucher an open line is about — through the ordinary creators, then linked back. */
+  @Post(":id/lines/:lineId/receipt") @Authed("doc.create")
+  async createFromLine(@Req() req: AuthedRequest, @Param("id") id: string, @Param("lineId") lineId: string, @Res() res: Response) {
+    const c = compat()
+    const body = jsonBody(req) as { kind?: string; process?: string } & Record<string, unknown>
+    const kind: MoneyKind = body.kind === "payment" ? "payment" : "receipt"
+    if (body.process === "Approved") throw new Problem(422, "Create the line's receipt as a draft first, then approve it in the register.")
+    const s = await this.svc.byId(id)
+    if (!s) throw new Problem(404, "Statement not found")
+    const line = (await this.svc.lines(id)).find((l) => l.id === lineId)
+    if (!line) throw new Problem(404, "Statement line not found")
+    if (line.status === "matched") throw new Problem(409, "This line is already explained by the books.")
+    if (line.moneyId) throw new Problem(409, `A ${kind} was already created from this line (${line.moneyNo}).`)
+    if (line.status === "charge" || line.status === "ignored") throw new Problem(409, `This line is parked as ${line.status === "charge" ? "a bank charge" : "ignored"} — reopen it first.`)
+    const src = await accountingSource()
+    const method = (body.method as string) ?? (line.chequeNo ? "cheque" : "bankTransfer")
+    const reference = String(body.reference ?? "") || line.reference || ((method === "bankTransfer" || method === "mobile") ? `BS line ${line.rowNo}` : "")
+    const built = c.buildMoney(kind)({
+      ...body, kind: undefined,
+      reference,
+      note: body.note ?? `Bank statement ${line.statementId} line ${line.rowNo}: ${line.narration}`.slice(0, 250),
+    }, undefined, src)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const at = new Date().toISOString()
+    const doc = await this.money.create(kind, built.date, (ident) => {
+      const m: MoneyDoc = { ...built.fields, ...ident, process: "Created", createdAt: at, history: [] } as MoneyDoc
+      c.claimMoneyId(kind)
+      c.stampMoneyHistory(m, user.name, "created", undefined, at)
+      return { doc: m, moved: [] }
+    })
+    await this.audit.record({ at, actor: user, entity: kind, entityId: doc.id, ref: doc.no, action: "created", note: `from bank statement ${line.statementId} line ${line.rowNo}` })
+    const linked = await this.svc.linkLine(id, lineId, doc)
+    if (!linked) throw new Problem(404, "Statement line not found")
+    res.status(201).json(doc)
   }
 }

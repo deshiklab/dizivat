@@ -156,6 +156,36 @@ export function mapRows(entity: ImportEntity, table: string[][]) {
   return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
 }
 
+/* ── the bank statement (R8.2) — the reconcile view's own import (/accounting/statements) ── */
+
+export const BANK_FIELDS = ["date", "narration", "reference", "chequeNo", "deposit", "withdrawal"]
+const BANK_ALIASES: Record<string, string> = {
+  particulars: "narration", description: "narration", details: "narration", transaction: "narration", transactions: "narration", memo: "narration", remarks: "narration", note: "narration",
+  ref: "reference", refno: "reference", txnid: "reference", transactionid: "reference", instrumentno: "reference",
+  chq: "chequeNo", chqno: "chequeNo", cheque: "chequeNo", chequeno: "chequeNo", chequenumber: "chequeNo", instrument: "chequeNo",
+  credit: "deposit", creditamount: "deposit", moneyin: "deposit", inflow: "deposit", depositamount: "deposit",
+  debit: "withdrawal", debitamount: "withdrawal", moneyout: "withdrawal", outflow: "withdrawal", withdrawalamount: "withdrawal",
+  valuedate: "date", txnDate: "date", transactiondate: "date", postdate: "date", postingdate: "date",
+}
+
+/** Header row → bank-statement records (the same normalisation as the master-data import). */
+export function mapBankRows(table: string[][]) {
+  const [head = [], ...body] = table
+  const byNorm = new Map(BANK_FIELDS.map((f) => [norm(f), f]))
+  const cols = head.map((h) => { const n = norm(String(h)); const f = byNorm.get(n) ?? BANK_ALIASES[n]; return f && BANK_FIELDS.includes(f) ? f : null })
+  const unknown = head.filter((_, i) => !cols[i]).map(String).filter((h) => h.trim())
+  const missing = ["date", "narration"].filter((f) => !cols.includes(f))
+  const rows = body.map((r) => {
+    const o: Record<string, string> = {}
+    cols.forEach((f, i) => {
+      if (!f) return
+      o[f] = f === "date" ? excelDate(String(r[i] ?? "").trim()) : String(r[i] ?? "").trim()
+    })
+    return o
+  })
+  return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
+}
+
 /* ── the NBR tariff sheet (R7.1) — a separate import with its own endpoint (/vat/tariff/import) ── */
 
 export const TARIFF_FIELDS = ["hsCode", "description", "cd", "sd", "vat", "ait", "rd", "at"]

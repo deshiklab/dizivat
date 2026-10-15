@@ -9,7 +9,7 @@ import type { Permission } from "@/lib/auth/roles"
  * `release` = the R-milestone from the development plan in which the page ships.
  * `ready` = built (Sprints 1–4 + R2 + R3 + R4) (renders a real page); others render a "Planned for Rx" page.
  */
-export type Release = "S1" | "R1" | "R2" | "R3" | "R4" | "R6"
+export type Release = "S1" | "R1" | "R2" | "R3" | "R4" | "R6" | "R8"
 export interface NavItem { key: string; href: string; release: Release; ready?: boolean; legacy?: string; perm?: Permission }
 export interface NavGroup { key: string; icon: LucideIcon; href: string; items: NavItem[]; shortcut?: string }
 
@@ -20,6 +20,7 @@ export const RELEASE_DATES: Record<Release, string> = {
   R3: "2027-01-21",
   R4: "2027-02-25",
   R6: "2027-04-29",
+  R8: "2027-06-24",
 }
 
 export const NAV: NavGroup[] = [
@@ -70,6 +71,7 @@ export const NAV: NavGroup[] = [
       { key: "payments", href: "/accounting/payments", release: "R4", ready: true },
       { key: "bankAccounts", href: "/accounting/bank-accounts", release: "R4", ready: true },
       { key: "statements", href: "/accounting/statements", release: "R4", ready: true },
+      { key: "reconcile", href: "/accounting/reconcile", release: "R8", ready: true },
       { key: "accountingConfig", href: "/accounting/config", release: "R4", ready: true, perm: "settings.manage" },
     ],
   },

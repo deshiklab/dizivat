@@ -1,4 +1,4 @@
-import type { BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -22,7 +22,7 @@ interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -36,6 +36,8 @@ interface DB {
   bondUds: BondUd[]; drawbackClaims: DrawbackClaim[]
   /** R6.6: bank PRC-file batches (export proceeds), Mushak 9.3 late-filing and 9.4 amendment applications */
   prcBatches: PrcBatch[]; lateFilings: LateFiling[]; returnAmendments: ReturnAmendment[]
+  /** R8.2: imported bank statements and their lines (reconciliation) */
+  bankStatements: BankStatement[]; bankLines: BankStatementLine[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -143,12 +145,13 @@ function init(): DB {
     creditNotes, boms, workOrders, batches, productionConfig: { procedure: "directStock", consumption: "standard" },
     ...r4,
     uds, bondUds, drawbackClaims, prcBatches, lateFilings, returnAmendments,
+    bankStatements: [], bankLines: [],
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
       account: r4.moneyAccounts.length, receipt: r4.moneyDocs.filter((x) => x.kind === "receipt").length, payment: r4.moneyDocs.filter((x) => x.kind === "payment").length,
       treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length, bondUd: bondUds.length, claim: drawbackClaims.length,
-      prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length,
+      prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length, statement: 0,
     },
   }
 }

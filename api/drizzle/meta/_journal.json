@@ -169,6 +169,13 @@
       "when": 1791937437257,
       "tag": "0023_finale_compat_state",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792022866054,
+      "tag": "0024_r82_bank_statements",
+      "breakpoints": true
     }
   ]
 }

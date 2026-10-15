@@ -1884,3 +1884,72 @@ export const bondUdGarments = pgTable("bond_ud_garments", {
   index("bond_ud_garments_item_idx").on(t.itemId),
   check("bond_ud_garments_qty_check", sql`${t.qty} > 0`),
 ])
+
+/**
+ * R8.2 (bank reconciliation) — one imported bank statement, the ground truth an account's money registers are
+ * checked against. The statement itself is a header: which account, which span, how many lines, what the bank
+ * said the balance was. Its lines live in `bank_statement_lines`; this row is what the reconcile view and the
+ * audit trail point at.
+ */
+export const bankStatements = pgTable("bank_statements", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** BS-MMYY#### */
+  no: text("no").notNull(),
+  accountId: text("account_id").notNull(),
+  /** `${provider} · ${accountNo}` as of import */
+  accountName: text("account_name").notNull(),
+  /** file name or note the operator gave */
+  source: text("source").notNull(),
+  from: date("from", { mode: "string" }).notNull(),
+  to: date("to", { mode: "string" }).notNull(),
+  /** the balance the statement itself claims at its end — null when the operator did not key it in */
+  closingBalance: numeric("closing_balance", { precision: 18, scale: 2, mode: "number" }),
+  importedAt: ts("imported_at").notNull(),
+  importedBy: text("imported_by").notNull(),
+  lineCount: integer("line_count").notNull(),
+  depositTotal: numeric("deposit_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  withdrawalTotal: numeric("withdrawal_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+}, (t) => [
+  uniqueIndex("bank_statements_no_key").on(t.no),
+  /** the register's `?account=` facet and the books-vs-bank answer an account's reconcile view opens with */
+  index("bank_statements_account_idx").on(t.accountId),
+])
+
+/**
+ * R8.2 — one line of an imported statement, with what the matcher said about it: matched (a TR-6 challan or a
+ * receipt / payment already on the books), open (unexplained — the operator turns it into a receipt / voucher,
+ * parks it as a bank charge, or ignores it), or receipt (a money document was created from it). The match is
+ * frozen at import; the status is the operator's to move.
+ */
+export const bankStatementLines = pgTable("bank_statement_lines", {
+  id: text("id").primaryKey(),
+  statementId: text("statement_id").notNull(),
+  /** the line's place on the sheet, 1-based */
+  ord: integer("ord").notNull(),
+  rowNo: integer("row_no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  narration: text("narration").notNull(),
+  reference: text("reference"),
+  chequeNo: text("cheque_no"),
+  /** money into the account (credit) */
+  deposit: numeric("deposit", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** money out (debit) */
+  withdrawal: numeric("withdrawal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  status: text("status", { enum: ["open", "matched", "receipt", "charge", "ignored"] }).notNull(),
+  matchKind: text("match_kind", { enum: ["treasury", "receipt", "payment"] }),
+  matchId: text("match_id"),
+  matchNo: text("match_no"),
+  /** the money document created from this line, when one was */
+  moneyId: text("money_id"),
+  moneyNo: text("money_no"),
+  note: text("note"),
+}, (t) => [
+  uniqueIndex("bank_statement_lines_statement_ord_key").on(t.statementId, t.ord),
+  index("bank_statement_lines_statement_idx").on(t.statementId),
+  /** the reconcile view's "which lines still need explaining" and the created receipt's link back */
+  index("bank_statement_lines_status_idx").on(t.statementId, t.status),
+  index("bank_statement_lines_money_idx").on(t.moneyId),
+])

@@ -35,8 +35,9 @@ export const REGISTRY = {
   "work-orders-and-batches": { category: "production", routes: ["/production/work-orders", "/production/batches", "/production/opening", "/production/config"], related: ["bom", "damage-and-finished-goods"] },
   "subcontracting": { category: "production", routes: ["/production/subcontract"], related: ["work-orders-and-batches", "bom"] },
 
-  "receipts-and-payments": { category: "accounting", routes: ["/accounting/receipts", "/accounting/payments"], related: ["bank-accounts-and-statements", "local-purchases"] },
+  "receipts-and-payments": { category: "accounting", routes: ["/accounting/receipts", "/accounting/payments"], related: ["bank-accounts-and-statements", "bank-reconciliation", "local-purchases"] },
   "bank-accounts-and-statements": { category: "accounting", routes: ["/accounting/bank-accounts", "/accounting/statements", "/accounting/config"], related: ["receipts-and-payments"] },
+  "bank-reconciliation": { category: "accounting", routes: ["/accounting/reconcile"], related: ["receipts-and-payments", "bank-accounts-and-statements"] },
 
   "compliance-centre": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "purchase-sales-books"] },
   "vat-return-9-1": { category: "nbrVat", routes: ["/vat/return-9-1"], related: ["treasury-tr6", "vat-adjustments", "vds-certificates"] },

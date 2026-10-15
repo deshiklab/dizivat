@@ -1,4 +1,9 @@
 """Shared Playwright helper: a browser context already signed in as a demo user (via the API, sets the httpOnly cookie)."""
+from playwright.async_api import expect
+
+# the mock's artificial latency plus a slow local browser needs more than the 5s default; CI runners benefit too
+expect.set_options(timeout=10_000)
+
 BASE = __import__("os").environ.get("BASE_URL", "http://localhost:3000")
 PASSWORD = "demo1234"
 

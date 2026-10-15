@@ -23,7 +23,7 @@ VP = {"width": 1440, "height": 900}
 async def settle(pg):
     """Screenshots must not catch a sheet/dialog/popover mid-transition: wait for every running animation."""
     await pg.wait_for_timeout(50)
-    await pg.evaluate("Promise.all(document.getAnimations().map(a => a.finished.catch(() => null)))")
+    await pg.evaluate("Promise.race([Promise.all(document.getAnimations().map(a => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 1500))])")
     await pg.wait_for_timeout(80)
 
 async def main():

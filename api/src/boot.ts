@@ -162,6 +162,7 @@ async function seed(log: (m: string) => void) {
     await tx.execute(sql`set local dizivat.reseed = 'on'`)
     for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "sales", "sale_lines", "sale_realisations", "purchases", "purchase_lines", "notes", "note_lines", "opening_entries", "batches", "batch_lines", "batch_consumption", "boms", "bom_inputs", "bom_costs", "production_config", "work_orders", "work_order_lines",
       "money_accounts", "money_docs", "money_allocations", "accounting_config", "treasury_deposits", "vds_entries", "vat_adjustments", "tariff_lines",
+      "bank_statements", "bank_statement_lines",
       "uds", "ud_lines",
       "bond_uds", "bond_ud_inputs", "bond_ud_garments",
       "audit_events", "compat_state", "meta"])
