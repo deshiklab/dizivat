@@ -94,6 +94,19 @@ jobs:
       - name: Backend — sessions + revocation + lockout + persistence across restarts + hash-chained audit + restore drill into a fresh database
         working-directory: scripts
         run: python api_native.py
+      - name: Surface the failed step's log tail in the run summary
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The runner can read its own logs (the API's log redirect is not always reachable from
+          # outside); echo the failing step's tail into the summary so the cause is visible on the run page.
+          {
+            echo '## Failed step log tail'
+            echo '```'
+            gh run view "$GITHUB_RUN_ID" --log-failed 2>/dev/null | tail -c 16000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@v4
