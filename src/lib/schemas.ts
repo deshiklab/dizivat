@@ -765,3 +765,26 @@ export const tariffImportInput = z.object({
   dryRun: z.boolean().default(false),
 })
 export type TariffImportInputT = z.input<typeof tariffImportInput>
+
+/** R8.3 — the reminder settings: the three statutory deadlines, each with its lead times in days. */
+const reminderKindInput = z.object({
+  enabled: z.boolean(),
+  leads: z.array(z.number().int().min(1).max(60)).min(1, "required").max(5, "tooMany"),
+})
+export const reminderSettingsInput = z.object({
+  return91: reminderKindInput, treasury: reminderKindInput, vds: reminderKindInput,
+})
+export type ReminderSettingsInputT = z.output<typeof reminderSettingsInput>
+
+/** R8.3 — a delivery schedule: `day` is the day of the month (1–28) or the weekday (1 = Monday). */
+export const deliveryInput = z.object({
+  kind: z.enum(["vatDigest", "receivablesDigest"]),
+  frequency: z.enum(["monthly", "weekly"]),
+  day: z.number().int().min(1).max(28),
+  recipients: z.array(z.string().trim().min(1)).min(1, "required").max(20),
+  enabled: z.boolean().default(true),
+  note: z.string().trim().max(250).optional().default(""),
+}).superRefine((s, ctx) => {
+  if (s.frequency === "weekly" && s.day > 7) ctx.addIssue({ code: "custom", path: ["day"], message: "weekday" })
+})
+export type DeliveryInputT = z.output<typeof deliveryInput>

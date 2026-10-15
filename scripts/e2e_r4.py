@@ -413,6 +413,81 @@ async def main():
             await settle(pg); await pg.screenshot(path=f"{OUT}/952_reconcile_bn.png"); ok("reconcile page in Bangla")
         except Exception as e: fail(14, e)
 
+        # ── 15. Reminders + report delivery (R8.3) ─────────────────────
+        try:
+            apg = await admin.new_page(); watch(apg, errs)
+            # a lead time that has arrived (20 days left ≤ 25) and one that has not (10), and a schedule due today
+            st15, _ = await put(admin, "/schedule/settings", {"return91": {"enabled": True, "leads": [25, 10]}, "treasury": {"enabled": True, "leads": [7, 1]}, "vds": {"enabled": True, "leads": [7, 1]}})
+            assert st15 == 200, st15
+            st15, d15 = await post(admin, "/schedule/deliveries", {"kind": "vatDigest", "frequency": "monthly", "day": 25, "recipients": ["u5"], "enabled": True, "note": "E2E monthly digest"})
+            assert st15 == 201, (st15, d15)
+            sched15 = d15["id"]
+            log0 = (await jget(admin, "/schedule/log?size=1"))["total"]
+            await apg.goto(BASE + "/en/master/schedule", wait_until="networkidle")
+            await expect(apg.get_by_role("heading", name="Reminders & report delivery")).to_be_visible()
+            await expect(apg.get_by_test_id("reminder-return91")).to_be_visible()
+            await expect(apg.locator("#leads-return91")).to_have_value("25, 10")
+            await expect(apg.locator("#leads-treasury")).to_have_value("7, 1")
+            await expect(apg.get_by_role("cell", name=re.compile("VAT digest")).first).to_be_visible()
+            await expect(apg.get_by_role("cell", name=re.compile("Receivables digest")).first).to_be_visible()
+            # the seeded delivery is in the log with its frozen figures
+            seeded = await jget(admin, "/schedule/log/dx1")
+            assert seeded["document"]["period"] == "2026-08" and seeded["document"]["kind"] == "vatDigest", seeded
+            await expect(apg.get_by_role("cell", name="08-2026").first).to_be_visible()
+            await settle(apg); await apg.screenshot(path=f"{OUT}/960_schedule.png")
+            ok("schedule page: reminder cards, the seeded schedules and the seeded delivery")
+            # run the day: the arrived lead time fires its reminder, the due schedule delivers
+            await apg.get_by_test_id("run-now").click()
+            await expect(apg.get_by_text(re.compile(r"Schedule run: 1 reminder fired, 1 report delivered"))).to_be_visible()
+            log1 = (await jget(admin, "/schedule/log?size=1"))["total"]
+            assert log1 == log0 + 1, (log0, log1)
+            notif = await jget(admin, "/notifications")
+            ids15 = [n["id"] for n in notif["items"]]
+            assert "rem:return91:2026-10-15:25" in ids15, ids15
+            assert "deadline:r91:2026-10-15" not in ids15, ids15  # the stored reminder owns the deadline now
+            assert "deadline:tr6:2026-10-15" in ids15, ids15      # the treasury one is still ambient
+            assert any(i.startswith("delivered:") for i in ids15), ids15
+            ok("tick fires the arrived reminder (which takes over its deadline in the bell) and delivers the report")
+            # the second run of the day changes nothing
+            st15, tick2 = await post(admin, "/schedule/tick", {})
+            assert st15 == 200 and not tick2["fired"] and not tick2["delivered"], tick2
+            ok("a second tick of the day fires nothing (idempotent)")
+            # the delivered document: the frozen figures in the dialog, the CSV beside them
+            newest = (await jget(admin, "/schedule/log?size=1"))["data"][0]
+            assert newest["period"] == "2026-08" and newest["scheduleId"] == sched15, newest
+            await apg.get_by_test_id(f"log-{newest['id']}").get_by_role("button", name="View").click()
+            dlg = apg.get_by_role("dialog")
+            await expect(dlg.get_by_test_id("delivery-document")).to_be_visible()
+            await expect(dlg.get_by_text("Net VAT (50)", exact=True)).to_be_visible()
+            await expect(dlg.get_by_role("link", name="CSV")).to_have_attribute("href", re.compile(r"/schedule/log/.+/document\?format=csv"))
+            await settle(apg); await apg.screenshot(path=f"{OUT}/961_delivery_document.png")
+            r15 = await admin.request.get(API + f"/schedule/log/{newest['id']}/document?format=csv")
+            assert r15.ok and r15.headers["content-type"].startswith("text/csv") and "Net VAT (50)" in await r15.text(), r15.status
+            ok("delivered document: dialog figures + CSV download of the frozen digest")
+            # close the viewer, then edit the lead times from the page itself
+            await apg.keyboard.press("Escape")
+            await expect(apg.get_by_test_id("delivery-document")).not_to_be_visible()
+            await apg.locator("#leads-return91").fill("24, 10")
+            await apg.get_by_test_id("save-reminders").click()
+            await expect(apg.get_by_text("Reminder settings saved")).to_be_visible()
+            settings15 = await jget(admin, "/schedule/settings")
+            assert settings15["return91"]["leads"] == [24, 10], settings15
+            ok("reminder settings save from the page")
+            # role gating: an approver reads the schedule but cannot run or edit it
+            st15, _ = await put(appr, "/schedule/settings", settings15)
+            assert st15 == 403, st15
+            st15, _ = await post(appr, "/schedule/tick", {})
+            assert st15 == 403, st15
+            ok("settings.manage gates the writes (approver 403)")
+            # Bangla
+            await apg.goto(BASE + "/bn/master/schedule", wait_until="networkidle")
+            await expect(apg.get_by_role("heading", name="রিমাইন্ডার ও রিপোর্ট ডেলিভারি")).to_be_visible()
+            await expect(apg.get_by_text("আইনি রিমাইন্ডার")).to_be_visible()
+            await settle(apg); await apg.screenshot(path=f"{OUT}/962_schedule_bn.png")
+            await apg.close()
+            ok("schedule page in Bangla")
+        except Exception as e: fail(15, e)
+
         real = [e for e in errs if "418" not in e and "Failed to load resource" not in e]
         if real: failures.append(f"console errors: {real[:5]}")
         else: ok("no console errors")

@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, DrawbackClaim, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -42,6 +42,9 @@ interface Globals {
     accountingConfig: AccountingConfig
     returns: VatReturn[]; vatSettings: VatSettings
     trash: TrashEntry[]
+    /** R8.3: the schedule — the settings row, the fired reminders, the delivery schedules and their log */
+    reminderSettings?: ReminderSettings; reminders?: FiredReminder[]
+    deliverySchedules?: DeliverySchedule[]; deliveryLog?: DeliveryLogRow[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -67,6 +70,8 @@ export const compat = (): CompatModule => {
 /** Restores saved state before the compat bundle initialises (its stores use `globalThis.x ??= seed()`). */
 export function restoreGlobals(s: {
   db: Record<string, unknown>; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company
+  /** R8.3: the schedule — reminder settings, fired reminders, delivery schedules and their log (tables now) */
+  reminderSettings?: ReminderSettings; reminders?: FiredReminder[]; deliverySchedules?: DeliverySchedule[]; deliveryLog?: DeliveryLogRow[]
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
@@ -100,6 +105,8 @@ export function restoreGlobals(s: {
     accountingConfig: s.accountingConfig,
     returns: s.returns ?? [], vatSettings: s.vatSettings,
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
+    reminderSettings: s.reminderSettings, reminders: s.reminders ?? [],
+    deliverySchedules: s.deliverySchedules ?? [], deliveryLog: s.deliveryLog ?? [],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
@@ -508,6 +515,30 @@ export const mirror = {
   /** R5.6: the accounting configuration — one object, replaced in place so a receipt reads the closed books */
   accountingConfig: (): AccountingConfig => G.__dzDb!.accountingConfig,
   putAccountingConfig(c: AccountingConfig) { replaceObject(G.__dzDb!.accountingConfig, c) },
+  /** R8.3: the schedule — the reminder settings (one object, replaced in place), the fired reminders, the
+   *  delivery schedules and their log. The module writes the tables and these stay in step, so the notification
+   *  feed (which reads them through the compat bundle) never serves yesterday's reminders. */
+  reminderSettings: (): ReminderSettings => G.__dzDb!.reminderSettings!,
+  putReminderSettings(s: ReminderSettings) { replaceObject(G.__dzDb!.reminderSettings!, s) },
+  reminders: (): FiredReminder[] => G.__dzDb!.reminders!,
+  putReminders(list: FiredReminder[]) { const a = mirror.reminders(); a.splice(0, a.length, ...list) },
+  deliverySchedules: (): DeliverySchedule[] => G.__dzDb!.deliverySchedules!,
+  putDeliverySchedules(list: DeliverySchedule[]) { const a = mirror.deliverySchedules(); a.splice(0, a.length, ...list) },
+  findDeliverySchedule: (id: string) => mirror.deliverySchedules().find((s) => s.id === id),
+  putDeliverySchedule(s: DeliverySchedule) {
+    const list = mirror.deliverySchedules()
+    const cur = list.find((x) => x.id === s.id)
+    if (cur) replaceObject(cur, s)
+    else list.push(s)
+    return cur ?? s
+  },
+  removeDeliverySchedule(id: string) {
+    const list = mirror.deliverySchedules()
+    const i = list.findIndex((x) => x.id === id)
+    return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  deliveryLog: (): DeliveryLogRow[] => G.__dzDb!.deliveryLog!,
+  putDeliveryLog(list: DeliveryLogRow[]) { const a = mirror.deliveryLog(); a.splice(0, a.length, ...list) },
   /** R5.5: the production configuration — one object, replaced in place so `buildBatch` reads the new procedure */
   productionConfig: (): ProductionConfig => G.__dzDb!.productionConfig,
   putProductionConfig(c: ProductionConfig) { replaceObject(G.__dzDb!.productionConfig, c) },

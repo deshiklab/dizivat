@@ -255,6 +255,18 @@ ENDPOINTS = [
     E("POST", "/backups", "settings.manage", "Take a backup now (201)"),
     E("GET", "/backups/{backup}", "settings.manage", "Download a backup (application/gzip, `X-Backup-SHA256`); audited", ctype="application/gzip"),
     E("POST", "/backups/{backup}/verify", "settings.manage", "Re-hash a stored backup {id, ok, sha256, size, checkedAt}"),
+    # R8.3 — the reminder and delivery schedule
+    E("GET", "/schedule/settings", None, "R8.3: the reminder settings {return91, treasury, vds: {enabled, leads[] (days, newest first)}, updatedAt, updatedBy} — one row"),
+    E("PUT", "/schedule/settings", "settings.manage", "R8.3: update the reminder settings — lead times are whole days 1–60, at most five per deadline"),
+    E("GET", "/schedule/deliveries", None, "R8.3: the delivery schedules {rows: [{id, kind: vatDigest|receivablesDigest, frequency: monthly|weekly, day (day of month 1–28 / weekday 1 = Monday), recipients, enabled, lastRun?, nextRun, note?}]}"),
+    E("POST", "/schedule/deliveries", "settings.manage", "R8.3: add a delivery schedule {kind, frequency, day, recipients (user ids), enabled, note?} (201); a monthly VAT digest covers the month just closed, a weekly receivables digest the day it runs"),
+    E("GET", "/schedule/deliveries/{delivery}", None, "R8.3: one schedule"),
+    E("PUT", "/schedule/deliveries/{delivery}", "settings.manage", "R8.3: edit a schedule — the report itself is fixed (409 on a kind change: delete and re-create); nextRun re-derives from the new cadence"),
+    E("DELETE", "/schedule/deliveries/{delivery}", "settings.manage", "R8.3: delete a schedule (the log keeps what it already delivered)"),
+    E("GET", "/schedule/log", None, "R8.3: the delivery log — Page<DeliveryLogRow>, newest first; facet kind; each row carries the frozen document it delivered", page=True),
+    E("GET", "/schedule/log/{deliveryLog}", None, "R8.3: one delivered report {id, scheduleId, kind, period?, asOf, generatedAt, recipients, document} — the figures as they stood at delivery"),
+    E("GET", "/schedule/log/{deliveryLog}/document", None, "R8.3: the delivered document — CSV (default) or ?format=html for the printable page; re-printing a past delivery shows the frozen figures", ctype="text/csv"),
+    E("POST", "/schedule/tick", "settings.manage", "R8.3: run the schedule for today — the cron entrypoint (and the page's Run now): fires the reminders whose lead time has arrived (they then own their deadline in the notification feed), delivers the reports whose day has come and prunes the ones whose subject is gone; idempotent per day {date, fired[], pruned, delivered[]}"),
 ]
 
 # Free-text notes written under the endpoint table by --doc
@@ -324,6 +336,19 @@ def run():
     lines82 = s82.get(BASE + f"/accounting/statements/{st82['id']}").json()["lines"]
     fx["line"] = next(l["id"] for l in lines82 if l["status"] == "open")
     fx["stMatchLine"] = next(l["id"] for l in lines82 if l["status"] == "matched")
+    # R8.3 fixture: a schedule due today, so the tick has something to deliver — and a second tick proves the
+    # day cannot fire twice (the reminder ids and the (schedule, day) log key are the idempotency)
+    adm83 = S("admin")
+    dl83 = adm83.post(BASE + "/schedule/deliveries", json={"kind": "receivablesDigest", "frequency": "weekly", "day": 5, "recipients": ["u5", "u2"], "enabled": True, "note": "contract fixture"}).json()
+    fx["delivery"] = dl83["id"]
+    tick1 = adm83.post(BASE + "/schedule/tick", json={}).json()
+    check(any(d["scheduleId"] == dl83["id"] for d in tick1["delivered"]), "schedule tick delivers the due schedule")
+    check(tick1["date"] == "2026-09-25", "schedule tick runs for the demo today")
+    tick2 = adm83.post(BASE + "/schedule/tick", json={}).json()
+    check(not tick2["fired"] and not tick2["delivered"], "second tick of the day fires nothing")
+    log83 = adm83.get(BASE + "/schedule/log?kind=receivablesDigest&size=1").json()
+    check(log83["total"] >= 1 and log83["data"][0]["document"]["kind"] == "receivablesDigest", "delivery log carries the frozen receivables document")
+    fx["deliveryLog"] = log83["data"][0]["id"]
     for e in ENDPOINTS:
         path = e["p"].format(**fx); url = BASE + path; m = e["m"]
         # 401 for anonymous
@@ -549,6 +574,17 @@ def run():
         ("arif", "GET", "/mushak/6.10?from=bad&to=2026-08-31", None, 422, "from"),
         ("admin", "PUT", "/vat/settings", {}, 422, None),
         ("admin", "PUT", "/accounting/config", {}, 422, None),
+        # R8.3 — the schedule: schema 422s, the fixed-report 409, and the missing rows
+        ("admin", "PUT", "/schedule/settings", {"return91": {"enabled": True, "leads": []}, "treasury": {"enabled": True, "leads": [7]}, "vds": {"enabled": True, "leads": [7]}}, 422, "return91.leads"),
+        ("admin", "PUT", "/schedule/settings", {"return91": {"enabled": True, "leads": [0]}, "treasury": {"enabled": True, "leads": [7]}, "vds": {"enabled": True, "leads": [7]}}, 422, "return91.leads.0"),
+        ("admin", "POST", "/schedule/deliveries", {}, 422, "kind"),
+        ("admin", "POST", "/schedule/deliveries", {"kind": "vatDigest", "frequency": "weekly", "day": 9, "recipients": ["u5"]}, 422, "day"),
+        ("admin", "POST", "/schedule/deliveries", {"kind": "vatDigest", "frequency": "monthly", "day": 20}, 422, "recipients"),
+        ("arif", "GET", "/schedule/deliveries/nope", None, 404, None),
+        ("admin", "PUT", f"/schedule/deliveries/{fx['delivery']}", {"kind": "vatDigest", "frequency": "monthly", "day": 20, "recipients": ["u5"]}, 409, None),
+        ("admin", "DELETE", "/schedule/deliveries/nope", None, 404, None),
+        ("arif", "GET", "/schedule/log/nope", None, 404, None),
+        ("arif", "GET", "/schedule/log/nope/document", None, 404, None),
     ]
     for user, m, path, body, status, key in cases:
         r = S(user).request(m, BASE + path, json=body)

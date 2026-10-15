@@ -1,15 +1,18 @@
 import type { User } from "@/lib/auth/roles"
 import { can, ROLE_PERMS } from "@/lib/auth/roles"
-import type { AppNotification, Item, Purchase, Sale } from "@/lib/types"
+import type { AppNotification, DeliveryLogRow, FiredReminder, Item, Purchase, Sale } from "@/lib/types"
 import { TODAY } from "@/lib/company"
+import { REMINDER_TARGET, reminderTone } from "@/lib/schedule"
 import { auditStore } from "@/lib/mock/audit"
 import { db, withStock } from "@/lib/mock/db"
 import { userStore } from "@/lib/mock/users"
 
 const WEEK = 7 * 864e5
 
-/** What the notifications read: the documents awaiting an approval, the ones the user issued, and the stock levels. */
-export type NotificationSource = { sales: Sale[]; purchases: Purchase[]; items: Item[] }
+/** What the notifications read: the documents awaiting an approval, the ones the user issued, the stock levels,
+ *  and (R8.3) the reminders the schedule has fired and the reports delivered to this user. */
+export type NotificationSource = { sales: Sale[]; purchases: Purchase[]; items: Item[]
+  reminders?: FiredReminder[]; deliveryLog?: DeliveryLogRow[] }
 
 /** Builds the user's notifications on demand (Symfony will push via Mercure in R3; polling until then). */
 export function notificationsFor(user: User, src: NotificationSource = db,
@@ -45,15 +48,40 @@ export function notificationsFor(user: User, src: NotificationSource = db,
     })
   }
 
-  // Statutory deadlines (people who file or review returns)
+  // Statutory deadlines (people who file or review returns) — the R8.3 schedule's own reminders take over a
+  // deadline once it has fired for it (they are stored, configurable and persistent); until then the ambient
+  // D-21 window keeps showing what the calendar says, exactly as before
   if (can(perms, "doc.approve") || can(perms, "audit.view")) {
+    const fired = src.reminders ?? []
+    const covered = (kind: "treasury" | "return91", due: string) => fired.some((r) => r.kind === kind && r.due === due)
+    for (const r of fired) {
+      const days = Math.round((Date.parse(r.due) - Date.parse(TODAY)) / 864e5)
+      if (days < -30) continue // long past — the tick prunes these; the feed does not linger on them
+      out.push({
+        id: r.id, kind: "deadline", at: r.at, msg: "deadline",
+        values: { title: REMINDER_TARGET[r.kind].title, due: r.due, days },
+        href: REMINDER_TARGET[r.kind].href, tone: reminderTone(days),
+      })
+    }
     const [y, m] = TODAY.split("-").map(Number)
     const nm = m === 12 ? 1 : m + 1, ny = m === 12 ? y + 1 : y
     const due = `${ny}-${String(nm).padStart(2, "0")}-15`
     const days = Math.round((Date.parse(due) - Date.parse(TODAY)) / 864e5)
     if (days <= 21) {
-      out.push({ id: `deadline:tr6:${due}`, kind: "deadline", at: now, msg: "deadline", values: { title: "treasuryDeposit", due: `${due.slice(0, 8)}14`, days: days - 1 }, href: "/vat/tr-6", tone: days <= 7 ? "danger" : "info" })
-      out.push({ id: `deadline:r91:${due}`, kind: "deadline", at: now, msg: "deadline", values: { title: "return91", due, days }, href: "/vat/return-9-1", tone: days <= 7 ? "danger" : "info" })
+      if (!covered("treasury", `${due.slice(0, 8)}14`))
+        out.push({ id: `deadline:tr6:${due}`, kind: "deadline", at: now, msg: "deadline", values: { title: "treasuryDeposit", due: `${due.slice(0, 8)}14`, days: days - 1 }, href: "/vat/tr-6", tone: days <= 7 ? "danger" : "info" })
+      if (!covered("return91", due))
+        out.push({ id: `deadline:r91:${due}`, kind: "deadline", at: now, msg: "deadline", values: { title: "return91", due, days }, href: "/vat/return-9-1", tone: days <= 7 ? "danger" : "info" })
+    }
+  }
+
+  // Reports delivered to this user (R8.3) — the log's rows carry the frozen figures; the page opens on the log
+  if (can(perms, "settings.manage")) {
+    for (const d of (src.deliveryLog ?? []).filter((d) => d.recipients.includes(user.id)).slice(-5).reverse()) {
+      out.push({
+        id: `delivered:${d.id}`, kind: "delivery", at: d.generatedAt, msg: "reportDelivered",
+        values: { report: d.kind, period: d.period ?? d.asOf }, href: "/master/schedule", tone: "success",
+      })
     }
   }
 

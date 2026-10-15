@@ -108,6 +108,7 @@ export const NAV: NavGroup[] = [
       { key: "audit", href: "/master/audit", release: "R1", ready: true, perm: "audit.view" },
       { key: "dataImport", href: "/master/import", release: "R6", ready: true, perm: "master.edit" },
       { key: "backups", href: "/master/backups", release: "R6", ready: true, perm: "settings.manage" },
+      { key: "schedule", href: "/master/schedule", release: "R8", ready: true, perm: "settings.manage" },
     ],
   },
 ]

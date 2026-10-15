@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bell, CalendarClock, CheckCheck, CheckCircle2, FileClock, KeyRound, PackageX, XCircle, type LucideIcon } from "lucide-react"
+import { Bell, CalendarClock, CheckCheck, CheckCircle2, FileClock, FileSpreadsheet, KeyRound, PackageX, XCircle, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Link } from "@/i18n/navigation"
@@ -16,13 +16,14 @@ import { useShell } from "./shell-context"
 const TONE = { info: "text-info", warning: "text-warning", success: "text-success", danger: "text-danger" } as const
 const icon = (n: AppNotification): LucideIcon =>
   n.kind === "approvals" ? FileClock : n.kind === "deadline" ? CalendarClock : n.kind === "lowStock" ? PackageX
-    : n.kind === "security" ? KeyRound : n.msg === "docApproved" ? CheckCircle2 : XCircle
+    : n.kind === "security" ? KeyRound : n.kind === "delivery" ? FileSpreadsheet : n.msg === "docApproved" ? CheckCircle2 : XCircle
 
 /** Server-driven notifications, polled every 60 s (Mercure push replaces polling in R3). */
 export function Notifications() {
   const t = useTranslations("notifications")
   const ts = useTranslations("shell")
   const td = useTranslations("dashboard")
+  const tsch = useTranslations("schedule")
   const locale = useLocale()
   const qc = useQueryClient()
   const { setPwOpen } = useShell()
@@ -39,6 +40,7 @@ export function Notifications() {
     const v = n.values ?? {}
     switch (n.msg) {
       case "deadline": return t("deadline", { title: td(`deadline.${v.title}`), date: fmtDate(String(v.due), locale), days: fmtNum(Number(v.days), locale), n: Number(v.days) })
+      case "reportDelivered": return t("reportDelivered", { report: tsch(`report.${v.report}`), period: String(v.period) })
       case "approvalsSales": case "approvalsPurchases": case "lowStock": return t(n.msg, { count: Number(v.count), n: fmtNum(Number(v.count), locale), first: String(v.first ?? "") })
       default: return t(n.msg, v as Record<string, string>)
     }

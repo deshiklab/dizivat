@@ -264,7 +264,7 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement" | "schedule"
   /** R6.2 */
   | "ud" | "backup" | "access" | "import"
   /** R6.5 */
@@ -320,7 +320,7 @@ export type CompanySummary = Pick<Company, "name" | "bin" | "address" | "vatSlab
 export interface TariffLine { hsCode: string; description: string; cd: number; sd: number; vat: number; ait: number; rd: number; at: number; tti: number; chapter: string }
 
 /** Server-driven notifications (FE-S3-06) */
-export type NotificationKind = "approvals" | "decided" | "deadline" | "lowStock" | "security"
+export type NotificationKind = "approvals" | "decided" | "deadline" | "lowStock" | "security" | "delivery"
 export interface AppNotification {
   id: string
   kind: NotificationKind
@@ -1424,8 +1424,91 @@ export type ReturnAmendmentRow = ReturnAmendment & {
   applyBy: string
   /** decrease: deemed approved when the Commissioner has not decided within 30 days of filing */
   deemedOn?: string
-  /** tax computation of the return being amended, corrections applied (interest / payment once filed) */
+  /** tax computation of the return being amended (interest / payment once filed) */
   computation: ReturnComputation
   /** the figures being amended (the submitted return, or the previous amended return) */
   base: ReturnComputation
+}
+
+/* ── R8.3: statutory reminders + report delivery ───────────────────────── */
+
+/** The three statutory deadlines the reminder settings can watch: the Mushak 9.1 itself, the treasury deposit
+ *  that must precede it (TR-6, the day before) and the VDS certificates (Mushak 6.6) the period still owes. */
+export type ReminderKind = "return91" | "treasury" | "vds"
+export interface ReminderSettings {
+  /** per deadline: whether reminders are on, and the lead times in days a reminder fires at */
+  return91: { enabled: boolean; leads: number[] }
+  treasury: { enabled: boolean; leads: number[] }
+  vds: { enabled: boolean; leads: number[] }
+  updatedAt: string; updatedBy: string
+}
+/** A reminder the schedule has fired: one per (deadline, due date, lead) — the id makes re-running a day idempotent. */
+export interface FiredReminder {
+  id: string
+  kind: ReminderKind
+  /** the due date of the thing being reminded about (TR-6: the day before the return's due date) */
+  due: string
+  /** the lead time it fired at (days before the due date) */
+  lead: number
+  /** the tax period the deadline belongs to */
+  period: string
+  at: string
+}
+
+/** The two reports the delivery schedules can carry: the monthly VAT digest (the 9.1 figures as filed) and the
+ *  weekly receivables digest (open customer invoices and their ageing). */
+export type DeliveryKind = "vatDigest" | "receivablesDigest"
+export interface DeliverySchedule {
+  id: string
+  kind: DeliveryKind
+  /** monthly: the day of the month (1–28); weekly: the weekday (1 = Monday … 7 = Sunday) */
+  frequency: "monthly" | "weekly"
+  day: number
+  /** the users (ids) the report is delivered to */
+  recipients: string[]
+  enabled: boolean
+  lastRun?: string
+  nextRun: string
+  note?: string
+  createdBy: string; createdAt: string
+}
+/** One delivered report: the figures frozen at delivery time, so the log shows what the recipient saw then. */
+export interface DeliveryLogRow {
+  id: string
+  scheduleId: string
+  kind: DeliveryKind
+  /** monthly VAT digest: the tax period; weekly receivables: the day it ran */
+  period?: string
+  asOf: string
+  generatedAt: string
+  recipients: string[]
+  document: VatDigestDoc | ReceivablesDigestDoc
+}
+export interface VatDigestDoc {
+  kind: "vatDigest"
+  period: string
+  due: string
+  status: "open" | "draft" | "submitted" | "overdue"
+  submittedAt?: string
+  ackNo?: string
+  outputVat: number; inputVat: number
+  netVat: number; payableVat: number; payableSd: number
+  depositedVat: number; shortVat: number; shortSd: number
+  closingVat: number; openingVat: number
+  drafts: number
+  deposits: { count: number; amount: number; pending: number }
+  /** VDS certificates (Mushak 6.6) issued for the period's purchases */
+  vdsIssued: { count: number; amount: number }
+}
+export interface ReceivablesDigestDoc {
+  kind: "receivablesDigest"
+  asOf: string
+  /** open customer invoices and the total still due on them */
+  invoices: { count: number; amount: number }
+  /** the same dues bucketed by invoice age, exactly as the party statements age them */
+  ageing: { d0_30: number; d31_60: number; d61_90: number; d90: number }
+  /** the customers that owe the most, at most ten */
+  top: { partyId: string; name: string; amount: number }[]
+  /** receipts not allocated to any invoice yet (the party statements' `advances`) */
+  advances: number
 }

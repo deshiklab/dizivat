@@ -61,7 +61,8 @@
     "backups": "Backups",
     "bondRegister": "Bond consumption register",
     "exportProceeds": "Export proceeds (PRC)",
-    "returnApps": "Return applications (9.3 / 9.4)"
+    "returnApps": "Return applications (9.3 / 9.4)",
+    "schedule": "Schedule"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -581,7 +582,7 @@
       "badge": "Service",
       "new": "New service sale",
       "newTitle": "New service sale",
-      "newSub": "Mushak 6.3 for services — dyeing, knitting or print job work, samples, testing … No stock moves; VDS applies when the buyer withholds.",
+      "newSub": "Mushak 6.3 for services — job work, cylinders, design … No stock moves; VDS applies when the buyer withholds.",
       "itemsHint": "Pick the service codes supplied. VAT is at the service rate; SD does not apply.",
       "select": "Select service…",
       "search": "Search service or code…",
@@ -1370,7 +1371,8 @@
       "lateFiling": "Mushak 9.3 application",
       "returnAmendment": "Mushak 9.4 application",
       "tariff": "Tariff",
-      "statement": "Bank statement"
+      "statement": "Bank statement",
+      "schedule": "Schedule"
     },
     "facet": {
       "entity": "Record type",
@@ -1490,7 +1492,8 @@
     "docApproved": "{actor} approved {ref}",
     "docCancelled": "{actor} cancelled {ref}",
     "deadline": "{title} — due {date} ({n, plural, one {{days} day} other {{days} days}} left)",
-    "lowStock": "{count, plural, one {{n} item is} other {{n} items are}} below reorder level, starting with {first}"
+    "lowStock": "{count, plural, one {{n} item is} other {{n} items are}} below reorder level, starting with {first}",
+    "reportDelivered": "{report} for {period} delivered"
   },
   "stock": {
     "transfer": {
@@ -2016,7 +2019,7 @@
     "tabHistory": "History",
     "draftNote": "Draft — stock and output VAT are adjusted when it is approved.",
     "print": "Print 6.7",
-    "outputNote": "Output tax to reduce in Mushak 9.1 (VAT in note 31, SD in note 39): ৳",
+    "outputNote": "Output tax (VAT + SD) to reduce in Mushak 9.1 (note 19): ৳",
     "approved": "{no} approved — stock restored",
     "saved": "{no} saved as draft",
     "deleted": "Draft {no} deleted",
@@ -2147,7 +2150,7 @@
     "hint": {
       "effectiveDate": "Batches issued on or after this date use this version.",
       "licenseDate": "Date submitted to the VAT circle (optional).",
-      "amendmentReason": "e.g. yarn price increase, new fabric composition…"
+      "amendmentReason": "e.g. film price increase, new laminate structure…"
     },
     "field": {
       "item": "Finished good",
@@ -3993,6 +3996,144 @@
       },
       "neverHint": "No restore drill is recorded for this database yet.",
       "how": "A backup counts only once it has been restored. The drill restores the newest backup into a fresh database, compares every table and document, verifies the audit chain and starts the app on it. See Help → Restoring a backup and the restore drill."
+    }
+  },
+  "schedule": {
+    "title": "Reminders & report delivery",
+    "subtitle": "Statutory deadlines reminded ahead of time, and the standing reports delivered on their schedule — run the day now or let the cron line do it",
+    "error": "Could not load the schedule",
+    "saved": "Reminder settings saved",
+    "ran": "Schedule run: {reminders, plural, one {# reminder} other {# reminders}} fired, {reports, plural, one {# report} other {# reports}} delivered",
+    "ranNothing": "Schedule run: nothing due today",
+    "runNow": "Run now",
+    "runHint": "Fires the reminders whose lead time has arrived and delivers the reports whose day has come. Safe to re-run — nothing fires twice.",
+    "cron": "Automation",
+    "cronHint": "In production a cron line calls POST /api/v1/schedule/tick once a day (say 07:00 Asia/Dhaka); the button does the same on demand.",
+    "reminders": {
+      "title": "Statutory reminders",
+      "hint": "Each lead time fires its own reminder — 14, 7 and 1 days reads as two weeks out, one week out and the day before.",
+      "leads": "Lead times (days)",
+      "enabled": "Remind",
+      "save": "Save reminders",
+      "noLeads": "Enter at least one lead time",
+      "kind": {
+        "return91": {
+          "label": "Mushak 9.1 return",
+          "hint": "The monthly return itself, due the 15th (or the next working day)."
+        },
+        "treasury": {
+          "label": "Treasury deposit (TR-6)",
+          "hint": "The net VAT has to be deposited before the return is filed — reminded a day early."
+        },
+        "vds": {
+          "label": "VDS certificates (Mushak 6.6)",
+          "hint": "Purchase VDS still to issue within its window after filing."
+        }
+      }
+    },
+    "report": {
+      "vatDigest": "VAT digest",
+      "receivablesDigest": "Receivables digest"
+    },
+    "frequency": {
+      "monthly": "Monthly",
+      "weekly": "Weekly"
+    },
+    "monthlyDay": "Day of the month",
+    "weekday": "Weekday",
+    "weekdays": [
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+      "Sunday"
+    ],
+    "next": "Next: {date}",
+    "last": "Last: {date}",
+    "deliveries": {
+      "title": "Report delivery",
+      "hint": "The VAT digest freezes the 9.1 figures of the month just closed; the receivables digest lists the open customer invoices with their ageing.",
+      "add": "New schedule",
+      "edit": "Edit schedule",
+      "empty": "No delivery schedules yet.",
+      "recipients": "Recipients",
+      "pickRecipients": "Pick at least one recipient",
+      "note": "Note (optional)",
+      "notePh": "What this delivery is for",
+      "kind": "Report",
+      "enabled": "Active",
+      "created": "Schedule created",
+      "updated": "Schedule updated",
+      "deleted": "Schedule deleted",
+      "deleteOne": "Delete this schedule?",
+      "col": {
+        "kind": "Report",
+        "frequency": "Runs",
+        "recipients": "Recipients",
+        "next": "Next",
+        "enabled": "Active",
+        "actions": "Actions"
+      }
+    },
+    "log": {
+      "title": "Delivery log",
+      "empty": "Nothing delivered yet.",
+      "col": {
+        "at": "Delivered",
+        "kind": "Report",
+        "period": "Period / as of",
+        "recipients": "Recipients",
+        "actions": "Actions"
+      },
+      "view": "View",
+      "document": "Delivered report",
+      "download": "CSV",
+      "print": "Print",
+      "nRecipients": "{n, plural, one {# recipient} other {# recipients}}"
+    },
+    "doc": {
+      "vatDigest": {
+        "period": "Tax period",
+        "status": "Status",
+        "due": "Due date",
+        "submitted": "Submitted",
+        "outputVat": "Output VAT (14)",
+        "inputVat": "Input tax credit (22)",
+        "netVat": "Net VAT (50)",
+        "payableVat": "Payable VAT",
+        "payableSd": "Payable SD",
+        "depositedVat": "VAT deposited (58)",
+        "shortfall": "Shortfall",
+        "closingVat": "Closing balance (65)",
+        "deposits": "TR-6 deposits",
+        "vdsIssued": "VDS certificates (6.6)"
+      },
+      "receivablesDigest": {
+        "asOf": "As of",
+        "invoices": "Open invoices",
+        "amount": "Amount due",
+        "ageing": "Ageing",
+        "d0_30": "0–30 days",
+        "d31_60": "31–60 days",
+        "d61_90": "61–90 days",
+        "d90": "Over 90 days",
+        "advances": "Customer advances",
+        "top": "Top debtors"
+      }
+    },
+    "validation": {
+      "required": "Required",
+      "tooMany": "At most 5 lead times",
+      "weekday": "Weekly runs take a weekday (1 = Monday)"
+    },
+    "disabled": "Off",
+    "docStatus": {
+      "open": "Open",
+      "draft": "Draft",
+      "submitted": "Submitted",
+      "overdue": "Overdue"
     }
   },
   "bond": {

@@ -2,7 +2,7 @@
  * Language-neutral article registry: order, category, the app screens each article documents and related reading.
  * Small on purpose — the shell imports it for "Help for this page"; article text lives in ./en and ./bn.
  */
-export const HELP_UPDATED = "2026-10-15"
+export const HELP_UPDATED = "2026-10-16"
 
 export const CATEGORIES = ["gettingStarted", "sales", "purchase", "inventory", "production", "accounting", "nbrVat", "masterData", "reference"] as const
 export type Category = (typeof CATEGORIES)[number]
@@ -64,6 +64,7 @@ export const REGISTRY = {
   "audit-log": { category: "masterData", routes: ["/master/audit"], related: ["users-and-roles", "document-lifecycle"] },
   "backups-and-data-import": { category: "masterData", routes: ["/master/backups", "/master/import"], related: ["items-and-hs-codes", "customers-and-vendors"] },
   "backup-restore": { category: "masterData", routes: ["/master/backups"], related: ["backups-and-data-import", "audit-log"] },
+  "reminders-and-delivery": { category: "masterData", routes: ["/master/schedule"], related: ["vat-return-9-1", "treasury-tr6", "backups-and-data-import"] },
   "vat-officer-access": { category: "masterData", related: ["users-and-roles", "audit-log"] },
 
   "document-lifecycle": { category: "reference", related: ["sales-invoices", "vat-return-9-1"] },

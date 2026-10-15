@@ -186,6 +186,16 @@ export {
   booksBalanceAt, matchBankLine, planAnswer, planStatement, statementInput, statementSpec, statementView,
   type PlannedLine, type StatementPlanResult,
 } from "@/app/api/v1/_r8"
+// R8.3: the schedule rules, shared the same way — what the reminder settings and the delivery schedules may
+// hold, which statutory deadlines stand today, what a run of the schedule fires and delivers, and the frozen
+// figures a delivered document re-prints. The rows live in `reminder_settings` / `reminders` /
+// `delivery_schedules` / `delivery_log`; the cadence helpers the page itself shows come from `lib/schedule`.
+export {
+  deliveryDocumentResponse, deliveryLogSpec, deliveryRule, deliveryDocument, receivablesDigestDocument,
+  reminderSettingsRule, reminderTargets, runSchedule, scheduleRef, REMINDER_DIFF_FIELDS, DELIVERY_DIFF_FIELDS,
+  type ScheduleRun,
+} from "@/app/api/v1/_r83"
+export { nextRunAfter, reminderTone, REMINDER_TARGET } from "@/lib/schedule"
 
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
 // duty per line) variants, priced by the same functions the mock and the static demo run.

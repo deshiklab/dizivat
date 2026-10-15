@@ -5415,6 +5415,77 @@ def run():
         check(psql("select count(*) from bank_statements") == str(int(st_before) + 2),
               "…the drill's two statements land in the table (earlier suites' imports ride along)")
 
+        # ── R8.3: the reminder and delivery schedule ───────────────────────────────────────────────
+        print("\nR8.3: the reminder and delivery schedule")
+        # the settings row: seeded by the boot, served from the table (jsonb round-trip included)
+        cur = admin.get(f"{BASE}/schedule/settings").json()
+        check(set(cur) >= {"return91", "treasury", "vds"} and cur["return91"]["leads"][0] >= 1,
+              "R8.3: the reminder settings row answers with the three deadlines and their lead times")
+        check(psql("select count(*) from reminder_settings") == "1", "…exactly one settings row in the table")
+        seeded = admin.get(f"{BASE}/schedule/deliveries").json()["rows"]
+        check({s["id"] for s in seeded} >= {"dl1", "dl2"}, "the two seeded delivery schedules are listed")
+        check(psql("select next_run from delivery_schedules where id = 'dl1'") == "2026-10-20",
+              "…the monthly digest next runs on the 20th of the month after the demo today")
+        log_seeded = admin.get(f"{BASE}/schedule/log/dx1").json()
+        check(log_seeded["period"] == "2026-08" and log_seeded["document"]["status"] == "submitted",
+              "the seeded delivery (the August digest, as filed) is in the log")
+        # a lead time that has arrived fires its reminder — its own lead, so the earlier suites' ticks
+        # (e2e_r4 §15 fired lead 25, contract none) cannot have fired it already
+        r = admin.put(f"{BASE}/schedule/settings", json={**cur, "return91": {"enabled": True, "leads": [30]}})
+        check(r.status_code == 200 and r.json()["return91"]["leads"] == [30], "the settings row takes an edit")
+        rem_before = int(psql("select count(*) from reminders"))
+        log_before = int(psql("select count(*) from delivery_log"))
+        r = admin.post(f"{BASE}/schedule/deliveries", json={"kind": "vatDigest", "frequency": "monthly", "day": 25,
+                                                            "recipients": ["u5"], "enabled": True, "note": "native drill"})
+        ds = r.json()
+        check(r.status_code == 201 and ds["nextRun"] == "2026-09-25", "a monthly schedule on the 25th is due on the demo today")
+        tick = admin.post(f"{BASE}/schedule/tick").json()
+        fired_ids = [f["id"] for f in tick["fired"]]
+        check("rem:return91:2026-10-15:30" in fired_ids, "the tick fires the reminder whose lead time has arrived")
+        check(len(tick["delivered"]) == 1 and tick["delivered"][0]["scheduleId"] == ds["id"] and tick["delivered"][0]["period"] == "2026-08",
+              "…and delivers the due schedule — the monthly digest covers the month just closed")
+        tick2 = admin.post(f"{BASE}/schedule/tick").json()
+        check(not tick2["fired"] and not tick2["delivered"], "a second tick of the day changes nothing")
+        check(psql("select count(*) from reminders") == str(rem_before + 1), "…the reminder is one row in its table")
+        check(psql("select count(*) from delivery_log") == str(log_before + 1), "…the delivery is one row in its table")
+        # the fired reminder owns its deadline in the feed; the delivery notifies its recipients
+        notif = admin.get(f"{BASE}/notifications").json()["items"]
+        check(any(n["id"] == "rem:return91:2026-10-15:30" for n in notif), "the fired reminder is in the notification feed")
+        check(any(n["id"] == "deadline:r91:2026-10-15" for n in notif) is False, "…and the calendar's own entry for that deadline is gone")
+        check(any(n["id"].startswith("delivered:") for n in notif), "the delivered report notifies its recipients")
+        # the frozen document re-prints — CSV from the log row, figures as they stood
+        doc_id = tick["delivered"][0]["id"]
+        r = admin.get(f"{BASE}/schedule/log/{doc_id}/document")
+        check(r.status_code == 200 and r.headers["content-type"].startswith("text/csv") and "Net VAT (50)" in r.text,
+              "the delivered document downloads as the CSV of its frozen figures")
+        r = admin.get(f"{BASE}/schedule/log/{doc_id}/document?format=html")
+        check(r.status_code == 200 and "VAT digest" in r.text and r.headers["content-type"].startswith("text/html"),
+              "…or as the printable HTML")
+        # an edit re-derives the cadence; a disabled schedule never runs; a delete keeps the log
+        r = admin.put(f"{BASE}/schedule/deliveries/{ds['id']}", json={"kind": "vatDigest", "frequency": "monthly", "day": 25,
+                                                                     "recipients": ["u5", "u1"], "enabled": False, "note": "paused"})
+        check(r.status_code == 200 and r.json()["enabled"] is False, "a schedule can be paused")
+        r = admin.put(f"{BASE}/schedule/deliveries/{ds['id']}", json={"kind": "receivablesDigest", "frequency": "weekly", "day": 1,
+                                                                     "recipients": ["u5"], "enabled": True})
+        check(r.status_code == 409, "a schedule cannot change its report (409 — delete and re-create)")
+        r = admin.post(f"{BASE}/schedule/deliveries", json={"kind": "receivablesDigest", "frequency": "weekly", "day": 5,
+                                                            "recipients": [], "enabled": True})
+        check(r.status_code == 422, "a schedule needs at least one recipient (422)")
+        r = admin.delete(f"{BASE}/schedule/deliveries/{ds['id']}")
+        check(r.status_code == 200 and psql(f"select count(*) from delivery_schedules where id = '{ds['id']}'") == "0",
+              "a deleted schedule leaves its table")
+        check(psql(f"select count(*) from delivery_log where schedule_id = '{ds['id']}'") == "1",
+              "…but the log keeps what it already delivered")
+        # everything above is table state — it survives a restart with the feed intact
+        before = admin.get(f"{BASE}/schedule/settings").json()
+        log_ids = [x["id"] for x in admin.get(f"{BASE}/schedule/log", params={"size": 50}).json()["data"]]
+        restart()
+        check(admin.get(f"{BASE}/schedule/settings").json() == before, "R8.3: the settings row survives the restart")
+        check([x["id"] for x in admin.get(f"{BASE}/schedule/log", params={"size": 50}).json()["data"]] == log_ids,
+              "…the delivery log too, rows and frozen documents")
+        check(any(n["id"] == "rem:return91:2026-10-15:30" for n in admin.get(f"{BASE}/notifications").json()["items"]),
+              "…and the fired reminder is still in the feed")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
@@ -5440,10 +5511,11 @@ def run():
         # the whole map after every request, so a drill that keeps only the ids it cares about would let
         # notifications the suite read earlier pop back up as unread and fail the round-trip check below
         have = json.loads(psql("select notif_read::text from users where username = 'arif'") or "[]")
-        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 25, "25 migrations have run on this database")
-        # un-apply the last TWO journal rows: the migrator replays by position, so the boot has to re-run
-        # 0024 (R8.2's bank statements — idempotent) to reach 0023 (the notif_read lift) again
-        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 2)")
+        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 26, "26 migrations have run on this database")
+        # un-apply the last THREE journal rows: the migrator replays by position, so the boot has to re-run
+        # 0025 (R8.3's schedule) and 0024 (R8.2's bank statements — both idempotent) to reach 0023 (the
+        # notif_read lift) again
+        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 3)")
         psql("alter table users drop column notif_read")
         ensure_compat_state()
         ids = [*have, "finale:migrated"]
@@ -5455,7 +5527,15 @@ def run():
         check(psql(f"select count(*) from users where username = 'arif' and notif_read ? 'finale:migrated'") == "1"
               and psql(f"select count(*) from users where username = 'arif' and notif_read ? '{nid}'") == "1",
               "…and it lifted the read ids out of the rewound snapshot onto the row")
-        check(psql(COMPAT_GONE) == "t", "…and the boot dropped the drained table after adopting it")
+        # the drop is the boot's LAST act: poll for it, so a health-check answered by the dying
+        # previous process (its shutdown grace overlaps the new boot's migrations) cannot race the check
+        gone = False
+        for _ in range(20):
+            if psql(COMPAT_GONE) == "t":
+                gone = True
+                break
+            time.sleep(0.5)
+        check(gone, "…and the boot dropped the drained table after adopting it")
         nn3 = arif.get(f"{BASE}/notifications").json()
         check(nn3.get("unread") == unread - 1,
               f"…nothing lost on the upgrade: the read ids survived the round trip "

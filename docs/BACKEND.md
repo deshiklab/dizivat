@@ -1169,6 +1169,41 @@ on the record, not in someone's head.
   `api_native.py` drills the same against PostgreSQL incl. the restart; `contract.py` carries the rows
   for both runtimes (mock and native agree, validation order included).
 
+## R8.3 — the reminder and delivery schedule
+
+The compliance calendar only works if somebody watches it. The settings say how many days ahead each of the
+three statutory deadlines is reminded — the Mushak 9.1 itself, the TR-6 deposit that must precede it, and the
+VDS certificates the period still owes. Every lead time that has arrived fires a **stored** reminder, which
+then owns its deadline in the notification feed (the calendar's own three-week window keeps showing it until
+the first lead fires, so a default install behaves exactly as before). Beside the reminders, delivery
+schedules carry the standing reports — the monthly **VAT digest** (the 9.1 figures of the month just closed,
+frozen at delivery time) and the weekly **receivables digest** (open customer invoices, aged the way the
+party statements age them, plus the top debtors) — each delivered to a list of users and logged with the very
+figures the recipients saw.
+
+- **Four tables** (migration `0025`): `reminder_settings` (the one row, the settings as jsonb), `reminders`
+  (one row per fired reminder — the id `rem:<kind>:<due>:<lead>` is the idempotency), `delivery_schedules`
+  (cadence, recipients, `next_run`) and `delivery_log` (one row per delivered report, unique on
+  `(schedule_id, as_of)` so a day cannot deliver twice, the frozen `document` as jsonb).
+- **`POST /api/v1/schedule/tick`** (`settings.manage`) is the cron entrypoint — in production one line calls
+  it a day (`07:00` Asia/Dhaka), and the page's *Run now* button does the same on demand. It is idempotent:
+  the plan (mock `_r83.ts`, shared through the compat bundle; native `schedule.ts` applies it inside one
+  transaction under the state guard) fires only reminders whose `(deadline, lead)` is not stored yet,
+  delivers only schedules whose day has come and no log row exists for, and prunes reminders whose subject
+  is gone (the return was filed, the VDS issued, the deadline long past).
+- **The endpoints**: `GET/PUT /schedule/settings`, `GET/POST /schedule/deliveries` + `/:id` (PUT/DELETE — a
+  schedule cannot change its report, 409), `GET /schedule/log` (a Page, newest first, the mock's own query
+  engine on both runtimes), `GET /schedule/log/:id` and `GET /schedule/log/:id/document` — the frozen
+  document as CSV (the default) or the printable HTML.
+- **The notifications**: the fired reminders ride the same feed as the calendar's own entries
+  (`notificationsFor` merges the stored rows and suppresses the computed one for a deadline the schedule
+  has taken over), and each delivery notifies its recipients with the period it covered.
+- **The screen**: `/master/schedule` (Settings group, `settings.manage`) — the three reminder cards, the
+  delivery register with its editor, the log with the document viewer, and *Run now*. `e2e_r4.py` §15 walks
+  it in the browser; `api_native.py` drills it against PostgreSQL incl. the restart; `contract.py` carries
+  the rows for both runtimes. A database seeded before R8.3 gets the default settings and the two default
+  schedules by the boot's adoption leg (an empty log — the first tick fills it).
+
 ## Tables
 
 | Table | Purpose |
@@ -1207,6 +1242,10 @@ on the record, not in someone's head.
 | `money_accounts` | **R5.6:** the money accounts — bank, mobile wallet or cash box; the kind's own columns (branch and account type, wallet type and operator) guarded by checks; the balance is *derived*, not stored |
 | `money_docs` | **R5.6:** receipts (MR-) and payments (PV-) — `kind` tells them apart; the party as printed, the method, the account, the cheque block, the amount, the charge, what was allocated and what is on account, the process, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired; checks keep the cheque block with its method and the allocation within the amount |
 | `bank_statements` / `bank_statement_lines` | **R8.2:** an imported statement (account, period, keyed closing balance, totals) and its lines in file order, each `open / matched / receipt / charge / ignored` with what it matched and the money document created from it |
+| `reminder_settings` (single row) | **R8.3** the reminder settings as one jsonb object: the three deadlines, each with `enabled` and its lead times |
+| `reminders` | **R8.3** one row per reminder the schedule has fired (`rem:<kind>:<due>:<lead>` — the id is the idempotency) |
+| `delivery_schedules` | **R8.3** the report delivery schedules: kind, cadence (monthly day / weekly weekday), recipients, `last_run`, `next_run` |
+| `delivery_log` | **R8.3** one row per delivered report, unique on `(schedule_id, as_of)`, carrying the frozen figures as `document` jsonb |
 | `money_allocations` | **R5.6:** the invoices a receipt or payment settles — the invoice's id, number, date and total beside the amount set against it, one row per invoice; primary key (document, position) |
 | `treasury_deposits` | **R5.6:** a treasury challan (TR-6) — the head and its economic code, the tax period, the challan number (unique) and date, the bank, the company account the money left, the amount and the depositor; `deleted_at` keeps a deleted draft's id and number retired |
 | `vds_entries` | **R5.6:** a VDS certificate (Mushak 6.6) — the invoice it was written against, the party as printed, the value and VAT subject to VDS, the amount withheld and what it settled (`settled`), and the treasury challan a purchase certificate was deposited with; the challan block belongs to `purchase` |

@@ -7,7 +7,7 @@ import type { RealisationInput, UdInput } from "../schemas"
 import type { UdFit } from "../rmg"
 import type { BondUdRegister, BondUdRow, DrawbackClaimList, DrawbackClaimRow } from "../types"
 import type { BondUdInputT, ClaimActionInputT, SettleInputT } from "../schemas"
-import type { LateFilingRow, PrcBatch, PrcMatchResult, ProceedsOverview, ReturnAmendmentRow } from "../types"
+import type { LateFilingRow, PrcBatch, PrcMatchResult, ProceedsOverview, ReturnAmendmentRow, DeliveryLogRow, DeliverySchedule, FiredReminder, ReminderSettings } from "../types"
 import type { AmendActionInputT, AmendmentInputT, LateActionInputT, LateFilingInputT, PrcMatchInputT, PrcPostInputT, PrcReverseInputT } from "../schemas"
 import { appPathname, appUrl } from "../base-path"
 
@@ -368,6 +368,21 @@ export const api = {
     create: () => req<BackupRow>("/backups", { method: "POST" }),
     verify: (id: string) => req<BackupVerify>(`/backups/${id}/verify`, { method: "POST" }),
     downloadUrl: (id: string) => `${BASE}/backups/${id}`,
+  },
+  /* ── R8.3: the reminder and delivery schedule ── */
+  schedule: {
+    settings: () => req<ReminderSettings>("/schedule/settings"),
+    putSettings: (b: ReminderSettings) => req<ReminderSettings>("/schedule/settings", { method: "PUT", body: JSON.stringify(b) }),
+    deliveries: () => req<{ rows: DeliverySchedule[] }>("/schedule/deliveries"),
+    createDelivery: (b: Omit<DeliverySchedule, "id" | "lastRun" | "nextRun" | "createdBy" | "createdAt">) =>
+      req<DeliverySchedule>("/schedule/deliveries", { method: "POST", body: JSON.stringify(b) }),
+    putDelivery: (id: string, b: Omit<DeliverySchedule, "id" | "lastRun" | "nextRun" | "createdBy" | "createdAt">) =>
+      req<DeliverySchedule>(`/schedule/deliveries/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+    deleteDelivery: (id: string) => req<{ ok: boolean }>(`/schedule/deliveries/${id}`, { method: "DELETE" }),
+    log: (params: ListParams = {}) => req<Page<DeliveryLogRow>>(`/schedule/log${qs(params)}`),
+    logEntry: (id: string) => req<DeliveryLogRow>(`/schedule/log/${id}`),
+    tick: () => req<{ date: string; fired: FiredReminder[]; pruned: number; delivered: DeliveryLogRow[] }>("/schedule/tick", { method: "POST" }),
+    documentUrl: (id: string, format: "csv" | "html" = "csv") => `${BASE}/schedule/log/${id}/document?format=${format}`,
   },
   import: {
     run: (b: { entity: ImportEntity; dryRun: boolean; rows: Record<string, unknown>[] }) => req<ImportResult>("/import", { method: "POST", body: JSON.stringify(b) }),

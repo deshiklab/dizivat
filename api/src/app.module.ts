@@ -6,6 +6,7 @@ import { db } from "./db/client"
 import { AccountingConfigController, AccountingConfigService, BankStatementsController, BankStatementsService, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ReceiptsController, StatementController } from "./modules/accounting"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
+import { ScheduleController, ScheduleService } from "./modules/schedule"
 import { BatchesController, BatchesService } from "./modules/batches"
 import { DerivedService, ItemLedgerController, LotsController, StockController, SubcontractController } from "./modules/derived"
 import { AuthController, MeController, UsersController, UsersService } from "./modules/identity"
@@ -42,6 +43,8 @@ const NATIVE_CONTROLLERS = [
   BomsController, ProductionConfigController, WorkOrdersController,
   MoneyAccountsController, ReceiptsController, PaymentsController, OpenInvoicesController, StatementController, AccountingConfigController,
   BankStatementsController,
+  // R8.3: the reminder and delivery schedule — settings, schedules, log, documents, the tick
+  ScheduleController,
   StockController, ItemLedgerController, LotsController, SubcontractController,
   SalesController, VerifyController,
   // `vat/vds/eligible` is registered before `vat/vds/:id`: Express matches a dynamic segment first otherwise, and
@@ -74,13 +77,13 @@ const NATIVE_CONTROLLERS = [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
-    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService, UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
-    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService,
+    TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService,
     UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
   ],
 })

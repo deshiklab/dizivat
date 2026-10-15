@@ -23,7 +23,7 @@ import type { Request, Response } from "express"
 import type { ZodError } from "zod"
 import type { User } from "@/lib/auth/roles"
 import { toCSV } from "@/lib/mock/query"
-import type { Item, OpeningEntry, Party, Purchase, Sale } from "@/lib/types"
+import type { DeliveryLogRow, FiredReminder, Item, OpeningEntry, Party, Purchase, Sale } from "@/lib/types"
 import type { OnboardingWorld } from "@/app/api/v1/_r62"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, zodErrors } from "../common/http"
@@ -48,7 +48,7 @@ type DashboardSource = MovementSource & ReturnSource
 /** What the ⌘K palette searches: the two invoice registers, the SKUs and both party books. */
 type SearchSource = { sales: Sale[]; purchases: Purchase[]; items: Item[]; customers: Party[]; vendors: Party[] }
 /** What the notifications read: the documents awaiting an approval, the ones the user issued, and the stock levels. */
-type NotificationSource = { sales: Sale[]; purchases: Purchase[]; items: Item[] }
+type NotificationSource = { sales: Sale[]; purchases: Purchase[]; items: Item[]; reminders?: FiredReminder[]; deliveryLog?: DeliveryLogRow[] }
 /** What a bulk import reads and writes: the SKUs and the two party books. */
 type ImportSource = { items: Item[]; customers: Party[]; vendors: Party[] }
 
@@ -112,7 +112,10 @@ export class BooksService {
    */
   async notifications(user: User) {
     const movement = await this.derived.source()
-    const src: NotificationSource = { sales: movement.sales, purchases: movement.purchases, items: movement.items }
+    // R8.3: the reminders the schedule has fired and the reports delivered to this user ride along — they are
+    // rows now, kept in step with the tables, so the feed never serves yesterday's reminders
+    const src: NotificationSource = { sales: movement.sales, purchases: movement.purchases, items: movement.items,
+      reminders: mirror.reminders(), deliveryLog: mirror.deliveryLog() }
     const events = mirror.audit().events
     return compat().notificationsFor(user, src, { events, read: mirror.notifRead(user.id) })
   }

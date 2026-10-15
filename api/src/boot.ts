@@ -14,7 +14,7 @@ import type {
 } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, compatState, items, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
+import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, compatState, items, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -45,6 +45,8 @@ import { assembleBondUds, bondUdGarmentRows, bondUdInputRows, bondUdValues, mark
 import { amendmentValues, lateFilingValues, markLateFilings, markReturnAmendments, toAmendment, toLateFiling } from "./modules/returnapps"
 import { markPrcBatches, prcBatchValues, toPrcBatch } from "./modules/proceeds"
 import { claimValues, markClaims, toClaim } from "./modules/claims"
+import { deliveryLogValues, reminderValues, scheduleValues, toDeliveryLog, toDeliverySchedule, toFiredReminder } from "./modules/schedule"
+import { DEFAULT_REMINDER_SETTINGS, seedDeliverySchedules } from "@/lib/mock/seed-r83"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
@@ -221,6 +223,11 @@ async function seed(log: (m: string) => void) {
     for (let i = 0; i < demoReturnAmendments.length; i += 500) await tx.insert(returnAmendments).values(demoReturnAmendments.slice(i, i + 500).map(amendmentValues))
     for (let i = 0; i < demoPrcBatches.length; i += 500) await tx.insert(prcBatches).values(demoPrcBatches.slice(i, i + 500).map(prcBatchValues))
     for (let i = 0; i < demoDrawbackClaims.length; i += 500) await tx.insert(drawbackClaims).values(demoDrawbackClaims.slice(i, i + 500).map(claimValues))
+    // R8.3: the schedule — the reminder settings row, the (empty) reminders, the delivery schedules and the seeded log
+    await tx.insert(reminderSettings).values({ id: 1, settings: m.db.reminderSettings })
+    for (let i = 0; i < m.db.reminders.length; i += 500) await tx.insert(reminders).values(m.db.reminders.slice(i, i + 500).map(reminderValues))
+    for (let i = 0; i < m.db.deliverySchedules.length; i += 500) await tx.insert(deliverySchedules).values(m.db.deliverySchedules.slice(i, i + 500).map(scheduleValues))
+    for (let i = 0; i < m.db.deliveryLog.length; i += 500) await tx.insert(deliveryLog).values(m.db.deliveryLog.slice(i, i + 500).map(deliveryLogValues))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -367,6 +374,23 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   // R6.5 (drawback claims): the DEDO claims — live rows; a deleted draft is stamped, its exports claimable again
   const drawbackClaimDbRows = await db.select().from(drawbackClaims).orderBy(asc(drawbackClaims.ord))
   const liveDrawbackClaims: DrawbackClaim[] = drawbackClaimDbRows.filter((r) => !r.deletedAt).map(toClaim)
+  // R8.3: the schedule — the settings row, the fired reminders, the delivery schedules and their log. A database
+  // seeded before R8.3 has none of them: it gets the default reminders settings and the two default schedules,
+  // with an empty log (the first tick fills it) — the same defaults the fresh seed writes.
+  const scheduleSettingsRow = (await db.select().from(reminderSettings).where(eq(reminderSettings.id, 1)))[0]
+  const liveReminders = await db.select().from(reminders).orderBy(asc(reminders.at))
+  let liveSchedules = (await db.select().from(deliverySchedules).orderBy(asc(deliverySchedules.ord))).map(toDeliverySchedule)
+  let liveDeliveryLog = (await db.select().from(deliveryLog).orderBy(asc(deliveryLog.ord))).map(toDeliveryLog)
+  if (!scheduleSettingsRow && !liveSchedules.length) {
+    const defaults = seedDeliverySchedules()
+    await db.transaction(async (tx) => {
+      await lockState(tx)
+      await tx.insert(reminderSettings).values({ id: 1, settings: DEFAULT_REMINDER_SETTINGS }).onConflictDoNothing()
+      for (let i = 0; i < defaults.length; i += 500) await tx.insert(deliverySchedules).values(defaults.slice(i, i + 500).map(scheduleValues))
+    })
+    liveSchedules = (await db.select().from(deliverySchedules).orderBy(asc(deliverySchedules.ord))).map(toDeliverySchedule)
+    log("adopted the R8.3 schedule defaults (reminder settings + 2 delivery schedules)")
+  }
   const [vatSettingsDbRow] = await db.select().from(vatSettings).where(eq(vatSettings.id, 1))
   // the settings row is written by the seed and by the adoption below, so this fallback only guards a restore that
   // came from a backup older than both: the company's own zone, the one the NBR codes are filed under
@@ -454,6 +478,8 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     treasury: liveDeposits, vds: liveCertificates, adjustments: liveAdjustments, uds: liveUds, bondUds: liveBondUds,
     lateFilings: liveLateFilings, returnAmendments: liveReturnAmendments, prcBatches: livePrcBatches, drawbackClaims: liveDrawbackClaims,
     accountingConfig: accountingCfg, returns: liveReturns, vatSettings: vatSettingsCfg, events,
+    reminderSettings: scheduleSettingsRow?.settings ?? DEFAULT_REMINDER_SETTINGS, reminders: liveReminders.map(toFiredReminder),
+    deliverySchedules: liveSchedules, deliveryLog: liveDeliveryLog,
   })
   loadCompat()
   markParties([...mirror.parties("customer"), ...mirror.parties("vendor")])

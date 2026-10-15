@@ -1953,3 +1953,60 @@ export const bankStatementLines = pgTable("bank_statement_lines", {
   index("bank_statement_lines_status_idx").on(t.statementId, t.status),
   index("bank_statement_lines_money_idx").on(t.moneyId),
 ])
+
+/* ── R8.3: the statutory reminder and report-delivery schedule ─────────── */
+
+/** The one row of reminder settings: which deadlines are watched and at which lead times. */
+export const reminderSettings = pgTable("reminder_settings", {
+  id: integer("id").primaryKey().default(1),
+  settings: jsonb("settings").$type<{
+    return91: { enabled: boolean; leads: number[] }; treasury: { enabled: boolean; leads: number[] }; vds: { enabled: boolean; leads: number[] }
+    updatedAt: string; updatedBy: string
+  }>().notNull(),
+})
+
+/** A reminder the schedule has fired — one row per (deadline, due date, lead), which makes a re-run idempotent. */
+export const reminders = pgTable("reminders", {
+  id: text("id").primaryKey(),
+  kind: text("kind", { enum: ["return91", "treasury", "vds"] }).notNull(),
+  due: date("due", { mode: "string" }).notNull(),
+  lead: integer("lead").notNull(),
+  period: text("period").notNull(),
+  at: ts("at").notNull(),
+}, (t) => [index("reminders_due_idx").on(t.due)])
+
+/** A delivery schedule: which report, how often, to whom. */
+export const deliverySchedules = pgTable("delivery_schedules", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["vatDigest", "receivablesDigest"] }).notNull(),
+  frequency: text("frequency", { enum: ["monthly", "weekly"] }).notNull(),
+  /** monthly: day of the month (1–28); weekly: weekday (1 = Monday) */
+  day: integer("day").notNull(),
+  recipients: jsonb("recipients").$type<string[]>().notNull(),
+  enabled: boolean("enabled").notNull(),
+  lastRun: date("last_run", { mode: "string" }),
+  nextRun: date("next_run", { mode: "string" }).notNull(),
+  note: text("note"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+})
+
+/** One delivered report, the figures it froze at delivery time inside `document`. */
+export const deliveryLog = pgTable("delivery_log", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  scheduleId: text("schedule_id").notNull(),
+  kind: text("kind", { enum: ["vatDigest", "receivablesDigest"] }).notNull(),
+  /** the VAT digest's tax period (the receivables digest has none) */
+  period: text("period"),
+  asOf: date("as_of", { mode: "string" }).notNull(),
+  generatedAt: ts("generated_at").notNull(),
+  recipients: jsonb("recipients").$type<string[]>().notNull(),
+  document: jsonb("document").$type<Record<string, unknown>>().notNull(),
+}, (t) => [
+  uniqueIndex("delivery_log_schedule_asof_key").on(t.scheduleId, t.asOf),
+  index("delivery_log_generated_idx").on(t.generatedAt),
+])

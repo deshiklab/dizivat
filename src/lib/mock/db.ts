@@ -1,4 +1,4 @@
-import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -12,12 +12,13 @@ import { seedR4 } from "./seed-r4"
 import { seedRealisations, seedUds } from "./seed-r6"
 import { seedBondUds, seedDrawbackClaims } from "./seed-r65"
 import { seedLateFilings, seedPrcBatches, seedReturnAmendments } from "./seed-r66"
+import { DEFAULT_REMINDER_SETTINGS, seedDeliveryLog, seedDeliverySchedules } from "./seed-r83"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
   | { kind: "purchase"; doc: Purchase; at: string }
   | { kind: "customer" | "vendor"; doc: Party; at: string }
-interface DB {
+export interface DB {
   sales: Sale[]; purchases: Purchase[]; items: Item[]; customers: Party[]; vendors: Party[]; trash: Trash[]
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
@@ -38,6 +39,9 @@ interface DB {
   prcBatches: PrcBatch[]; lateFilings: LateFiling[]; returnAmendments: ReturnAmendment[]
   /** R8.2: imported bank statements and their lines (reconciliation) */
   bankStatements: BankStatement[]; bankLines: BankStatementLine[]
+  /** R8.3: the reminder settings (one row), the reminders the schedule has fired, the delivery schedules and their log */
+  reminderSettings: ReminderSettings; reminders: FiredReminder[]
+  deliverySchedules: DeliverySchedule[]; deliveryLog: DeliveryLogRow[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -140,12 +144,14 @@ function init(): DB {
     ...returnAmendments.map((x) => ({ entity: "returnAmendment" as const, id: x.id, ref: `${x.no} · 9.4 · ${x.period.slice(5)}-${x.period.slice(0, 4)}`, history: x.history })),
   ]
   seedAudit(d.sales, d.purchases, [...transfers, ...damages], r2Docs)
-  return {
+  const world: DB = {
     ...d, trash: [], units: seedUnits(), transfers, damages, debitNotes, openings, masterItems,
     creditNotes, boms, workOrders, batches, productionConfig: { procedure: "directStock", consumption: "standard" },
     ...r4,
     uds, bondUds, drawbackClaims, prcBatches, lateFilings, returnAmendments,
     bankStatements: [], bankLines: [],
+    reminderSettings: DEFAULT_REMINDER_SETTINGS, reminders: [],
+    deliverySchedules: seedDeliverySchedules(), deliveryLog: [],
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
@@ -154,6 +160,9 @@ function init(): DB {
       prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length, statement: 0,
     },
   }
+  // the seeded log row's figures come from the seeded books themselves, so both runtimes seed the same document
+  world.deliveryLog = seedDeliveryLog(world)
+  return world
 }
 
 /** Seeds the global audit log from document histories, recent sign-ins and a few admin events. */
@@ -197,6 +206,12 @@ db.seq.ud ??= db.uds.length
 // R6.6: state saved before R6.6 has no PRC batches / return applications yet
 db.prcBatches ??= []; db.lateFilings ??= []; db.returnAmendments ??= []
 db.seq.prcBatch ??= db.prcBatches.length; db.seq.lateFiling ??= db.lateFilings.length; db.seq.amendment ??= db.returnAmendments.length
+// R8.3: state saved before R8.3 has no schedule yet — a restored snapshot gets the defaults, and its seeded log
+// row is computed from the snapshot's own books (the same pure builder the tick uses)
+db.reminderSettings ??= DEFAULT_REMINDER_SETTINGS
+db.reminders ??= []
+db.deliverySchedules ??= seedDeliverySchedules()
+db.deliveryLog ??= seedDeliveryLog(db)
 
 export const withStock = (i: Item): ItemWithStock => ({
   ...i,
