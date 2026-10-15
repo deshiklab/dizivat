@@ -299,6 +299,8 @@ export class ScheduleController {
         actor: req.dz!.user, entity: "schedule", ref: "Schedule run", action: "updated",
         note: `${plan.fire.length} reminder${plan.fire.length === 1 ? "" : "s"} fired, ${delivered.length} report${delivered.length === 1 ? "" : "s"} delivered`,
       })
-    res.json({ date: TODAY, fired: plan.fire.map((r) => ({ ...r, at })), pruned: plan.prune.length, delivered })
+    // 200, not Nest's POST default 201: the tick is an action, not a creation — the mock answers 200 and the
+    // contract pins it
+    res.status(200).json({ date: TODAY, fired: plan.fire.map((r) => ({ ...r, at })), pruned: plan.prune.length, delivered })
   }
 }

@@ -341,11 +341,14 @@ def run():
     adm83 = S("admin")
     dl83 = adm83.post(BASE + "/schedule/deliveries", json={"kind": "receivablesDigest", "frequency": "weekly", "day": 5, "recipients": ["u5", "u2"], "enabled": True, "note": "contract fixture"}).json()
     fx["delivery"] = dl83["id"]
-    tick1 = adm83.post(BASE + "/schedule/tick", json={}).json()
+    r83 = adm83.post(BASE + "/schedule/tick", json={})
+    check(r83.status_code == 200, "the tick answers 200 (an action, not a creation — both runtimes)")
+    tick1 = r83.json()
     check(any(d["scheduleId"] == dl83["id"] for d in tick1["delivered"]), "schedule tick delivers the due schedule")
     check(tick1["date"] == "2026-09-25", "schedule tick runs for the demo today")
-    tick2 = adm83.post(BASE + "/schedule/tick", json={}).json()
-    check(not tick2["fired"] and not tick2["delivered"], "second tick of the day fires nothing")
+    r83b = adm83.post(BASE + "/schedule/tick", json={})
+    tick2 = r83b.json()
+    check(r83b.status_code == 200 and not tick2["fired"] and not tick2["delivered"], "second tick of the day fires nothing")
     log83 = adm83.get(BASE + "/schedule/log?kind=receivablesDigest&size=1").json()
     check(log83["total"] >= 1 and log83["data"][0]["document"]["kind"] == "receivablesDigest", "delivery log carries the frozen receivables document")
     fx["deliveryLog"] = log83["data"][0]["id"]
