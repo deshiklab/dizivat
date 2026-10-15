@@ -183,7 +183,7 @@ export {
 // The statements and their lines live in `bank_statements` and `bank_statement_lines`; the native module
 // stores through its own writers, the mock through its arrays.
 export {
-  booksBalanceAt, matchBankLine, planAnswer, planStatement, statementInput, statementView,
+  booksBalanceAt, matchBankLine, planAnswer, planStatement, statementInput, statementSpec, statementView,
   type PlannedLine, type StatementPlanResult,
 } from "@/app/api/v1/_r8"
 

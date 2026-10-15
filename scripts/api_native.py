@@ -5340,11 +5340,25 @@ def run():
         acct = dep["accountId"]
         rcpt = next(m for m in admin.get(f"{BASE}/accounting/receipts", params={"process": "Approved", "method": "bankTransfer", "size": 500}).json()["data"] if m.get("reference") and m["accountId"] == acct)
         cust = next(c for c in admin.get(f"{BASE}/customers", params={"status": "active", "size": 500}).json() if len(c["name"]) >= 5)
+        # e2e_r4 §14 runs earlier in the CI chain and leaves an approved 250000 / 2026-09-24 receipt on
+        # this account — a TT line with the same date+amount would match it instead of staying open with
+        # the customer suggestion. Pick amounts no recorded document on this account occupies.
+        approved = admin.get(f"{BASE}/accounting/receipts", params={"process": "Approved", "size": 500}).json()["data"]
+        taken = {round(m["amount"] - m["charge"], 2) for m in approved if m["accountId"] == acct and m["date"] == "2026-09-24"}
+        taken |= {round(m["amount"], 2) for m in approved if m["accountId"] == acct and m["date"] == "2026-09-23"}
+        # the fee row is a withdrawal — it would match a recorded payment by date + amount
+        taken |= {round(m["amount"], 2) for m in admin.get(f"{BASE}/accounting/payments", params={"process": "Approved", "size": 500}).json()["data"] if m["accountId"] == acct and m["date"] == "2026-09-23"}
+        amt, fee_amt = 250000, 500
+        while amt in taken:
+            amt = round(amt + 1, 2)
+        while fee_amt in taken:
+            fee_amt = round(fee_amt + 1, 2)
+        st_before = psql("select count(*) from bank_statements")
         rows = [
             {"date": rcpt["date"], "narration": f"Inward remittance {rcpt['reference']}", "reference": rcpt["reference"], "deposit": round(rcpt["amount"] - rcpt["charge"], 2), "withdrawal": 0},
             {"date": dep["challanDate"], "narration": f"VAT treasury challan {dep['challanNo']}", "deposit": 0, "withdrawal": dep["amount"]},
-            {"date": "2026-09-24", "narration": f"TT from {cust['name']}", "deposit": 250000, "withdrawal": 0},
-            {"date": "2026-09-23", "narration": "Account maintenance fee", "deposit": 0, "withdrawal": 500},
+            {"date": "2026-09-24", "narration": f"TT from {cust['name']}", "deposit": amt, "withdrawal": 0},
+            {"date": "2026-09-23", "narration": "Account maintenance fee", "deposit": 0, "withdrawal": fee_amt},
         ]
         dry = admin.post(f"{BASE}/accounting/statements", json={"accountId": acct, "dryRun": True, "rows": rows}).json()
         check(dry["total"] == 4 and dry["valid"] == 4 and dry["matched"] == 2 and dry["open"] == 2 and not dry["issues"],
@@ -5360,12 +5374,12 @@ def run():
               "…and its four lines land in bank_statement_lines")
         v = admin.get(f"{BASE}/accounting/statements/{st['id']}").json()
         books0 = v["books"]
-        tt = next(l for l in v["lines"] if l["deposit"] == 250000)
-        fee = next(l for l in v["lines"] if l["withdrawal"] == 500)
+        tt = next(l for l in v["lines"] if l["deposit"] == amt)
+        fee = next(l for l in v["lines"] if l["withdrawal"] == fee_amt)
         # the receipt the customer line is about: created as a draft through the ordinary creator, linked back
         r = admin.post(f"{BASE}/accounting/statements/{st['id']}/lines/{tt['id']}/receipt",
                        json={"partyId": cust["id"], "date": "2026-09-24", "method": "bankTransfer", "accountId": acct,
-                             "reference": "", "amount": 250000, "charge": 0, "allocations": [], "process": "Created"})
+                             "reference": "", "amount": amt, "charge": 0, "allocations": [], "process": "Created"})
         mr = r.json()
         check(r.status_code == 201 and mr["process"] == "Created" and mr["reference"],
               "R8.2: the receipt is created as a draft from the line (the bank reference defaults to its place on the statement)")
@@ -5374,23 +5388,23 @@ def run():
         r = admin.patch(f"{BASE}/accounting/receipts/{mr['id']}", json={"process": "Approved"})
         check(r.status_code == 200, "the draft approves like any other receipt")
         v2 = admin.get(f"{BASE}/accounting/statements/{st['id']}").json()
-        check(abs(v2["books"] - (books0 + 250000)) < 0.005,
+        check(abs(v2["books"] - (books0 + amt)) < 0.005,
               "the approved receipt moves the account's books balance by its amount")
         # parking: a charge is parked, a parked line refuses a document until reopened
         r = admin.patch(f"{BASE}/accounting/statements/{st['id']}/lines/{fee['id']}", json={"status": "charge", "note": "Quarterly maintenance"})
         check(r.status_code == 200 and r.json()["status"] == "charge", "an open line parks as a bank charge")
         r = admin.post(f"{BASE}/accounting/statements/{st['id']}/lines/{fee['id']}/receipt",
                        json={"kind": "payment", "partyId": "v1", "date": "2026-09-23", "method": "bankTransfer", "accountId": acct,
-                             "amount": 500, "charge": 0, "allocations": [], "process": "Created"})
+                             "amount": fee_amt, "charge": 0, "allocations": [], "process": "Created"})
         check(r.status_code == 409, "a parked line refuses to spawn a money document (409) until reopened")
         r = admin.patch(f"{BASE}/accounting/statements/{st['id']}/lines/{fee['id']}", json={"status": "open"})
         check(r.status_code == 200 and r.json()["status"] == "open", "reopening works")
         # the keyed closing: after the receipt, everything explains itself except the bank charge
-        closing = round(v2["books"] - 500, 2)
+        closing = round(v2["books"] - fee_amt, 2)
         r = admin.post(f"{BASE}/accounting/statements", json={"accountId": acct, "dryRun": False, "closingBalance": closing, "rows": rows})
         st2 = r.json()
         v3 = admin.get(f"{BASE}/accounting/statements/{st2['id']}").json()
-        check(abs(v3["difference"] - 500) < 0.005 and v3["open"] == 1,
+        check(abs(v3["difference"] - fee_amt) < 0.005 and v3["open"] == 1,
               "R8.2: books vs the keyed closing — the difference is exactly the unbooked charge; the TT line now matches the approved receipt")
         # statements and their lines live in their own tables — they survive a restart with their states
         before = admin.get(f"{BASE}/accounting/statements/{st2['id']}").json()
@@ -5398,7 +5412,8 @@ def run():
         after = admin.get(f"{BASE}/accounting/statements/{st2['id']}").json()
         check(after["lines"] == before["lines"] and after["difference"] == before["difference"] and after["books"] == before["books"],
               "R8.2: the statement, its lines and the books-vs-bank answer survive the restart")
-        check(psql("select count(*) from bank_statements") == "2", "…two statement rows in the table")
+        check(psql("select count(*) from bank_statements") == str(int(st_before) + 2),
+              "…the drill's two statements land in the table (earlier suites' imports ride along)")
 
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")

@@ -893,22 +893,16 @@ export class BankStatementsController {
   /** The register: Page<BankStatement> with the `?account=` facet. */
   @Get() @Authed()
   async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
     const sp = searchParams(req)
     if (!sp.get("sort")) sp.set("sort", "no.desc")
-    const all = await this.svc.all()
+    // search, the importedAt range, the account facet and the no.desc default all run through the
+    // mock's own query engine, so the register cannot drift between the two runtimes — not even its order
+    const r = runQuery(await this.svc.all(), sp, c.statementSpec)
     const accounts = await db.select().from(moneyAccounts).orderBy(asc(moneyAccounts.ord))
-    const facetLabels = { account: Object.fromEntries(accounts.map((a) => [a.id, `${a.provider} · ${a.accountNo}`])) }
-    const q = (sp.get("q") ?? "").trim().toLowerCase()
-    const account = sp.get("account")
-    const date = (s: string) => s.slice(0, 10)
-    const from = sp.get("from"), to = sp.get("to")
-    const rows = all.filter((s) =>
-      (!q || `${s.no} ${s.accountName} ${s.source} ${s.importedBy}`.toLowerCase().includes(q)) &&
-      (!account || s.accountId === account) &&
-      (!from || date(s.importedAt) >= from) && (!to || date(s.importedAt) <= to))
-    const page = Math.max(1, Number(sp.get("page") ?? 1))
-    const size = Math.min(500, Math.max(1, Number(sp.get("size") ?? 25)))
-    res.json({ data: rows.slice((page - 1) * size, page * size), total: rows.length, page, size, totals: {}, facets: account ? {} : { account: Object.fromEntries([...new Set(rows.map((s) => s.accountId))].map((id) => [id, rows.filter((s) => s.accountId === id).length])) }, facetLabels })
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { all, ...page } = r
+    res.json({ ...page, facetLabels: { account: Object.fromEntries(accounts.map((a) => [a.id, `${a.provider} · ${a.accountNo}`])) } })
   }
 
   /**
