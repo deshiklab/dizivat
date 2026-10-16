@@ -1939,7 +1939,7 @@ export const bankStatementLines = pgTable("bank_statement_lines", {
   /** money out (debit) */
   withdrawal: numeric("withdrawal", { precision: 18, scale: 2, mode: "number" }).notNull(),
   status: text("status", { enum: ["open", "matched", "receipt", "charge", "ignored"] }).notNull(),
-  matchKind: text("match_kind", { enum: ["treasury", "receipt", "payment"] }),
+  matchKind: text("match_kind", { enum: ["treasury", "receipt", "payment", "transfer"] }),
   matchId: text("match_id"),
   matchNo: text("match_no"),
   /** the money document created from this line, when one was */
@@ -2009,4 +2009,65 @@ export const deliveryLog = pgTable("delivery_log", {
 }, (t) => [
   uniqueIndex("delivery_log_schedule_asof_key").on(t.scheduleId, t.asOf),
   index("delivery_log_generated_idx").on(t.generatedAt),
+])
+
+/**
+ * R9.1 — a transfer between two of the company's own accounts (TX-): the cash deposited at the bank, the
+ * withdrawal for wages, the wallet top-up. The balances are derived (every page reads `accountRow`), so the
+ * approved document itself is the only thing to store — there is no side effect to write when it is approved.
+ */
+export const moneyTransfers = pgTable("money_transfers", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** TX-MMYY#### */
+  no: text("no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  fromAccountId: text("from_account_id").notNull(),
+  /** `${provider} · ${accountNo}` as of the transfer */
+  fromAccount: text("from_account").notNull(),
+  toAccountId: text("to_account_id").notNull(),
+  toAccount: text("to_account").notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** what the bank charged for the move — leaves the from-account without reaching the to-account */
+  charge: numeric("charge", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  reference: text("reference"),
+  note: text("note"),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft leaves the register but keeps its row, so its id and number stay retired */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("money_transfers_no_key").on(t.no),
+  index("money_transfers_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("money_transfers_date_idx").on(t.date),
+  index("money_transfers_accounts_idx").on(t.fromAccountId, t.toAccountId),
+  check("money_transfers_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("money_transfers_pair_check", sql`${t.fromAccountId} <> ${t.toAccountId}`),
+  check("money_transfers_amount_check", sql`${t.amount} > 0 and ${t.charge} >= 0`),
+])
+
+/**
+ * R9.1 — one lifecycle event on a cheque (presented / cleared / bounced), appended to the register's read model.
+ * The register itself is derived from the approved cheque money documents; these rows are the only writes.
+ */
+export const chequeEvents = pgTable("cheque_events", {
+  id: text("id").primaryKey(),
+  /** the money document the cheque belongs to (`money_docs.id`) */
+  chequeId: text("cheque_id").notNull(),
+  action: text("action", { enum: ["presented", "cleared", "bounced"] }).notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  /** the bounce's reason, when there is one */
+  reason: text("reason"),
+  by: text("by").notNull(),
+  at: ts("at").notNull(),
+}, (t) => [
+  index("cheque_events_cheque_idx").on(t.chequeId),
+  index("cheque_events_at_idx").on(t.at),
+  check("cheque_events_action_check", sql`${t.action} in ('presented','cleared','bounced')`),
 ])

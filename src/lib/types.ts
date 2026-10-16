@@ -271,12 +271,16 @@ export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "custome
   | "bondUd" | "drawbackClaim"
   /** R6.6 */
   | "prcBatch" | "lateFiling" | "returnAmendment"
+  /** R9.1 — transfers between the company's own accounts, and the cheque lifecycle */
+  | "moneyTransfer" | "cheque"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
   | "signedIn" | "signedOut" | "signInFailed" | "submitted"
   /** R6.2: VAT-officer page access, export proceeds, backups, bulk import */
   | "viewed" | "realised" | "backedUp" | "downloaded" | "imported"
+  /** R9.1: the cheque register's lifecycle */
+  | "presented" | "cleared" | "bounced"
 export interface AuditChange { field: string; from: string; to: string }
 export interface AuditEvent {
   id: string
@@ -320,7 +324,7 @@ export type CompanySummary = Pick<Company, "name" | "bin" | "address" | "vatSlab
 export interface TariffLine { hsCode: string; description: string; cd: number; sd: number; vat: number; ait: number; rd: number; at: number; tti: number; chapter: string }
 
 /** Server-driven notifications (FE-S3-06) */
-export type NotificationKind = "approvals" | "decided" | "deadline" | "lowStock" | "security" | "delivery"
+export type NotificationKind = "approvals" | "decided" | "deadline" | "lowStock" | "security" | "delivery" | "cheque"
 export interface AppNotification {
   id: string
   kind: NotificationKind
@@ -662,6 +666,73 @@ export interface MoneyDoc {
   issuedBy: string
   createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
 }
+/**
+ * R9.1 — a transfer between the company's own accounts (TX-): a cash deposit to the bank, a withdrawal, a
+ * bank-to-bank move. Not a party document: the money never leaves the company, so the books debit one account
+ * and credit another (the charge, if any, is the bank's fee for the move and lands as an expense in the ledger).
+ */
+export interface MoneyTransfer {
+  id: string
+  /** TX-MMYY#### */
+  no: string
+  date: string
+  fromAccountId: string; fromAccount: string
+  toAccountId: string; toAccount: string
+  amount: number
+  /** the bank's fee for the move — leaves the from-account without reaching the to-account */
+  charge: number
+  reference?: string
+  note?: string
+  process: Process
+  issuedBy: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/**
+ * R9.1 — the cheque register. The rows are the approved receipts and payments paid by cheque (the instruments
+ * the company holds or has written); the lifecycle is a small append-only event list, so the register itself is a
+ * read model: nothing about a money document changes when a cheque moves.
+ */
+export type ChequeStatus = "outstanding" | "presented" | "cleared" | "bounced"
+export type ChequeKind = "issued" | "received"
+export type ChequeAction = "presented" | "cleared" | "bounced"
+export interface ChequeRow {
+  /** the money document's id — one cheque per document */
+  id: string
+  kind: ChequeKind
+  no: string
+  partyId: string; partyName: string
+  accountId: string; accountName: string
+  /** the receipt (MR-) or voucher (PV-) that carries the cheque (the row's id is that document's id) */
+  moneyNo: string
+  moneyId: string
+  /** the drawer's / drawee's bank, when the money document recorded it */
+  chequeBank: string
+  amount: number
+  chequeDate: string
+  /** a post-dated cheque: dated after the demo today */
+  postDated: boolean
+  /** days since the cheque date, as of the demo today */
+  ageDays: number
+  status: ChequeStatus
+  presentedOn?: string
+  clearedOn?: string
+  bouncedOn?: string
+  reason?: string
+  /** the lifecycle so far, oldest first */
+  events: ChequeEvent[]
+}
+export interface ChequeEvent {
+  id: string
+  /** the money document the cheque belongs to */
+  chequeId: string
+  action: ChequeAction
+  date: string
+  reason?: string
+  by: string
+  at: string
+}
+
 /** An invoice that can still take a receipt / payment. */
 export interface OpenInvoice { id: string; no: string; challanNo: string; date: string; total: number; paid: number; due: number; days: number }
 
@@ -698,7 +769,7 @@ export interface PartyStatement {
 
 /** R8.2 (bank reconciliation): one imported bank statement line. */
 export type BankLineStatus = "open" | "matched" | "receipt" | "charge" | "ignored"
-export type BankMatchKind = "treasury" | "receipt" | "payment"
+export type BankMatchKind = "treasury" | "receipt" | "payment" | "transfer"
 export interface BankStatementLine {
   id: string
   statementId: string

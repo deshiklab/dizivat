@@ -98,6 +98,9 @@ jobs:
       - name: E2E — R4 (bank & wallet accounts, receipts/payments with allocation, party statements, TR-6, VDS 6.6, adjustments, 9.1 builder, period lock, compliance, 6.10)
         working-directory: scripts
         run: python e2e_r4.py
+      - name: E2E — R9 (account transfers TX- with derived balances, cheque register with present/clear/bounce lifecycle)
+        working-directory: scripts
+        run: python e2e_r9.py
       - name: E2E — Knowledge base (help centre, search, articles en/bn, print, HTML/Markdown downloads, help menu)
         working-directory: scripts
         run: python e2e_kb.py

@@ -16,7 +16,7 @@ import {
 } from "@/lib/r4"
 import { accountInput, accountingConfigInput, adjustmentInput, cancelInput, moneyInput, returnInput, treasuryInput, vatSettingsInput, vdsInput } from "@/lib/schemas"
 import type {
-  AccountingConfig, Allocation, AuditChange, AuditEntity, CreditNote, DebitNote, HistoryEntry, LateFiling, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, OpenInvoice, Party, PartyStatement, Process,
+  AccountingConfig, Allocation, AuditChange, AuditEntity, ChequeEvent, CreditNote, DebitNote, HistoryEntry, LateFiling, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, MoneyTransfer, OpenInvoice, Party, PartyStatement, Process,
   Purchase, ReturnAmendment, ReturnComputation, ReturnView, Sale, StatementRow, SubFormRow, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturn, VatReturnRow, VatSettings,
   VdsEligible, VdsEntry,
 } from "@/lib/types"
@@ -37,6 +37,9 @@ export interface AccountingSource {
   moneyAccounts: MoneyAccount[]; moneyDocs: MoneyDoc[]
   treasury: TreasuryDeposit[]; vds: VdsEntry[]
   accountingConfig: AccountingConfig
+  /** R9.1: transfers between the company's own accounts (approved ones move the balances), and the cheque lifecycle */
+  moneyTransfers?: MoneyTransfer[]
+  chequeEvents?: ChequeEvent[]
 }
 /** `db` is the whole world, which is what the mock handlers pass by default. */
 export const accountingSource = (): AccountingSource => db
@@ -155,7 +158,7 @@ export function history(entity: AuditEntity, d: LifeDoc, by: string, action: His
   recordAudit({ at, actor: by, entity, entityId, ref, action, note, changes })
 }
 
-function lifecycle<T extends LifeDoc, F extends object>(c: Life<T, F>) {
+export function lifecycle<T extends LifeDoc, F extends object>(c: Life<T, F>) {
   const find = (id: string) => c.list().find((x) => x.id === id || x.no === id)
   const doApprove = (d: T, user: User) => {
     const err = c.approve?.(d)
@@ -257,10 +260,15 @@ function lifecycle<T extends LifeDoc, F extends object>(c: Life<T, F>) {
 export function accountRow(a: MoneyAccount, src: AccountingSource = db): MoneyAccountRow {
   const docs = src.moneyDocs.filter((m) => m.accountId === a.id && m.process === "Approved")
   const dep = src.treasury.filter((t) => t.accountId === a.id && t.process === "Approved")
-  const inflow = round2(docs.filter((m) => m.kind === "receipt").reduce((s, m) => s + m.amount - m.charge, 0))
-  const outflow = round2(docs.filter((m) => m.kind === "payment").reduce((s, m) => s + m.amount, 0) + dep.reduce((s, t) => s + t.amount, 0))
-  const dates = [...docs.map((m) => m.date), ...dep.map((t) => t.challanDate)].sort()
-  return { ...a, inflow, outflow, balance: round2(a.openingBalance + inflow - outflow), lastDate: dates.at(-1), docs: docs.length + dep.length }
+  // R9.1: an approved transfer lands on both sides — the full amount plus the charge leaves the from-account,
+  // the bare amount reaches the to-account (the charge is the bank's fee for the move)
+  const tf = (src.moneyTransfers ?? []).filter((t) => t.process === "Approved" && (t.fromAccountId === a.id || t.toAccountId === a.id))
+  const inflow = round2(docs.filter((m) => m.kind === "receipt").reduce((s, m) => s + m.amount - m.charge, 0)
+    + tf.filter((t) => t.toAccountId === a.id).reduce((s, t) => s + t.amount, 0))
+  const outflow = round2(docs.filter((m) => m.kind === "payment").reduce((s, m) => s + m.amount, 0) + dep.reduce((s, t) => s + t.amount, 0)
+    + tf.filter((t) => t.fromAccountId === a.id).reduce((s, t) => s + t.amount + t.charge, 0))
+  const dates = [...docs.map((m) => m.date), ...dep.map((t) => t.challanDate), ...tf.map((t) => t.date)].sort()
+  return { ...a, inflow, outflow, balance: round2(a.openingBalance + inflow - outflow), lastDate: dates.at(-1), docs: docs.length + dep.length + tf.length }
 }
 export const accountSpec: QuerySpec<MoneyAccountRow> = {
   search: (a) => `${a.provider} ${a.accountNo} ${a.owner} ${a.branch ?? ""} ${a.authorised ?? ""}`,

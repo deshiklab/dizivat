@@ -81,6 +81,22 @@ export function matchBankLine(
   }
   // 2. money already recorded on this account: the bank's own reference / the cheque number, else date + the ledger's exact movement
   const docs = src.moneyDocs.filter((m) => m.process === "Approved" && m.accountId === accountId)
+  // R9.1: a transfer between the company's own accounts lands on the statement like any other movement — the
+  // bank's reference or the exact date + amount (the from-side carries the charge too)
+  for (const t of src.moneyTransfers ?? []) {
+    if (t.process !== "Approved") continue
+    const ref = (t.reference ?? "").toLowerCase()
+    if (ref && (ref === (line.reference ?? "").toLowerCase() || ref === (line.narration ?? "").toLowerCase().replace(/^.*\s/, "")))
+      if ((t.toAccountId === accountId && line.deposit > 0) || (t.fromAccountId === accountId && line.withdrawal > 0))
+        return { status: "matched", matchKind: "transfer", matchId: t.id, matchNo: t.no }
+  }
+  for (const t of src.moneyTransfers ?? []) {
+    if (t.process !== "Approved" || t.date !== line.date) continue
+    if (t.toAccountId === accountId && line.deposit > 0 && Math.abs(t.amount - line.deposit) < 0.005)
+      return { status: "matched", matchKind: "transfer", matchId: t.id, matchNo: t.no }
+    if (t.fromAccountId === accountId && line.withdrawal > 0 && Math.abs(t.amount + t.charge - line.withdrawal) < 0.005)
+      return { status: "matched", matchKind: "transfer", matchId: t.id, matchNo: t.no }
+  }
   for (const m of docs) {
     const kind: BankLineMatch["matchKind"] = m.kind === "receipt" ? "receipt" : "payment"
     const ref = (m.reference ?? "").toLowerCase()
@@ -193,8 +209,13 @@ export function booksBalanceAt(accountId: string, to: string, src: AccountingSou
   if (!a) return 0
   const docs = src.moneyDocs.filter((m) => m.accountId === a.id && m.process === "Approved" && m.date <= to)
   const dep = src.treasury.filter((t) => t.accountId === a.id && t.process === "Approved" && t.challanDate <= to)
-  const inflow = round2(docs.filter((m) => m.kind === "receipt").reduce((s, m) => s + m.amount - m.charge, 0))
-  const outflow = round2(docs.filter((m) => m.kind === "payment").reduce((s, m) => s + m.amount, 0) + dep.reduce((s, t) => s + t.amount, 0))
+  // R9.1: approved transfers move this account like any other ledger entry — the amount (plus the charge) out of
+  // the from-account, the bare amount into the to-account
+  const tf = (src.moneyTransfers ?? []).filter((t) => t.process === "Approved" && t.date <= to && (t.fromAccountId === a.id || t.toAccountId === a.id))
+  const inflow = round2(docs.filter((m) => m.kind === "receipt").reduce((s, m) => s + m.amount - m.charge, 0)
+    + tf.filter((t) => t.toAccountId === a.id).reduce((s, t) => s + t.amount, 0))
+  const outflow = round2(docs.filter((m) => m.kind === "payment").reduce((s, m) => s + m.amount, 0) + dep.reduce((s, t) => s + t.amount, 0)
+    + tf.filter((t) => t.fromAccountId === a.id).reduce((s, t) => s + t.amount + t.charge, 0))
   return round2(a.openingBalance + inflow - outflow)
 }
 

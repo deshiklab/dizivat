@@ -62,7 +62,9 @@
     "bondRegister": "Bond consumption register",
     "exportProceeds": "Export proceeds (PRC)",
     "returnApps": "Return applications (9.3 / 9.4)",
-    "schedule": "Schedule"
+    "schedule": "Schedule",
+    "ownTransfers": "Account transfers",
+    "cheques": "Cheque register"
   },
   "shell": {
     "mainNav": "Main navigation",
@@ -1330,7 +1332,10 @@
       "realised": "Proceeds realised",
       "backedUp": "Backed up",
       "downloaded": "Downloaded",
-      "imported": "Imported"
+      "imported": "Imported",
+      "presented": "Presented",
+      "cleared": "Cleared",
+      "bounced": "Bounced"
     },
     "entity": {
       "sale": "Sales invoice",
@@ -1372,7 +1377,9 @@
       "returnAmendment": "Mushak 9.4 application",
       "tariff": "Tariff",
       "statement": "Bank statement",
-      "schedule": "Schedule"
+      "schedule": "Schedule",
+      "moneyTransfer": "Account transfer",
+      "cheque": "Cheque"
     },
     "facet": {
       "entity": "Record type",
@@ -1493,7 +1500,8 @@
     "docCancelled": "{actor} cancelled {ref}",
     "deadline": "{title} — due {date} ({n, plural, one {{days} day} other {{days} days}} left)",
     "lowStock": "{count, plural, one {{n} item is} other {{n} items are}} below reorder level, starting with {first}",
-    "reportDelivered": "{report} for {period} delivered"
+    "reportDelivered": "{report} for {period} delivered",
+    "chequeBounced": "Cheque {no} from {party} bounced ({kind})"
   },
   "stock": {
     "transfer": {
@@ -5030,7 +5038,8 @@
     "kind": {
       "treasury": "TR-6 challan",
       "receipt": "receipt",
-      "payment": "payment"
+      "payment": "payment",
+      "transfer": "account transfer"
     },
     "act": {
       "receipt": "Receipt",
@@ -5071,5 +5080,124 @@
       "applied": "Statement {no} imported — {n} lines.",
       "chooseAccount": "Choose an account"
     }
+  },
+  "transfers": {
+    "title": "Account transfers",
+    "subtitle": "Money moved between the company's own bank, wallet and cash accounts.",
+    "summary": "{count} transfers · ৳{value} moved · ৳{charges} in charges · {pending} drafts",
+    "new": "New transfer",
+    "newTitle": "New account transfer",
+    "newSub": "Move money between two of the company's own accounts — a deposit, a withdrawal, a wallet top-up.",
+    "editTitle": "Edit {no}",
+    "titleOne": "Transfer",
+    "notFound": "Transfer not found.",
+    "searchPlaceholder": "Search no., account, reference…",
+    "draftNote": "Draft — the balances don't move until the transfer is approved.",
+    "pairLocked": "The accounts can't change on a saved draft.",
+    "closedHint": "Books are closed up to {date}.",
+    "landsAs": "Where it lands",
+    "ofWhichCharge": "of which bank charge",
+    "approve": "Approve",
+    "approved": "Transfer {no} approved.",
+    "saved": "Transfer {no} saved as a draft.",
+    "deleted": "Transfer {no} deleted.",
+    "deleteBody": "The draft transfer will be removed. Nothing has moved yet.",
+    "viewDoc": "View transfer {no}",
+    "approveDoc": "Approve transfer {no}",
+    "saveDraft": "Save draft",
+    "saveApprove": "Save & approve",
+    "facet": {
+      "process": "Status",
+      "fromAccount": "From account",
+      "toAccount": "To account"
+    },
+    "col": {
+      "no": "No.",
+      "date": "Date",
+      "from": "From",
+      "to": "To",
+      "reference": "Reference",
+      "amount": "Amount",
+      "charge": "Charge",
+      "status": "Status"
+    },
+    "field": {
+      "date": "Date",
+      "from": "From account",
+      "to": "To account",
+      "amount": "Amount (৳)",
+      "charge": "Bank / wallet charge (৳)",
+      "reference": "Reference / bank slip no.",
+      "note": "Note",
+      "issuedBy": "Recorded by"
+    },
+    "pickAccount": "Choose an account",
+    "pickOther": "Choose a different account",
+    "chargeHint": "What the bank charges for the move — it leaves the from-account without reaching the other side."
+  },
+  "cheques": {
+    "title": "Cheque register",
+    "subtitle": "Every cheque received or issued, with its lifecycle — presented, cleared, bounced.",
+    "summary": "{count} cheques · ৳{value} · {open} still open · {bounced} bounced",
+    "titleOne": "Cheque",
+    "notFound": "Cheque not found.",
+    "searchPlaceholder": "Search cheque no., party, bank…",
+    "postDated": "Post-dated",
+    "postDatedOnly": "Post-dated only",
+    "postDatedHint": "Dated after today — it can only be presented on or after its cheque date.",
+    "aged": "{n} days old",
+    "bouncedOn": "Bounced on {date}",
+    "timeline": "Lifecycle",
+    "issuedOn": "Cheque issued / received",
+    "reason": "Reason",
+    "presentedMsg": "Cheque {no} marked presented.",
+    "clearedMsg": "Cheque {no} cleared.",
+    "bouncedMsg": "Cheque {no} recorded as bounced.",
+    "actionDate": "Action date",
+    "bounceReason": "Reason for the bounce",
+    "bounceReasonPh": "e.g. Refer to drawer — at least 10 characters",
+    "action": {
+      "presented": "Present",
+      "cleared": "Clear",
+      "bounced": "Bounce"
+    },
+    "actionTitle": {
+      "presented": "Mark the cheque as presented at the bank",
+      "cleared": "Mark the cheque as cleared",
+      "bounced": "Record the cheque as bounced"
+    },
+    "actionGo": {
+      "presented": "Mark presented",
+      "cleared": "Mark cleared",
+      "bounced": "Record bounce"
+    },
+    "kind": {
+      "issued": "Issued",
+      "received": "Received"
+    },
+    "status": {
+      "outstanding": "Outstanding",
+      "presented": "Presented",
+      "cleared": "Cleared",
+      "bounced": "Bounced"
+    },
+    "facet": {
+      "kind": "Kind",
+      "status": "Status",
+      "account": "Account"
+    },
+    "col": {
+      "chequeNo": "Cheque no.",
+      "kind": "Kind",
+      "party": "Party",
+      "bank": "Drawee bank",
+      "account": "Deposited into / drawn on",
+      "chequeDate": "Cheque date",
+      "doc": "Receipt / voucher",
+      "amount": "Amount",
+      "status": "Status",
+      "age": "Age (days)"
+    },
+    "viewDoc": "View cheque {no}"
   }
 }

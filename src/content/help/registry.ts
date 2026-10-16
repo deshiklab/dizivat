@@ -38,6 +38,7 @@ export const REGISTRY = {
   "receipts-and-payments": { category: "accounting", routes: ["/accounting/receipts", "/accounting/payments"], related: ["bank-accounts-and-statements", "bank-reconciliation", "local-purchases"] },
   "bank-accounts-and-statements": { category: "accounting", routes: ["/accounting/bank-accounts", "/accounting/statements", "/accounting/config"], related: ["receipts-and-payments"] },
   "bank-reconciliation": { category: "accounting", routes: ["/accounting/reconcile"], related: ["receipts-and-payments", "bank-accounts-and-statements"] },
+  "account-transfers-and-cheques": { category: "accounting", routes: ["/accounting/transfers", "/accounting/cheques"], related: ["receipts-and-payments", "bank-reconciliation", "bank-accounts-and-statements"] },
 
   "compliance-centre": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "purchase-sales-books"] },
   "vat-return-9-1": { category: "nbrVat", routes: ["/vat/return-9-1"], related: ["treasury-tr6", "vat-adjustments", "vds-certificates"] },

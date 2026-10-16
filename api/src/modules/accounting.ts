@@ -22,21 +22,22 @@
  *     register, the compliance centre and a party's credit still read them, and `settlementsOf` — the rule that
  *     refuses to cancel an invoice something has settled — reads the same objects.
  */
-import { Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
+import { Controller, Delete, Get, HttpCode, Inject, Injectable, Param, Patch, Post, Put, Req, Res } from "@nestjs/common"
 import { asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
 import type { Request, Response } from "express"
 import { can, ROLE_PERMS, type Permission, type User } from "@/lib/auth/roles"
 import { runQuery, toCSV } from "@/lib/mock/query"
 import type {
-  AccountingConfig, Allocation, BankStatement, BankStatementLine, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, Party, PartyStatement, Purchase, Sale,
+  AccountingConfig, Allocation, BankStatement, BankStatementLine, ChequeEvent, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, MoneyTransfer, Party, PartyStatement, Purchase, Sale,
 } from "@/lib/types"
+import { chequeRowsOf } from "@/lib/money-ops"
 import type { AccountingSource } from "@/app/api/v1/_r4"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, uniqueViolation } from "../common/http"
 import { lockState } from "../common/state-guard"
 import { WriteBack, type Delta } from "../common/writeback"
 import { db, type Tx } from "../db/client"
-import { accountingConfig, bankStatementLines, bankStatements, moneyAccounts, moneyAllocations, moneyDocs } from "../db/schema"
+import { accountingConfig, bankStatementLines, bankStatements, chequeEvents, moneyAccounts, moneyAllocations, moneyDocs, moneyTransfers } from "../db/schema"
 import { compat, mirror } from "../state"
 import { AuditService } from "./audit"
 import { applyPurchaseSettlement, revertPurchaseSettlement } from "./purchases"
@@ -149,6 +150,8 @@ export async function accountingSource(): Promise<AccountingSource> {
     moneyAccounts: mirror.moneyAccounts(), moneyDocs: mirror.moneyDocs(),
     treasury: mirror.treasury(), vds: mirror.vds(),
     accountingConfig: mirror.accountingConfig(),
+    // R9.1: the transfers move the derived balances; the cheque events feed the register
+    moneyTransfers: mirror.moneyTransfers(), chequeEvents: mirror.chequeEvents(),
   }
 }
 
@@ -910,7 +913,8 @@ export class BankStatementsController {
    * stores the statement and its lines all-or-nothing. The rules — what a row may hold, what a line matches —
    * are the mock's own, served through the compat bundle.
    */
-  @Post() @Authed("doc.create")
+  /** `@HttpCode(200)`: a dry run is a plan, not a creation — the apply below sets its own 201. */
+  @Post() @HttpCode(200) @Authed("doc.create")
   async import(@Req() req: AuthedRequest, @Res() res: Response) {
     const c = compat()
     const parsed = c.statementInput.safeParse(jsonBody(req))
@@ -998,5 +1002,327 @@ export class BankStatementsController {
     const linked = await this.svc.linkLine(id, lineId, doc)
     if (!linked) throw new Problem(404, "Statement line not found")
     res.status(201).json(doc)
+  }
+}
+
+/* ── R9.1: the transfers between the company's own accounts ────────────── */
+
+type TransferDb = typeof moneyTransfers.$inferSelect
+type ChequeEventDb = typeof chequeEvents.$inferSelect
+
+/** Row → contract shape. A NULL column is an absent optional field. */
+export function toMoneyTransfer(r: TransferDb): MoneyTransfer {
+  const t: MoneyTransfer = {
+    id: r.id, no: r.no, date: r.date, fromAccountId: r.fromAccountId, fromAccount: r.fromAccount,
+    toAccountId: r.toAccountId, toAccount: r.toAccount, amount: r.amount, charge: r.charge,
+    process: r.process, issuedBy: r.issuedBy, createdAt: r.createdAt.toISOString(), history: r.history ?? [],
+  }
+  if (r.reference != null) t.reference = r.reference
+  if (r.note != null) t.note = r.note
+  if (r.updatedAt) t.updatedAt = r.updatedAt.toISOString()
+  if (r.cancelReason != null) t.cancelReason = r.cancelReason
+  return t
+}
+
+/** Contract shape → row values (`ord` and `deletedAt` are the table's own). */
+export const moneyTransferValues = (t: MoneyTransfer) => ({
+  id: t.id, no: t.no, date: t.date, fromAccountId: t.fromAccountId, fromAccount: t.fromAccount,
+  toAccountId: t.toAccountId, toAccount: t.toAccount, amount: t.amount, charge: t.charge,
+  reference: t.reference ?? null, note: t.note ?? null, process: t.process, issuedBy: t.issuedBy,
+  createdAt: new Date(t.createdAt), updatedAt: t.updatedAt ? new Date(t.updatedAt) : null,
+  cancelReason: t.cancelReason ?? null, history: t.history ?? [],
+})
+
+const transferWb = new WriteBack<MoneyTransfer>("money_transfers", () => mirror.moneyTransfers(), (t) => t.id)
+export type MoneyTransferDelta = Delta<MoneyTransfer>
+export const markMoneyTransfers = (list: MoneyTransfer[]) => transferWb.mark(list)
+export const moneyTransferDelta = () => transferWb.delta()
+export const commitMoneyTransferDelta = (d: MoneyTransferDelta) => transferWb.commit(d)
+
+/** Row → contract shape. */
+export const toChequeEvent = (r: ChequeEventDb): ChequeEvent =>
+  ({ id: r.id, chequeId: r.chequeId, action: r.action, date: r.date, ...(r.reason != null ? { reason: r.reason } : {}), by: r.by, at: r.at.toISOString() })
+
+/** Contract shape → row values. */
+export const chequeEventValues = (e: ChequeEvent) =>
+  ({ id: e.id, chequeId: e.chequeId, action: e.action, date: e.date, reason: e.reason ?? null, by: e.by, at: new Date(e.at) })
+
+@Injectable()
+export class TransfersService {
+  /** Every live transfer in insertion order — the order the mock's array had. */
+  async all(): Promise<MoneyTransfer[]> {
+    return (await db.select().from(moneyTransfers).where(isNull(moneyTransfers.deletedAt)).orderBy(asc(moneyTransfers.ord))).map(toMoneyTransfer)
+  }
+
+  /** One transfer by id or by number: the register, the audit trail and the account page's links all use both. */
+  find(idOrNo: string) {
+    return this.first(sql`(${moneyTransfers.id} = ${idOrNo} or ${moneyTransfers.no} = ${idOrNo}) and ${moneyTransfers.deletedAt} is null`)
+  }
+
+  /** One live transfer by id only — what a delete matches on. */
+  byId(id: string) {
+    return this.first(sql`${moneyTransfers.id} = ${id} and ${moneyTransfers.deletedAt} is null`)
+  }
+
+  private async first(match: SQL) {
+    const rows = await db.select().from(moneyTransfers).where(match)
+    return rows.length ? toMoneyTransfer(rows[0]) : undefined
+  }
+
+  /** Stores a new transfer. `make` builds it inside the lock, so two creates in flight cannot share a number. */
+  async create(date: string, make: (ident: { id: string; no: string }) => MoneyTransfer): Promise<MoneyTransfer> {
+    let made: MoneyTransfer | undefined
+    try {
+      const saved = await db.transaction(async (tx) => {
+        await lockState(tx)
+        made = make(compat().transferIdentity(date))
+        const [row] = await tx.insert(moneyTransfers).values(moneyTransferValues(made)).returning()
+        return toMoneyTransfer(row)
+      })
+      mirror.putMoneyTransfer(saved)
+      markMoneyTransfers([saved])
+      return saved
+    } catch (e) {
+      if (made) mirror.removeMoneyTransfer(made.id)
+      if (uniqueViolation(e) !== null) throw new Problem(409, "That number was just taken — please try again.")
+      throw e as Error
+    }
+  }
+
+  /** Replaces a transfer — an edit or a transition. */
+  async update(t: MoneyTransfer): Promise<MoneyTransfer> {
+    const [row] = await db.update(moneyTransfers).set(moneyTransferValues(t)).where(eq(moneyTransfers.id, t.id)).returning()
+    if (!row) throw new Problem(404, "Transfer not found")
+    const saved = toMoneyTransfer(row)
+    mirror.putMoneyTransfer(saved)
+    markMoneyTransfers([saved])
+    return saved
+  }
+
+  /** Delete a draft: the row is stamped, so its id and its number stay retired. There is no undo. */
+  async remove(t: MoneyTransfer, at: string) {
+    await db.update(moneyTransfers).set({ ...moneyTransferValues(t), deletedAt: new Date(at) }).where(eq(moneyTransfers.id, t.id))
+    mirror.removeMoneyTransfer(t.id)
+  }
+}
+
+@Injectable()
+export class ChequeEventsService {
+  /** Every lifecycle event, oldest first — the register folds them in this order. */
+  async all(): Promise<ChequeEvent[]> {
+    return (await db.select().from(chequeEvents).orderBy(asc(chequeEvents.at))).map(toChequeEvent)
+  }
+
+  /** Appends one event inside the caller's lock and mirrors it. The next `chq{n}` comes from the table's rows. */
+  async append(tx: Tx, e: Omit<ChequeEvent, "id">): Promise<ChequeEvent> {
+    const rows = await tx.select({ id: chequeEvents.id }).from(chequeEvents)
+    const n = rows.reduce((m, r) => Math.max(m, Number(r.id.slice(3)) || 0), 0) + 1
+    const event: ChequeEvent = { ...e, id: `chq${n}` }
+    await tx.insert(chequeEvents).values(chequeEventValues(event))
+    mirror.appendChequeEvent(event)
+    return event
+  }
+}
+
+@Controller("api/v1/accounting/transfers")
+export class AccountTransfersController {
+  constructor(
+    @Inject(TransfersService) private readonly svc: TransfersService,
+    @Inject(AuditService) private readonly audit: AuditService,
+  ) {}
+
+  /** The register: Page<MoneyTransfer> with facets (process / from / to), or one CSV row per document. */
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    if (!sp.get("sort")) sp.set("sort", "createdAt.desc")
+    const r = runQuery(await this.svc.all(), sp, c.transferSpec)
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(r.all, c.TRANSFER_CSV_COLUMNS), `account-transfers-${today()}.csv`)
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { all, ...page } = r
+    res.json({ ...page, facetLabels: c.transferFacetLabels() })
+  }
+
+  /** Create a draft, or create and approve it in one step. Approving writes nothing but the row — the balances derive. */
+  @Post() @Authed("doc.create")
+  async create(@Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const src = await accountingSource()
+    const built = c.buildTransfer(jsonBody(req), undefined, src)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const approving = built.process === "Approved"
+    if (approving) deny(user, "doc.approve")
+    const at = new Date().toISOString()
+    const doc = await this.svc.create(built.date, (ident) => {
+      const t: MoneyTransfer = { ...built.fields, ...ident, process: "Created", createdAt: at, history: [] }
+      // before the document exists: one that cannot be created must not consume an id
+      c.claimTransferId()
+      c.stampLifeHistory(t, user.name, "created", undefined, at)
+      if (!approving) return t
+      const rule = c.transferApproveRule(t, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      t.process = "Approved"
+      c.stampLifeHistory(t, user.name, "approved", undefined, at)
+      return t
+    })
+    await this.audit.record({ at, actor: user, entity: "moneyTransfer", entityId: doc.id, ref: doc.no, action: "created" })
+    const approved = doc.history?.find((h) => h.action === "approved")
+    if (approved) await this.audit.record({ at: approved.at, actor: user, entity: "moneyTransfer", entityId: doc.id, ref: doc.no, action: "approved" })
+    res.status(201).json(doc)
+  }
+
+  @Get(":id") @Authed()
+  async one(@Param("id") id: string, @Res() res: Response) {
+    const d = await this.svc.find(id)
+    if (!d) throw new Problem(404, "Transfer not found")
+    res.json(d)
+  }
+
+  /** Edit a draft (full replacement): the accounts it names cannot change. */
+  @Put(":id") @Authed("doc.edit")
+  async update(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    if (!cur) throw new Problem(404, "Transfer not found")
+    if (cur.process !== "Created") throw new Problem(409, `Only drafts can be edited — ${cur.no} is ${cur.process}.`)
+    const src = await accountingSource()
+    const built = c.buildTransfer(jsonBody(req), cur, src)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const approving = built.process === "Approved"
+    if (approving) deny(user, "doc.approve")
+    const before = structuredClone(cur)
+    const next: MoneyTransfer = { ...cur, ...built.fields }
+    const at = new Date().toISOString()
+    c.stampLifeHistory(next, user.name, "edited", undefined, at)
+    const changes = c.diff(before, next, c.TRANSFER_DIFF_FIELDS)
+    let approvedAt: string | undefined
+    if (approving) {
+      const rule = c.transferApproveRule(next, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      next.process = "Approved"
+      approvedAt = c.stampLifeHistory(next, user.name, "approved")
+    }
+    const saved = await this.svc.update(next)
+    await this.audit.record({ at, actor: user, entity: "moneyTransfer", entityId: saved.id, ref: saved.no, action: "edited", changes })
+    if (approvedAt) await this.audit.record({ at: approvedAt, actor: user, entity: "moneyTransfer", entityId: saved.id, ref: saved.no, action: "approved" })
+    res.json(saved)
+  }
+
+  /** State transitions: approve or cancel with a reason. The books must be open for the transfer's date either way. */
+  @Patch(":id") @Authed()
+  async patch(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    if (!cur) throw new Problem(404, "Transfer not found")
+    const body = jsonBody(req) as { process?: string; reason?: string }
+    const user = req.dz!.user
+    const src = await accountingSource()
+    if (body.process === "Approved") {
+      deny(user, "doc.approve")
+      if (cur.process !== "Created") throw new Problem(409, `Cannot approve — ${cur.no} is ${cur.process}.`)
+      const rule = c.transferApproveRule(cur, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      const at = new Date().toISOString()
+      const next = structuredClone(cur)
+      next.process = "Approved"
+      c.stampLifeHistory(next, user.name, "approved", undefined, at)
+      const saved = await this.svc.update(next)
+      await this.audit.record({ at, actor: user, entity: "moneyTransfer", entityId: saved.id, ref: saved.no, action: "approved" })
+      res.json(saved)
+      return
+    }
+    if (body.process === "Cancelled") {
+      deny(user, "doc.cancel")
+      if (cur.process === "Cancelled") throw new Problem(409, `${cur.no} is already cancelled.`)
+      const parsed = c.cancelInput.safeParse({ reason: body.reason ?? "" })
+      if (!parsed.success) throw new Problem(422, "Validation failed", c.zodErrors(parsed.error))
+      const rule = c.transferCancelRule(cur, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      const at = new Date().toISOString()
+      const next = structuredClone(cur)
+      next.process = "Cancelled"
+      next.cancelReason = parsed.data.reason
+      c.stampLifeHistory(next, user.name, "cancelled", parsed.data.reason, at)
+      const saved = await this.svc.update(next)
+      await this.audit.record({ at, actor: user, entity: "moneyTransfer", entityId: saved.id, ref: saved.no, action: "cancelled", note: parsed.data.reason })
+      res.json(saved)
+      return
+    }
+    throw new Problem(400, "process must be Approved or Cancelled")
+  }
+
+  /** Delete a draft: the row is stamped, so its id and its number stay retired. There is no undo. */
+  @Delete(":id") @Authed("doc.delete")
+  async remove(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.byId(id)
+    if (!cur) throw new Problem(404, "Transfer not found")
+    if (cur.process !== "Created") throw new Problem(409, `Only drafts can be deleted — cancel ${cur.no} instead.`)
+    const at = new Date().toISOString()
+    const next = structuredClone(cur)
+    c.stampLifeHistory(next, req.dz!.user.name, "deleted", undefined, at)
+    await this.svc.remove(next, at)
+    await this.audit.record({ at, actor: req.dz!.user, entity: "moneyTransfer", entityId: cur.id, ref: cur.no, action: "deleted" })
+    res.json({ ok: true })
+  }
+}
+
+/**
+ * R9.1 — the cheque register: the rows derive from the approved cheque money documents (the mock's own fold,
+ * through the compat bundle) and the lifecycle events append here. The register is a read model, so this
+ * controller has two endpoints: the register itself and one lifecycle action.
+ */
+@Controller("api/v1/accounting/cheques")
+export class ChequesController {
+  constructor(
+    @Inject(ChequeEventsService) private readonly events: ChequeEventsService,
+    @Inject(MoneyDocsService) private readonly money: MoneyDocsService,
+    @Inject(AuditService) private readonly audit: AuditService,
+  ) {}
+
+  /** The register: Page<ChequeRow> with facets (kind / status / party / account), or one CSV row per cheque. `?postDated=true` narrows to the post-dated view. */
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    const moneyDocs = [...await this.money.all("receipt"), ...await this.money.all("payment")]
+    let rows = chequeRowsOf({ moneyDocs, chequeEvents: await this.events.all() }, today())
+    if (sp.get("postDated") === "true") {
+      sp.delete("postDated")
+      rows = rows.filter((r) => r.postDated)
+    }
+    const r = runQuery(rows, sp, c.chequeSpec)
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(r.all, c.CHEQUE_CSV_COLUMNS), `cheque-register-${today()}.csv`)
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { all, ...page } = r
+    res.json({ ...page, facetLabels: {} })
+  }
+
+  /** A lifecycle action on one cheque (present / clear / bounce): one append-only event, audited. */
+  @Post(":id/action") @Authed("doc.edit")
+  async action(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const moneyDocs = [...await this.money.all("receipt"), ...await this.money.all("payment")]
+    const row = chequeRowsOf({ moneyDocs, chequeEvents: await this.events.all() }, today()).find((r) => r.id === id || r.no === id)
+    const r = c.chequeActionRule(row, jsonBody(req))
+    if ("status" in r) throw new Problem(r.status, r.title, r.errors)
+    const user = req.dz!.user
+    const at = new Date().toISOString()
+    const event = await db.transaction(async (tx) => {
+      await lockState(tx)
+      return this.events.append(tx, { chequeId: row!.id, action: r.action, date: r.date, reason: r.reason, by: user.name, at })
+    })
+    await this.audit.record({ at, actor: user, entity: "cheque", entityId: row!.id, ref: row!.no, action: r.action, note: r.reason })
+    const fresh = chequeRowsOf({ moneyDocs, chequeEvents: await this.events.all() }, today()).find((x) => x.id === row!.id)
+    res.status(201).json(fresh)
   }
 }

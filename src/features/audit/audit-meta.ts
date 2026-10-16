@@ -1,5 +1,5 @@
 import { BookOpenCheck,
-  ArrowRightLeft, Building2, CheckCheck, PackageX, Ruler, CircleDot, FilePen, FilePlus2, KeyRound, LogIn, LogOut, Pencil, Power, PowerOff, RotateCcw,
+  ArrowRightLeft, Building2, CheckCheck, PackageX, Ruler, CircleDot, FilePen, FilePlus2, FileX, KeyRound, LogIn, LogOut, Pencil, Power, PowerOff, RotateCcw,
   Send, ShieldAlert, ShieldCheck, Trash2, UserPlus, XCircle, Eye, Banknote, DatabaseBackup, Download, Upload, FileCheck2, type LucideIcon,
 } from "lucide-react"
 import type { AuditAction, AuditEntity, AuditEvent } from "@/lib/types"
@@ -15,6 +15,7 @@ export const AUDIT_ENTITIES: AuditEntity[] = [
   "receipt", "payment", "account", "accountingConfig", "vatReturn", "treasury", "vds", "adjustment", "vatSettings",
   "customer", "vendor", "item", "masterItem", "unit", "user", "company", "session",
   "ud", "backup", "access", "import", "tariff",
+  "moneyTransfer", "cheque",
 ]
 
 export const ACTION_ICON: Record<AuditAction, LucideIcon> = {
@@ -22,13 +23,15 @@ export const ACTION_ICON: Record<AuditAction, LucideIcon> = {
   updated: Pencil, activated: Power, deactivated: PowerOff, roleChanged: ShieldCheck, invited: UserPlus,
   passwordReset: KeyRound, passwordChanged: KeyRound, signedIn: LogIn, signedOut: LogOut, signInFailed: ShieldAlert, submitted: Send,
   viewed: Eye, realised: Banknote, backedUp: DatabaseBackup, downloaded: Download, imported: Upload,
+  presented: Send, cleared: CheckCheck, bounced: FileX,
 }
 export const ACTION_TONE: Partial<Record<AuditAction, Tone>> = {
   approved: "success", activated: "success", cancelled: "danger", deleted: "danger", deactivated: "danger", signInFailed: "danger",
   passwordReset: "warning", roleChanged: "warning", created: "info", invited: "info", submitted: "success",
   realised: "success", backedUp: "success", imported: "info", downloaded: "warning",
+  cleared: "success", bounced: "danger", presented: "info",
 }
-export const entityIcon = (e: AuditEntity): LucideIcon => (e === "company" ? Building2 : e === "session" ? LogIn : e === "user" ? UserPlus : e === "transfer" ? ArrowRightLeft : e === "damage" ? PackageX : e === "unit" ? Ruler : e === "ud" ? FileCheck2 : e === "backup" ? DatabaseBackup : e === "access" ? Eye : e === "import" ? Upload : e === "tariff" ? BookOpenCheck : CircleDot)
+export const entityIcon = (e: AuditEntity): LucideIcon => (e === "company" ? Building2 : e === "session" ? LogIn : e === "user" ? UserPlus : e === "transfer" ? ArrowRightLeft : e === "moneyTransfer" ? ArrowRightLeft : e === "cheque" ? FileCheck2 : e === "damage" ? PackageX : e === "unit" ? Ruler : e === "ud" ? FileCheck2 : e === "backup" ? DatabaseBackup : e === "access" ? Eye : e === "import" ? Upload : e === "tariff" ? BookOpenCheck : CircleDot)
 
 /** Where a record lives in the app (null when there is no page, e.g. sign-ins or deleted records). */
 export function entityHref(e: AuditEvent): string | null {

@@ -1,4 +1,4 @@
-import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, ChequeEvent, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -13,6 +13,7 @@ import { seedRealisations, seedUds } from "./seed-r6"
 import { seedBondUds, seedDrawbackClaims } from "./seed-r65"
 import { seedLateFilings, seedPrcBatches, seedReturnAmendments } from "./seed-r66"
 import { DEFAULT_REMINDER_SETTINGS, seedDeliveryLog, seedDeliverySchedules } from "./seed-r83"
+import { seedChequeEvents, seedTransfers } from "./seed-r91"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -23,7 +24,7 @@ export interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -42,6 +43,8 @@ export interface DB {
   /** R8.3: the reminder settings (one row), the reminders the schedule has fired, the delivery schedules and their log */
   reminderSettings: ReminderSettings; reminders: FiredReminder[]
   deliverySchedules: DeliverySchedule[]; deliveryLog: DeliveryLogRow[]
+  /** R9.1: transfers between the company's own accounts, and the cheque lifecycle events (the register itself is derived) */
+  moneyTransfers: MoneyTransfer[]; chequeEvents: ChequeEvent[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -152,16 +155,23 @@ function init(): DB {
     bankStatements: [], bankLines: [],
     reminderSettings: DEFAULT_REMINDER_SETTINGS, reminders: [],
     deliverySchedules: seedDeliverySchedules(), deliveryLog: [],
+    moneyTransfers: [], chequeEvents: [],
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
       account: r4.moneyAccounts.length, receipt: r4.moneyDocs.filter((x) => x.kind === "receipt").length, payment: r4.moneyDocs.filter((x) => x.kind === "payment").length,
       treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length, bondUd: bondUds.length, claim: drawbackClaims.length,
       prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length, statement: 0,
+      moneyTransfer: 0, cheque: 0,
     },
   }
   // the seeded log row's figures come from the seeded books themselves, so both runtimes seed the same document
   world.deliveryLog = seedDeliveryLog(world)
+  // R9.1: the transfers and the cheque lifecycle, derived from the seeded accounts and cheque money documents
+  world.moneyTransfers = seedTransfers(world)
+  world.chequeEvents = seedChequeEvents(world)
+  world.seq.moneyTransfer = world.moneyTransfers.length
+  world.seq.cheque = world.chequeEvents.length
   return world
 }
 
@@ -210,6 +220,12 @@ db.seq.prcBatch ??= db.prcBatches.length; db.seq.lateFiling ??= db.lateFilings.l
 // row is computed from the snapshot's own books (the same pure builder the tick uses)
 db.reminderSettings ??= DEFAULT_REMINDER_SETTINGS
 db.reminders ??= []
+// R9.1: state saved before R9.1 has no transfers or cheque events yet (the register derives from the money
+// documents the snapshot already carries)
+db.moneyTransfers ??= []
+db.chequeEvents ??= []
+db.seq.moneyTransfer ??= 0
+db.seq.cheque ??= 0
 db.deliverySchedules ??= seedDeliverySchedules()
 db.deliveryLog ??= seedDeliveryLog(db)
 

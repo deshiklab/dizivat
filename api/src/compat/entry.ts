@@ -196,6 +196,17 @@ export {
   type ScheduleRun,
 } from "@/app/api/v1/_r83"
 export { nextRunAfter, reminderTone, REMINDER_TARGET } from "@/lib/schedule"
+// R9.1: the treasury rules — what a transfer between the company's own accounts may hold (the pair of accounts,
+// the charge that leaves one side without reaching the other), the closed-books approve / cancel rules, the
+// identity a new transfer takes, the register's spec, CSV columns and facet labels, and the cheque register's
+// own rules: the derived rows, the lifecycle transitions a cheque allows (present / clear / bounce) and the
+// register's spec and CSV. The transfers live in `money_transfers` and the cheque lifecycle in `cheque_events`;
+// the balances are derived (`accountRow`), so approving a transfer writes nothing but its own row.
+export {
+  buildTransfer, transferApproveRule, transferCancelRule, transferIdentity, claimTransferId, transferSpec,
+  transferFacetLabels, TRANSFER_DIFF_FIELDS, TRANSFER_CSV_COLUMNS,
+  chequeActionRule, chequeSpec, CHEQUE_CSV_COLUMNS,
+} from "@/app/api/v1/_r91"
 
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
 // duty per line) variants, priced by the same functions the mock and the static demo run.

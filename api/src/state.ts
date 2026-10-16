@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, BondUd, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AuditEvent, Batch, Bom, BondUd, ChequeEvent, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -45,6 +45,8 @@ interface Globals {
     /** R8.3: the schedule — the settings row, the fired reminders, the delivery schedules and their log */
     reminderSettings?: ReminderSettings; reminders?: FiredReminder[]
     deliverySchedules?: DeliverySchedule[]; deliveryLog?: DeliveryLogRow[]
+    /** R9.1: the transfers between the company's own accounts, and the cheque lifecycle events (the register derives) */
+    moneyTransfers?: MoneyTransfer[]; chequeEvents?: ChequeEvent[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -72,6 +74,8 @@ export function restoreGlobals(s: {
   db: Record<string, unknown>; notifRead: UserStore["notifRead"]; users: User[]; prefs: Record<string, Preferences>; company: Company
   /** R8.3: the schedule — reminder settings, fired reminders, delivery schedules and their log (tables now) */
   reminderSettings?: ReminderSettings; reminders?: FiredReminder[]; deliverySchedules?: DeliverySchedule[]; deliveryLog?: DeliveryLogRow[]
+  /** R9.1: the transfers and the cheque lifecycle events (tables; a pre-R9.1 snapshot carries neither) */
+  moneyTransfers?: MoneyTransfer[]; chequeEvents?: ChequeEvent[]
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
@@ -107,6 +111,7 @@ export function restoreGlobals(s: {
     trash: [...docsTrash, ...s.partyTrash, ...s.saleTrash, ...s.purchaseTrash],
     reminderSettings: s.reminderSettings, reminders: s.reminders ?? [],
     deliverySchedules: s.deliverySchedules ?? [], deliveryLog: s.deliveryLog ?? [],
+    moneyTransfers: s.moneyTransfers ?? [], chequeEvents: s.chequeEvents ?? [],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
@@ -343,6 +348,29 @@ export const mirror = {
     const list = mirror.moneyDocs()
     const i = list.findIndex((x) => x.id === id)
     return i < 0 ? undefined : list.splice(i, 1)[0]
+  },
+  /** R9.1: the transfers between the company's own accounts, and the cheque lifecycle events */
+  moneyTransfers: (): MoneyTransfer[] => G.__dzDb!.moneyTransfers ?? [],
+  putMoneyTransfers(list: MoneyTransfer[]) { const a = mirror.moneyTransfers(); a.splice(0, a.length, ...list) },
+  findMoneyTransfer: (idOrNo: string) => mirror.moneyTransfers().find((t) => t.id === idOrNo || t.no === idOrNo),
+  putMoneyTransfer(t: MoneyTransfer) {
+    const list = G.__dzDb!.moneyTransfers ??= []
+    const cur = list.find((x) => x.id === t.id)
+    if (cur) replaceObject(cur, t)
+    else list.push(t)
+    return cur ?? t
+  },
+  removeMoneyTransfer(id: string) {
+    const list = G.__dzDb!.moneyTransfers
+    if (!list) return
+    const i = list.findIndex((x) => x.id === id)
+    if (i >= 0) list.splice(i, 1)
+  },
+  chequeEvents: (): ChequeEvent[] => G.__dzDb!.chequeEvents ?? [],
+  putChequeEvents(list: ChequeEvent[]) { const a = mirror.chequeEvents(); a.splice(0, a.length, ...list) },
+  appendChequeEvent(e: ChequeEvent) {
+    const list = G.__dzDb!.chequeEvents ??= []
+    list.push(e)
   },
   /** R5.6: the treasury deposits (TR-6) — what Mushak 9.1 counts as tax already paid, and what a VDS quotes */
   treasury: (): TreasuryDeposit[] => G.__dzDb!.treasury,

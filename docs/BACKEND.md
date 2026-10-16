@@ -1204,6 +1204,38 @@ figures the recipients saw.
   the rows for both runtimes. A database seeded before R8.3 gets the default settings and the two default
   schedules by the boot's adoption leg (an empty log — the first tick fills it).
 
+## R9.1 — treasury operations: account transfers and the cheque register
+
+Money the company never loses still has to move, and an instrument the bank has not settled yet is still a
+promise. Two small additions close both gaps.
+
+- **Transfers (TX-)** between the company's own accounts — the cash deposited at the bank, the withdrawal
+  for wages, the wallet top-up — live in `money_transfers` (migration `0026`; the mock keeps the same array).
+  They ride the ordinary draft → approved → cancelled lifecycle with the same closed-books rule, and there is
+  deliberately **no approve-time side effect**: the account balances are derived (`accountRow` /
+  `booksBalanceAt` read `moneyTransfers`), so approving moves both sides everywhere at once — the amount
+  **plus the charge** out of the from-account, the bare amount into the to-account. The pair of accounts is
+  locked on a saved draft (409); a deleted draft keeps its stamped row so its id and number stay retired.
+- **The cheque register** is a pure read model: every approved receipt / payment paid by cheque folds with the
+  append-only `cheque_events` (migration `0026`) into one row — received (MR-) or issued (PV-), the cheque
+  date, whether it is **post-dated** (dated after today; `?postDated=true` narrows the view), its age, and
+  its status: `outstanding → presented → cleared`, with `bounced` reachable while outstanding or presented
+  and a ≥10-char reason required. Cleared and bounced are final; the action date must lie within
+  `[cheque date, today]`. The money document itself never changes — a bounce rings the notification bell for
+  the accountants (`cheque:{moneyId}`, danger) and the correction is theirs to make with the documents they
+  already have. The fold lives in `lib/money-ops.ts` (pure, shared by both runtimes); the rules in
+  `_r91.ts`, shared through the compat bundle.
+- **The R8.2 matcher knows a transfer** when it sees one: a statement line whose reference (or date + exact
+  amount, charge included) matches an approved transfer on that account explains itself as one, so the
+  deposit slip matches like a TR-6 challan or a receipt does.
+- **The screens**: `/accounting/transfers` (register + form with the where-it-lands summary + sheet) and
+  `/accounting/cheques` (register, post-dated view, sheet with the lifecycle timeline and its actions), both
+  under Accounting in the nav, both in English and Bangla. `e2e_r9.py` walks them in the browser;
+  `api_native.py` drills the tables against PostgreSQL incl. the restart and the transfer-matching statement
+  line; `contract.py` carries the eight new rows. A database seeded before R9.1 (SEED_VERSION `r6.6`)
+  re-seeds the demo (after a backup) so it carries the three seeded transfers and the cheque lifecycle — a
+  customer database (DEMO_RESEED=off) starts the feature empty.
+
 ## Tables
 
 | Table | Purpose |

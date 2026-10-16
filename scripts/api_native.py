@@ -632,7 +632,11 @@ def restart():
 
 
 def psql(q):
-    return subprocess.run(["psql", DB_URL, "-At", "-c", q], capture_output=True, text=True, check=True).stdout.strip()
+    r = subprocess.run(["psql", DB_URL, "-At", "-c", q], capture_output=True, text=True)
+    if r.returncode != 0:
+        why = " | ".join(r.stderr.strip().splitlines()[-3:]) if r.stderr.strip() else str(r.returncode)
+        raise RuntimeError(f"psql failed ({q[:120]}…): {why}")
+    return r.stdout.strip()
 
 
 # The finale drains compat_state and the boot drops the table — every drill that rewinds the tables into
@@ -2776,15 +2780,20 @@ def run():
     if DB_URL:
         check(psql("select count(*) from money_accounts") == str(ayPage["total"]),
               f"R5.6: …and its total is the rows of the table ({ayPage['total']})")
-        # the inflow is every approved receipt on the account, less its charge; the outflow is the payments *and*
-        # the treasury deposits, which are still compat state — so only the side that is rows is summed here
+        # the inflow is every approved receipt on the account, less its charge, plus every approved transfer
+        # into it (R9.1 — the amount as-is: a transfer's charge never reaches the to-account); the outflow is
+        # the payments *and* the treasury deposits, which are still compat state — so only the side that is
+        # rows is summed here
         for ayAcc in ayRows[:4]:
             ayGot = psql(f"""select coalesce((select sum(amount - charge) from money_docs
                     where account_id = '{ayAcc["id"]}' and kind = 'receipt' and process = 'Approved'
+                      and deleted_at is null), 0)
+                  + coalesce((select sum(amount) from money_transfers
+                    where to_account_id = '{ayAcc["id"]}' and process = 'Approved'
                       and deleted_at is null), 0)""")
             check(jr2(float(ayGot)) == ayAcc["inflow"],
                   f"R5.6: {ayAcc['provider']} · {ayAcc['accountNo']} — what it received is the same sum over "
-                  f"money_docs ({ayGot} = {ayAcc['inflow']})")
+                  f"money_docs plus the transfers in ({ayGot} = {ayAcc['inflow']})")
     # an account of its own, so the checks below never disturb the seeded ones
     ayKind = "bank"
     ayBody = {"kind": ayKind, "provider": f"R5.6 Bank {TAG}", "accountNo": f"00{TAG}", "owner": "DiziVat Ltd",
@@ -5486,6 +5495,79 @@ def run():
         check(any(n["id"] == "rem:return91:2026-10-15:30" for n in admin.get(f"{BASE}/notifications").json()["items"]),
               "…and the fired reminder is still in the feed")
 
+        print("\nR9.1: the account transfers and the cheque register")
+        # the seeded demo: three transfers (two approved, one draft) and the cheque lifecycle events
+        check(psql("select count(*) from money_transfers where deleted_at is null") == "3",
+              "R9.1: the three seeded transfers are rows in their table")
+        check(psql("select count(*) from money_transfers where process = 'Approved'") == "2",
+              "…two of them approved, one still a draft")
+        check(int(psql("select count(*) from cheque_events")) >= 5, "…and the seeded cheque lifecycle events are rows")
+        tx = admin.get(f"{BASE}/accounting/transfers", params={"size": 20}).json()
+        check(tx["total"] == 3 and {t["process"] for t in tx["data"]} == {"Approved", "Created"},
+              "the register lists the seeded demo with its statuses")
+        check(tx["totals"]["amount"] == 950000, "…its totals sum (500k + 300k + 150k)")
+        # the derived balances: the seeded moves are already in them (the deposit +500k on the DBBL account,
+        # the withdrawal −300,250 on the BRAC account) — prove it by moving one back and forth
+        accts = {a["id"]: a for a in admin.get(f"{BASE}/accounting/accounts", params={"size": 20}).json()["data"]}
+        r = admin.post(f"{BASE}/accounting/transfers", json={"process": "Approved", "date": "2026-09-22",
+                                                             "fromAccountId": "ac2", "toAccountId": "ac4", "amount": 250000, "charge": 550})
+        check(r.status_code == 201 and r.json()["no"].startswith("TX-"), "a transfer is created and approved in one step")
+        tf_id = r.json()["id"]
+        accts2 = {a["id"]: a for a in admin.get(f"{BASE}/accounting/accounts", params={"size": 20}).json()["data"]}
+        check(abs(accts2["ac4"]["balance"] - accts["ac4"]["balance"] - 250000) < 0.005
+              and abs(accts2["ac2"]["balance"] - accts["ac2"]["balance"] + 250550) < 0.005,
+              "…the derived balances move: the amount in, the amount + charge out")
+        r = admin.patch(f"{BASE}/accounting/transfers/{tf_id}", json={"process": "Cancelled", "reason": "native drill: reversing"})
+        check(r.status_code == 200 and psql(f"select cancel_reason from money_transfers where id = '{tf_id}'") == "native drill: reversing",
+              "…cancelling stamps the reason on the row, and the balances come back")
+        accts3 = {a["id"]: a for a in admin.get(f"{BASE}/accounting/accounts", params={"size": 20}).json()["data"]}
+        check(abs(accts3["ac2"]["balance"] - accts["ac2"]["balance"]) < 0.005, "…the from-account is back where it was")
+        # a draft edit refuses to change the pair; a delete retires the number with its row stamped
+        r = admin.post(f"{BASE}/accounting/transfers", json={"process": "Created", "date": "2026-09-23",
+                                                             "fromAccountId": "ac1", "toAccountId": "ac3", "amount": 4200})
+        d_id, d_no = r.json()["id"], r.json()["no"]
+        r = admin.put(f"{BASE}/accounting/transfers/{d_id}", json={"process": "Created", "date": "2026-09-23",
+                                                                  "fromAccountId": "ac3", "toAccountId": "ac1", "amount": 4200})
+        check(r.status_code == 409, "a saved draft cannot move to another pair of accounts (409)")
+        r = admin.delete(f"{BASE}/accounting/transfers/{d_id}")
+        check(r.status_code == 200 and psql(f"select count(*) from money_transfers where id = '{d_id}' and deleted_at is not null") == "1",
+              "a deleted draft keeps its stamped row — the id and number stay retired")
+        # the cheque register derives from the money documents; the lifecycle writes only events
+        reg = admin.get(f"{BASE}/accounting/cheques", params={"size": 30}).json()
+        check(reg["total"] >= 5 and {r_["status"] for r_ in reg["data"]} >= {"cleared", "bounced", "outstanding"},
+              "the register derives every cheque with the statuses the events folded")
+        ev_before = int(psql("select count(*) from cheque_events"))
+        open_row = next(r_ for r_ in reg["data"] if r_["status"] == "outstanding" and not r_["postDated"])
+        r = admin.post(f"{BASE}/accounting/cheques/{open_row['id']}/action", json={"action": "presented", "date": open_row["chequeDate"]})
+        check(r.status_code == 201 and r.json()["status"] == "presented", "a lifecycle action appends one event")
+        check(int(psql("select count(*) from cheque_events")) == ev_before + 1, "…exactly one row in the events table")
+        r = admin.post(f"{BASE}/accounting/cheques/{open_row['id']}/action", json={"action": "cleared", "date": "2026-09-24"})
+        check(r.status_code == 201 and psql(f"select count(*) from money_docs where id = '{open_row['id']}' and process = 'Approved'") == "1",
+              "…clearing after the presentation; the money document itself never changed")
+        audit = admin.get(f"{BASE}/audit", params={"entity": "cheque", "size": 5}).json()
+        check({e["action"] for e in audit["data"]} >= {"presented", "cleared"}, "the cheque lifecycle lands in the audit trail")
+        notif = admin.get(f"{BASE}/notifications").json()["items"]
+        bounced = next(r_ for r_ in reg["data"] if r_["status"] == "bounced")
+        check(any(n["id"] == f"cheque:{bounced['id']}" for n in notif),
+              "the seeded bounce rings the bell for the accountants")
+        # R8.2's matcher knows a transfer when it sees one: the deposit slip's reference explains the line
+        r = admin.post(f"{BASE}/accounting/statements", json={"accountId": "ac1", "source": "r91-native.csv", "dryRun": True,
+                                                              "rows": [{"date": "2026-09-05", "narration": "Cash deposit CASH-DEP-0509",
+                                                                        "reference": "CASH-DEP-0509", "deposit": 500000, "withdrawal": 0}]})
+        plan = r.json()
+        check(r.status_code == 200 and plan["matched"] == 1 and plan["lines"][0]["matchKind"] == "transfer",
+              f"a bank line whose reference is a transfer's matches that transfer (the books and the bank agree) — "
+              f"{r.status_code}, matched {plan.get('matched') if isinstance(plan, dict) else plan}, "
+              f"line {plan['lines'][0] if isinstance(plan, dict) and plan.get('lines') else plan}")
+        # everything above is table state — it survives a restart
+        restart()
+        tx2 = admin.get(f"{BASE}/accounting/transfers", params={"size": 20}).json()
+        check(tx2["total"] == 4 and any(t["id"] == tf_id and t["process"] == "Cancelled" for t in tx2["data"]),
+              "R9.1: the transfers (and the cancellation) survive the restart")
+        reg2 = admin.get(f"{BASE}/accounting/cheques", params={"size": 30}).json()
+        check(next(r_ for r_ in reg2["data"] if r_["id"] == open_row["id"])["status"] == "cleared",
+              "…the cheque's cleared status too — the events are durable rows")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
@@ -5511,11 +5593,12 @@ def run():
         # the whole map after every request, so a drill that keeps only the ids it cares about would let
         # notifications the suite read earlier pop back up as unread and fail the round-trip check below
         have = json.loads(psql("select notif_read::text from users where username = 'arif'") or "[]")
-        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 26, "26 migrations have run on this database")
-        # un-apply the last THREE journal rows: the migrator replays by position, so the boot has to re-run
-        # 0025 (R8.3's schedule) and 0024 (R8.2's bank statements — both idempotent) to reach 0023 (the
-        # notif_read lift) again
-        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 3)")
+        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 27, "27 migrations have run on this database")
+        # un-apply the last FOUR journal rows: the migrator replays by position, so the boot has to re-run
+        # 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and 0024 (R8.2's bank statements —
+        # all idempotent) to reach 0023 (the notif_read lift) again; 0022 and earlier keep their rows,
+        # because their tables are NOT idempotent and must not be replayed
+        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 4)")
         psql("alter table users drop column notif_read")
         ensure_compat_state()
         ids = [*have, "finale:migrated"]

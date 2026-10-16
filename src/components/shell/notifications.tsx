@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bell, CalendarClock, CheckCheck, CheckCircle2, FileClock, FileSpreadsheet, KeyRound, PackageX, XCircle, type LucideIcon } from "lucide-react"
+import { Bell, CalendarClock, CheckCheck, CheckCircle2, FileClock, FileSpreadsheet, FileX, KeyRound, PackageX, XCircle, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Link } from "@/i18n/navigation"
@@ -16,7 +16,7 @@ import { useShell } from "./shell-context"
 const TONE = { info: "text-info", warning: "text-warning", success: "text-success", danger: "text-danger" } as const
 const icon = (n: AppNotification): LucideIcon =>
   n.kind === "approvals" ? FileClock : n.kind === "deadline" ? CalendarClock : n.kind === "lowStock" ? PackageX
-    : n.kind === "security" ? KeyRound : n.kind === "delivery" ? FileSpreadsheet : n.msg === "docApproved" ? CheckCircle2 : XCircle
+    : n.kind === "security" ? KeyRound : n.kind === "delivery" ? FileSpreadsheet : n.kind === "cheque" ? FileX : n.msg === "docApproved" ? CheckCircle2 : XCircle
 
 /** Server-driven notifications, polled every 60 s (Mercure push replaces polling in R3). */
 export function Notifications() {

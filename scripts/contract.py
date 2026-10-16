@@ -168,6 +168,15 @@ ENDPOINTS = [
     E("GET", "/accounting/statements/{statement}", None, "R8.2: one statement with its lines and the books-vs-bank answer {statement, lines, books, statementBalance, difference, open}"),
     E("PATCH", "/accounting/statements/{statement}/lines/{line}", "doc.edit", "R8.2: park an open line {status: charge|ignored, note?} or reopen it (409 matched / a receipt was already created)"),
     E("POST", "/accounting/statements/{statement}/lines/{line}/receipt", "doc.create", "R8.2: create the money document an open line is about — {kind: receipt|payment} + the ordinary money body (reference / note prefilled from the line), stored as a draft and linked back to the line (409 matched / already created; 422 process Approved — approve it in the register)"),
+    # R9.1 — treasury: transfers between the company's own accounts, and the cheque register
+    E("GET", "/accounting/transfers", None, "R9.1: transfers between the company's own accounts (TX-) — Page<MoneyTransfer>; facets process / fromAccount / toAccount; approving moves both derived balances (amount+charge out of the from-account, the amount into the to-account)", page=True, csv=True),
+    E("POST", "/accounting/transfers", "doc.create", "R9.1: record a transfer {date, fromAccountId, toAccountId, amount, charge?, reference?, note?, process} — the accounts must be active and different; 409 when a saved draft is moved to another pair"),
+    E("GET", "/accounting/transfers/{moneyTransfer}", None, "R9.1: one transfer"),
+    E("PUT", "/accounting/transfers/{moneyTransfer}", "doc.edit", "R9.1: replace a draft (the pair of accounts is locked)"),
+    E("PATCH", "/accounting/transfers/{moneyTransfer}", None, "R9.1: approve / cancel {reason≥10}; the books must be open for the transfer's date either way"),
+    E("DELETE", "/accounting/transfers/{moneyTransfer}", "doc.delete", "R9.1: delete a draft (the row keeps its id and number retired)"),
+    E("GET", "/accounting/cheques", None, "R9.1: the cheque register — Page<ChequeRow> derived from the approved cheque receipts (received) and payments (issued) folded with the lifecycle events; facets kind / status / party / account; ?postDated=true narrows to the post-dated view; row links to the money document", page=True, csv=True),
+    E("POST", "/accounting/cheques/{cheque}/action", "doc.edit", "R9.1: a lifecycle action {action: presented|cleared|bounced, date, reason (≥10 chars, bounced only)} — one append-only event; clear needs a presentation first, cleared/bounced are final, the date must be within [cheque date, today]"),
     # R4 — NBR VAT
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
@@ -307,10 +316,15 @@ def fixtures():
     wo = s.get(BASE + "/production/work-orders?process=Approved&size=1").json()["data"][0]["id"]
     batch = s.get(BASE + "/production/batches?process=Approved&mode=inHouse&size=1").json()["data"][0]["id"]
     first = lambda path: s.get(BASE + path).json()["data"][0]["id"]
+    # R9.1: an approved transfer, and cheques in the two states the error contracts need
+    money_transfer = first("/accounting/transfers?process=Approved&size=1")
+    cheque_open = s.get(BASE + "/accounting/cheques?status=outstanding&size=1").json()["data"][0]["id"]
+    cheque_final = s.get(BASE + "/accounting/cheques?status=cleared&size=1").json()["data"][0]["id"]
     r4 = {"receipt": first("/accounting/receipts?process=Approved&size=1"), "payment": first("/accounting/payments?process=Approved&size=1"),
           "treasury": first("/vat/treasury?process=Approved&size=1"), "vds": first("/vat/vds?process=Approved&size=1"),
           "adjustment": first("/vat/adjustments?process=Approved&size=1"), "account": "ac1", "period": "2026-08"}
-    return {**r4, "goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
+    return {**r4, "moneyTransfer": money_transfer, "cheque": cheque_open, "chequeFinal": cheque_final,
+            "goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
 
 def run():
     fx = fixtures()
@@ -385,6 +399,18 @@ def run():
         (None, "POST", "/auth/login", {}, 422, "username"),
         (None, "POST", "/auth/login", {"username": rnd, "password": "x"}, 401, "_"),
         ("arif", "GET", "/sales/nope", None, 404, None),
+        # R9.1 — transfers and the cheque lifecycle
+        ("arif", "GET", "/accounting/transfers/nope", None, 404, None),
+        ("arif", "POST", "/accounting/transfers", {}, 422, "fromAccountId"),
+        ("arif", "POST", "/accounting/transfers", {"process": "Created", "date": "2026-09-20", "fromAccountId": "ac1", "toAccountId": "ac1", "amount": 100}, 422, "toAccountId"),
+        ("arif", "POST", "/accounting/transfers", {"process": "Created", "date": "2026-09-20", "fromAccountId": "ac1", "toAccountId": "nope", "amount": 100}, 422, "toAccountId"),
+        ("arif", "PUT", f"/accounting/transfers/{fx['moneyTransfer']}", {}, 409, None),
+        ("arif", "DELETE", f"/accounting/transfers/{fx['moneyTransfer']}", None, 409, None),
+        ("arif", "POST", "/accounting/cheques/nope/action", {}, 404, None),
+        ("arif", "POST", f"/accounting/cheques/{fx['chequeFinal']}/action", {"action": "bounced", "date": "2026-09-10", "reason": "Refer to drawer — contract"}, 409, None),
+        ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "cleared", "date": "2026-09-10"}, 409, None),
+        ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "bounced", "date": "2026-09-10", "reason": "too short"}, 422, "reason"),
+        ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "presented", "date": "2020-01-01"}, 422, "date"),
         ("arif", "GET", "/purchases/nope", None, 404, None),
         ("arif", "GET", "/items/nope", None, 404, None),
         ("arif", "POST", "/sales", {}, 422, "customerId"),

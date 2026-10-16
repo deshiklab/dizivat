@@ -788,3 +788,24 @@ export const deliveryInput = z.object({
   if (s.frequency === "weekly" && s.day > 7) ctx.addIssue({ code: "custom", path: ["day"], message: "weekday" })
 })
 export type DeliveryInputT = z.output<typeof deliveryInput>
+
+/** R9.1 — a transfer between the company's own accounts. */
+export const moneyTransferInput = z.object({
+  date,
+  fromAccountId: z.string().min(1, "required"),
+  toAccountId: z.string().min(1, "required"),
+  amount: money(0.01),
+  charge: z.number().min(0, "min0").max(9_999_999).optional().default(0),
+  reference: z.string().trim().max(60).optional().default(""),
+  note: z.string().trim().max(500).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+})
+export type MoneyTransferInput = z.input<typeof moneyTransferInput>
+
+/** R9.1 — a cheque lifecycle action: presented / cleared / bounced. */
+export const chequeActionInput = z.object({
+  action: z.enum(["presented", "cleared", "bounced"]),
+  date,
+  reason: z.string().trim().max(300).optional().default(""),
+})
+export type ChequeActionInput = z.input<typeof chequeActionInput>

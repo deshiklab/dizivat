@@ -9,12 +9,12 @@ import { asc, eq, sql } from "drizzle-orm"
 import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, CreditNote, Damage, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
+  AccountingConfig, AuditEvent, Batch, Bom, ChequeEvent, CreditNote, Damage, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
   BondUd, StockDoc, Transfer, TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder
 } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, compatState, items, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
+import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, chequeEvents, compatState, items, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, moneyTransfers, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -30,8 +30,8 @@ import { assembleSales, markSales, realisationValues, saleLineValues, saleValues
 import { assembleStockDocs, markStockDocs, stockDocValues, stockLineValues } from "./modules/stock"
 import { assembleWorkOrders, markWorkOrders, refreshWorkOrderRows, workOrderLineValues, workOrderValues } from "./modules/workorders"
 import {
-  accountingConfigValues, applyAccountingDeltas, assembleMoneyDocs, markAccountingConfig, markMoneyAccounts, markMoneyDocs, moneyAccountValues, moneyAllocationValues, moneyDocValues,
-  toAccountingConfig, toMoneyAccount,
+  accountingConfigValues, applyAccountingDeltas, assembleMoneyDocs, markAccountingConfig, markMoneyAccounts, markMoneyDocs, markMoneyTransfers, moneyAccountValues, moneyAllocationValues, moneyDocValues,
+  chequeEventValues, moneyTransferValues, toAccountingConfig, toChequeEvent, toMoneyAccount, toMoneyTransfer,
 } from "./modules/accounting"
 import {
   adjustmentValues, applyVatDocDeltas, markAdjustments, markTreasury, markVds, toAdjustment, toTreasury, toVds,
@@ -51,7 +51,7 @@ import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
 
-export const SEED_VERSION = "r6.6"
+export const SEED_VERSION = "r9.1"
 
 /**
  * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —
@@ -154,6 +154,9 @@ async function seed(log: (m: string) => void) {
   const demoPrcBatches: PrcBatch[] = m.db.prcBatches
   // R6.5: the duty-drawback claims (DEDO, Mushak-22)
   const demoDrawbackClaims: DrawbackClaim[] = m.db.drawbackClaims
+  // R9.1: the transfers between the company's own accounts, and the cheque lifecycle events
+  const demoMoneyTransfers: MoneyTransfer[] = m.db.moneyTransfers
+  const demoChequeEvents: ChequeEvent[] = m.db.chequeEvents
   // R5.6: the Mushak 9.1 returns — one row per tax period, the period being its id — and the NBR settings row
   const demoReturns: VatReturn[] = m.db.returns
   const demoVatSettings: VatSettings = m.db.vatSettings
@@ -164,7 +167,7 @@ async function seed(log: (m: string) => void) {
     await tx.execute(sql`set local dizivat.reseed = 'on'`)
     for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "sales", "sale_lines", "sale_realisations", "purchases", "purchase_lines", "notes", "note_lines", "opening_entries", "batches", "batch_lines", "batch_consumption", "boms", "bom_inputs", "bom_costs", "production_config", "work_orders", "work_order_lines",
       "money_accounts", "money_docs", "money_allocations", "accounting_config", "treasury_deposits", "vds_entries", "vat_adjustments", "tariff_lines",
-      "bank_statements", "bank_statement_lines",
+      "bank_statements", "bank_statement_lines", "money_transfers", "cheque_events",
       "uds", "ud_lines",
       "bond_uds", "bond_ud_inputs", "bond_ud_garments",
       "audit_events", "compat_state", "meta"])
@@ -228,6 +231,9 @@ async function seed(log: (m: string) => void) {
     for (let i = 0; i < m.db.reminders.length; i += 500) await tx.insert(reminders).values(m.db.reminders.slice(i, i + 500).map(reminderValues))
     for (let i = 0; i < m.db.deliverySchedules.length; i += 500) await tx.insert(deliverySchedules).values(m.db.deliverySchedules.slice(i, i + 500).map(scheduleValues))
     for (let i = 0; i < m.db.deliveryLog.length; i += 500) await tx.insert(deliveryLog).values(m.db.deliveryLog.slice(i, i + 500).map(deliveryLogValues))
+    // R9.1: the transfers and the cheque lifecycle, derived from the seeded accounts and cheque money documents
+    for (let i = 0; i < demoMoneyTransfers.length; i += 500) await tx.insert(moneyTransfers).values(demoMoneyTransfers.slice(i, i + 500).map(moneyTransferValues))
+    for (let i = 0; i < demoChequeEvents.length; i += 500) await tx.insert(chequeEvents).values(demoChequeEvents.slice(i, i + 500).map(chequeEventValues))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -350,6 +356,10 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   const liveAccounts: MoneyAccount[] = (await db.select().from(moneyAccounts).orderBy(asc(moneyAccounts.ord))).map(toMoneyAccount)
   const moneyDbRows = await db.select().from(moneyDocs).orderBy(asc(moneyDocs.ord))
   const liveMoney = await assembleMoneyDocs(moneyDbRows.filter((r) => !r.deletedAt))
+  // R9.1: the transfers (a deleted draft's row holds its id, so the series never repeats) and the cheque events
+  const transferDbRows = await db.select().from(moneyTransfers).orderBy(asc(moneyTransfers.ord))
+  const liveTransfers = transferDbRows.filter((r) => !r.deletedAt).map(toMoneyTransfer)
+  const liveChequeEvents = (await db.select().from(chequeEvents).orderBy(asc(chequeEvents.at))).map(toChequeEvent)
   const [accountingConfigRow] = await db.select().from(accountingConfig).where(eq(accountingConfig.id, 1))
   const accountingCfg: AccountingConfig = accountingConfigRow ? toAccountingConfig(accountingConfigRow) : { allowAdvance: true, autoAllocate: true }
   const liveDeposits: TreasuryDeposit[] = (await db.select().from(treasuryDeposits).orderBy(asc(treasuryDeposits.ord)))
@@ -422,6 +432,9 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     const mine = moneyDbRows.filter((r) => r.kind === kind)
     seq[kind] = Math.max(seq[kind] ?? 0, mine.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
   }
+  // …and the transfers' the same way (`tf1`, `tf2`…)
+  seq.moneyTransfer = Math.max(seq.moneyTransfer ?? 0,
+    transferDbRows.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
   // … and the VAT documents' the same way: a deleted draft's row holds its id, so no series ever repeats
   seq.treasury = Math.max(seq.treasury ?? liveDeposits.length,
     (await db.select().from(treasuryDeposits)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
@@ -464,6 +477,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     ["ud", "ud", 2], ["bondUd", "bondUd", 2],
     ["lateFiling", "lateFiling", 2], ["returnAmendment", "amendment", 2], ["prcBatch", "prcBatch", 2],
     ["drawbackClaim", "claim", 2],
+    ["moneyTransfer", "moneyTransfer", 2],
   ] as const) {
     const seen = events.reduce((m, e) =>
       e.entity === entity && e.entityId ? Math.max(m, Number(e.entityId.slice(skip).split("-")[0]) || 0) : m, 0)
@@ -480,6 +494,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     accountingConfig: accountingCfg, returns: liveReturns, vatSettings: vatSettingsCfg, events,
     reminderSettings: scheduleSettingsRow?.settings ?? DEFAULT_REMINDER_SETTINGS, reminders: liveReminders.map(toFiredReminder),
     deliverySchedules: liveSchedules, deliveryLog: liveDeliveryLog,
+    moneyTransfers: liveTransfers, chequeEvents: liveChequeEvents,
   })
   loadCompat()
   markParties([...mirror.parties("customer"), ...mirror.parties("vendor")])
@@ -499,6 +514,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   markWorkOrders(mirror.workOrders())
   markMoneyAccounts(mirror.moneyAccounts())
   markMoneyDocs(mirror.moneyDocs())
+  markMoneyTransfers(mirror.moneyTransfers())
   markAccountingConfig()
   markTreasury(mirror.treasury())
   markVds(mirror.vds())
@@ -513,7 +529,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   markVatSettings()
   markPersisted(events)
   await dropCompatState(log)
-  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${livePrcBatches.length} PRC batches, ${liveDrawbackClaims.length} drawback claims, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${livePrcBatches.length} PRC batches, ${liveDrawbackClaims.length} drawback claims, ${liveTransfers.length} account transfers, ${liveChequeEvents.length} cheque events, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 /** The collections R5.2, R5.3, R5.4 and R5.5 moved out of `compat_state` into their own tables. */

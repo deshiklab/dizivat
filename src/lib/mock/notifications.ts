@@ -1,6 +1,7 @@
 import type { User } from "@/lib/auth/roles"
 import { can, ROLE_PERMS } from "@/lib/auth/roles"
-import type { AppNotification, DeliveryLogRow, FiredReminder, Item, Purchase, Sale } from "@/lib/types"
+import type { AppNotification, ChequeEvent, DeliveryLogRow, FiredReminder, Item, MoneyDoc, Purchase, Sale } from "@/lib/types"
+import { chequeRowsOf } from "@/lib/money-ops"
 import { TODAY } from "@/lib/company"
 import { REMINDER_TARGET, reminderTone } from "@/lib/schedule"
 import { auditStore } from "@/lib/mock/audit"
@@ -12,7 +13,10 @@ const WEEK = 7 * 864e5
 /** What the notifications read: the documents awaiting an approval, the ones the user issued, the stock levels,
  *  and (R8.3) the reminders the schedule has fired and the reports delivered to this user. */
 export type NotificationSource = { sales: Sale[]; purchases: Purchase[]; items: Item[]
-  reminders?: FiredReminder[]; deliveryLog?: DeliveryLogRow[] }
+  reminders?: FiredReminder[]; deliveryLog?: DeliveryLogRow[]
+  /** R9.1: the money documents and the cheque events — bounced cheques are the register's bad news */
+  moneyDocs?: MoneyDoc[]
+  chequeEvents?: ChequeEvent[] }
 
 /** Builds the user's notifications on demand (Symfony will push via Mercure in R3; polling until then). */
 export function notificationsFor(user: User, src: NotificationSource = db,
@@ -72,6 +76,17 @@ export function notificationsFor(user: User, src: NotificationSource = db,
         out.push({ id: `deadline:tr6:${due}`, kind: "deadline", at: now, msg: "deadline", values: { title: "treasuryDeposit", due: `${due.slice(0, 8)}14`, days: days - 1 }, href: "/vat/tr-6", tone: days <= 7 ? "danger" : "info" })
       if (!covered("return91", due))
         out.push({ id: `deadline:r91:${due}`, kind: "deadline", at: now, msg: "deadline", values: { title: "return91", due, days }, href: "/vat/return-9-1", tone: days <= 7 ? "danger" : "info" })
+    }
+  }
+
+  // A bounced cheque (R9.1) is the register's bad news: the money document stays as it is — correcting the
+  // books is the accountant's job, so the bell points at the register and says whose cheque it was
+  if (can(perms, "settings.manage") && src.moneyDocs && src.chequeEvents) {
+    for (const c of chequeRowsOf({ moneyDocs: src.moneyDocs, chequeEvents: src.chequeEvents }, TODAY).filter((c) => c.status === "bounced")) {
+      out.push({
+        id: `cheque:${c.id}`, kind: "cheque", at: `${c.bouncedOn}T12:00:00.000Z`, msg: "chequeBounced",
+        values: { no: c.no, party: c.partyName, kind: c.kind }, href: "/accounting/cheques", tone: "danger",
+      })
     }
   }
 

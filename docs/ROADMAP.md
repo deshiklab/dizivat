@@ -10,8 +10,9 @@ api_native checks, and this documentation — one slice per PR, one CI watch.
 | S1–S4, R1–R4 | sales, purchases, stock, production, money accounts, receipts & payments, TR-6, VDS 6.6, adjustments, Mushak 9.1, compliance centre | **landed** |
 | R6, R6.2–R6.6 | NBR enlistment readiness, RMG (UDs, bond consumption, drawback), PRC proceeds, 9.3 / 9.4 applications, backups, bulk import | **landed** |
 | R7, R7.1–R7.6 | tariff import, penalty calculator, compliance pack, e-filing JSON, onboarding imports, QR verification (R8.1), bank reconciliation (R8.2) | **landed** |
-| **R8.3** | statutory reminders + report delivery (the schedule, the digests, the tick) | **in flight** |
-| R9 | the complete accounting module | next |
+| **R8.3** | statutory reminders + report delivery (the schedule, the digests, the tick) | done |
+| **R9.1** | treasury operations: own-account transfers (TX-), cheque register with lifecycle | done |
+| R9 | the complete accounting module (R9.2 next: general ledger) | in flight |
 | R10 | POS integration | after R9 |
 
 ## R9 — the complete accounting module
@@ -23,7 +24,7 @@ reminder / delivery schedule. What they still lack, in the order the slices fill
 
 | Slice | Scope | Notes |
 | --- | --- | --- |
-| **R9.1 — treasury operations** | transfers between the company's own accounts, cash deposit / withdrawal, and the cheque register with its lifecycle (issued → presented → cleared / bounced, post-dated view) | the most basic gap: money cannot move between own accounts today. A cleared cheque is exactly what the R8.2 bank matcher already explains |
+| **R9.1 — treasury operations** ✅ | transfers between the company's own accounts, cash deposit / withdrawal, and the cheque register with its lifecycle (issued → presented → cleared / bounced, post-dated view) — **shipped v0.16.0** | the most basic gap: money cannot move between own accounts today. A cleared cheque is exactly what the R8.2 bank matcher already explains |
 | **R9.2 — the general ledger** | chart of accounts (a seeded RMG template), posting rules that derive the GL from the documents that already exist (sales, purchases, notes, receipts, payments, TR-6, VDS, adjustments), manual journal entries for everything else | the keystone. Derived-posting-first means the GL is complete from day one without anyone typing double entries for transactions |
 | **R9.3 — statements and the close** | trial balance, profit & loss, balance sheet, cash flow; the period close that locks posting | reads the R9.2 ledger |
 | **R9.4 — fixed assets** | asset register, classes, straight-line depreciation schedules at the NBR's rates, revaluation and disposal, capital-item input-credit tracking | feeds the ledger, the P&L and the 9.1 |

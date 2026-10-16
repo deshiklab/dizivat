@@ -1,5 +1,5 @@
-import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
+import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { AccountInput, AccountingConfigInput, AdjustmentInput, ChequeActionInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
 import type { BackupRow, BackupStatus, BackupVerify, BankStatement, BankStatementLine, ImportEntity, ImportResult, Sale as R62Sale, StatementPlanAnswer, StatementView, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
@@ -247,6 +247,14 @@ export const api = {
     },
     receipts: docResource<MoneyDoc, MoneyInput>("/accounting/receipts"),
     payments: docResource<MoneyDoc, MoneyInput>("/accounting/payments"),
+    /** R9.1: transfers between the company's own accounts */
+    transfers: docResource<MoneyTransfer, MoneyTransferInput>("/accounting/transfers"),
+    /** R9.1: the cheque register (read model; lifecycle actions append events) */
+    cheques: {
+      list: (p: ListParams) => req<ListResult<ChequeRow>>(`/accounting/cheques${qs(p)}`),
+      action: (id: string, b: ChequeActionInput) => req<ChequeRow>(`/accounting/cheques/${id}/action`, { method: "POST", body: JSON.stringify(b) }),
+      csvUrl: (p: ListParams) => `${BASE}/accounting/cheques${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
     openInvoices: (kind: "receipt" | "payment", party: string) => req<OpenInvoice[]>(`/accounting/open-invoices${qs({ kind, party })}`),
     statement: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => req<PartyStatement>(`/accounting/statement${qs(p)}`),
     statementCsvUrl: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => `${BASE}/accounting/statement${qs({ ...p, format: "csv" })}`,
