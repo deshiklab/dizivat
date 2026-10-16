@@ -11,11 +11,9 @@ import { Money } from "@/components/common/money"
 import { EmptyState } from "@/components/common/empty-state"
 import { useCan } from "@/components/auth/me-provider"
 import { DocBanner, HistoryCard } from "@/features/docs/doc-parts"
-import { RecordHistory } from "@/features/audit/record-history"
 import { api } from "@/lib/api/client"
 import { fmtDate } from "@/lib/format"
 import { DefList, useR4Actions } from "@/features/r4/r4-actions"
-import type { MoneyTransfer } from "@/lib/types"
 
 /** Read view of a transfer with its history; drafts can be edited / deleted, approved ones cancelled with a reason. */
 export function TransferSheet({ id, onOpenChange, onEdit }: { id: string | null; onOpenChange: (o: boolean) => void; onEdit: (id: string) => void }) {

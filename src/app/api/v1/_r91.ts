@@ -17,13 +17,13 @@
  * both call these builders, so the two runtimes cannot drift.
  */
 import { closed, lifecycle, nextNo } from "./_r4"
-import { invalidRule, json, problem, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
+import { invalidRule, json, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
 import { chequeActionInput, moneyTransferInput } from "@/lib/schemas"
 import { csvResponse, runQuery, toCSV, type QuerySpec } from "@/lib/mock/query"
 import { db } from "@/lib/mock/db"
 import { TODAY } from "@/lib/company"
 import { round2 } from "@/lib/vat"
-import { CHEQUE_CSV_COLUMNS, CHEQUE_TONE, TRANSFER_CSV_COLUMNS, chequeFold, chequeMay, chequeRowsOf } from "@/lib/money-ops"
+import { CHEQUE_CSV_COLUMNS, TRANSFER_CSV_COLUMNS, chequeMay, chequeRowsOf } from "@/lib/money-ops"
 export { CHEQUE_CSV_COLUMNS, TRANSFER_CSV_COLUMNS, TRANSFER_DIFF_FIELDS } from "@/lib/money-ops"
 import type { AccountingSource } from "./_r4"
 import type { ChequeAction, ChequeRow, MoneyAccount, MoneyTransfer } from "@/lib/types"

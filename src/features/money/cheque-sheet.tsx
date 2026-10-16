@@ -19,13 +19,11 @@ import { api } from "@/lib/api/client"
 import { TODAY } from "@/lib/company"
 import { fmtDate, fmtNum } from "@/lib/format"
 import { CHEQUE_KIND_TONE } from "@/lib/money-ops"
-import type { ChequeRow } from "@/lib/types"
 
 /** One cheque of the register: the instrument's details, its lifecycle so far, and the next move it allows. */
 export function ChequeSheet({ id, onOpenChange }: { id: string | null; onOpenChange: (o: boolean) => void }) {
   const t = useTranslations("cheques")
   const tc = useTranslations("common")
-  const td = useTranslations("docs")
   const locale = useLocale()
   const can = useCan()
   const { data: d, isLoading, error } = useQuery({ queryKey: ["cheques", id], queryFn: () => api.accounting.cheques.list({ q: id! }).then((r) => r.data.find((x) => x.id === id)), enabled: !!id })
