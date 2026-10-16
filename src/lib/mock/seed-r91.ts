@@ -6,7 +6,7 @@
 import type { DB } from "./db"
 import type { ChequeEvent, MoneyTransfer } from "../types"
 
-const at = (date: string, h = 4) => `${date}T0${h}:1${h % 10}:00.000Z`
+const at = (date: string, h = 4) => `${date}T${String(h).padStart(2, "0")}:1${h % 10}:00.000Z`
 const trail = (date: string, by: string, approved: boolean) => [
   { at: at(date), by, action: "created" as const },
   ...(approved ? [{ at: at(date, 5), by, action: "approved" as const }] : []),
@@ -51,21 +51,23 @@ export function seedChequeEvents(world: Pick<DB, "moneyDocs">): ChequeEvent[] {
   const received = world.moneyDocs.filter((m) => m.process === "Approved" && m.kind === "receipt" && m.method === "cheque" && m.chequeNo)
   const events: ChequeEvent[] = []
   let n = 0
-  const ev = (chequeId: string, action: ChequeEvent["action"], date: string, by: string, reason?: string): ChequeEvent =>
-    ({ id: `chq${++n}`, chequeId, action, date, reason, by, at: at(date, 6) })
+  // every event carries its own hour: the fold orders by `at`, so two events that share a timestamp would
+  // leave the status to the database's tie-breaking — the presentation is the morning, the verdict the afternoon
+  const ev = (chequeId: string, action: ChequeEvent["action"], date: string, by: string, h: number, reason?: string): ChequeEvent =>
+    ({ id: `chq${++n}`, chequeId, action, date, reason, by, at: at(date, h) })
   if (issued[0]) {
     const d = issued[0].chequeDate ?? issued[0].date
-    events.push(ev(issued[0].id, "presented", d, "Farzana Akter"))
-    events.push(ev(issued[0].id, "cleared", d, "Farzana Akter"))
+    events.push(ev(issued[0].id, "presented", d, "Farzana Akter", 6))
+    events.push(ev(issued[0].id, "cleared", d, "Farzana Akter", 7))
   }
   if (received[0]) {
     const d = received[0].chequeDate ?? received[0].date
-    events.push(ev(received[0].id, "presented", d, "Farzana Akter"))
-    events.push(ev(received[0].id, "bounced", d, "Farzana Akter", "Refer to drawer — instructions from the drawer's bank."))
+    events.push(ev(received[0].id, "presented", d, "Farzana Akter", 8))
+    events.push(ev(received[0].id, "bounced", d, "Farzana Akter", 9, "Refer to drawer — instructions from the drawer's bank."))
   }
   if (received[1]) {
     const d = received[1].chequeDate ?? received[1].date
-    events.push(ev(received[1].id, "presented", d, "Farzana Akter"))
+    events.push(ev(received[1].id, "presented", d, "Farzana Akter", 10))
   }
   return events
 }

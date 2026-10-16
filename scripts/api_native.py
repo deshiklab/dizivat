@@ -5496,16 +5496,24 @@ def run():
               "…and the fired reminder is still in the feed")
 
         print("\nR9.1: the account transfers and the cheque register")
-        # the seeded demo: three transfers (two approved, one draft) and the cheque lifecycle events
-        check(psql("select count(*) from money_transfers where deleted_at is null") == "3",
+        # the seeded demo: three transfers (two approved, one draft) and the cheque lifecycle events.
+        # The drill runs last, after the e2e suites have added transfers and cheques of their own, so every
+        # seed assertion is scoped to the seeded numbers — never to the table as a whole.
+        check(psql("select count(*) from money_transfers where no in ('TX-09260001','TX-09260002','TX-09260003')"
+                   " and deleted_at is null") == "3",
               "R9.1: the three seeded transfers are rows in their table")
-        check(psql("select count(*) from money_transfers where process = 'Approved'") == "2",
+        check(psql("select count(*) from money_transfers where no in ('TX-09260001','TX-09260002')"
+                   " and process = 'Approved'") == "2"
+              and psql("select count(*) from money_transfers where no = 'TX-09260003' and process = 'Created'") == "1",
               "…two of them approved, one still a draft")
         check(int(psql("select count(*) from cheque_events")) >= 5, "…and the seeded cheque lifecycle events are rows")
-        tx = admin.get(f"{BASE}/accounting/transfers", params={"size": 20}).json()
-        check(tx["total"] == 3 and {t["process"] for t in tx["data"]} == {"Approved", "Created"},
+        tx = admin.get(f"{BASE}/accounting/transfers", params={"q": "TX-092600", "size": 20}).json()
+        seeded_tx = {t["no"]: t for t in tx["data"] if t["no"] in ("TX-09260001", "TX-09260002", "TX-09260003")}
+        check(len(seeded_tx) == 3 and {t["process"] for t in seeded_tx.values()} == {"Approved", "Created"},
               "the register lists the seeded demo with its statuses")
-        check(tx["totals"]["amount"] == 950000, "…its totals sum (500k + 300k + 150k)")
+        check(jr2(float(psql("select coalesce(sum(amount), 0) from money_transfers"
+                             " where no in ('TX-09260001','TX-09260002','TX-09260003')"))) == 950000,
+              "…its totals sum (500k + 300k + 150k)")
         # the derived balances: the seeded moves are already in them (the deposit +500k on the DBBL account,
         # the withdrawal −300,250 on the BRAC account) — prove it by moving one back and forth
         accts = {a["id"]: a for a in admin.get(f"{BASE}/accounting/accounts", params={"size": 20}).json()["data"]}
@@ -5534,10 +5542,12 @@ def run():
               "a deleted draft keeps its stamped row — the id and number stay retired")
         # the cheque register derives from the money documents; the lifecycle writes only events
         reg = admin.get(f"{BASE}/accounting/cheques", params={"size": 30}).json()
-        check(reg["total"] >= 5 and {r_["status"] for r_ in reg["data"]} >= {"cleared", "bounced", "outstanding"},
+        st_facets = reg["facets"]["status"]
+        check(reg["total"] >= 5 and all(st_facets.get(k_, 0) >= 1 for k_ in ("cleared", "bounced", "outstanding")),
               "the register derives every cheque with the statuses the events folded")
         ev_before = int(psql("select count(*) from cheque_events"))
-        open_row = next(r_ for r_ in reg["data"] if r_["status"] == "outstanding" and not r_["postDated"])
+        outs = admin.get(f"{BASE}/accounting/cheques", params={"status": "outstanding", "size": 30}).json()
+        open_row = next(r_ for r_ in outs["data"] if not r_["postDated"])
         r = admin.post(f"{BASE}/accounting/cheques/{open_row['id']}/action", json={"action": "presented", "date": open_row["chequeDate"]})
         check(r.status_code == 201 and r.json()["status"] == "presented", "a lifecycle action appends one event")
         check(int(psql("select count(*) from cheque_events")) == ev_before + 1, "…exactly one row in the events table")
@@ -5547,24 +5557,30 @@ def run():
         audit = admin.get(f"{BASE}/audit", params={"entity": "cheque", "size": 5}).json()
         check({e["action"] for e in audit["data"]} >= {"presented", "cleared"}, "the cheque lifecycle lands in the audit trail")
         notif = admin.get(f"{BASE}/notifications").json()["items"]
-        bounced = next(r_ for r_ in reg["data"] if r_["status"] == "bounced")
+        bou = admin.get(f"{BASE}/accounting/cheques", params={"status": "bounced", "size": 5}).json()
+        bounced = bou["data"][0]
         check(any(n["id"] == f"cheque:{bounced['id']}" for n in notif),
               "the seeded bounce rings the bell for the accountants")
-        # R8.2's matcher knows a transfer when it sees one: the deposit slip's reference explains the line
-        r = admin.post(f"{BASE}/accounting/statements", json={"accountId": "ac1", "source": "r91-native.csv", "dryRun": True,
-                                                              "rows": [{"date": "2026-09-05", "narration": "Cash deposit CASH-DEP-0509",
-                                                                        "reference": "CASH-DEP-0509", "deposit": 500000, "withdrawal": 0}]})
+        # R8.2's matcher knows a transfer when it sees one: a transfer of the drill's own, with a reference
+        # nothing else holds, and the deposit slip's line that quotes it
+        mt_ref = f"R91-NATIVE-{TAG}"
+        r = admin.post(f"{BASE}/accounting/transfers", json={"process": "Approved", "date": "2026-09-10",
+                                                             "fromAccountId": "ac2", "toAccountId": "ac4", "amount": 77777.50,
+                                                             "reference": mt_ref})
+        r = admin.post(f"{BASE}/accounting/statements", json={"accountId": "ac4", "source": "r91-native.csv", "dryRun": True,
+                                                              "rows": [{"date": "2026-09-10", "narration": "Inward transfer",
+                                                                        "reference": mt_ref, "deposit": 77777.50, "withdrawal": 0}]})
         plan = r.json()
         check(r.status_code == 200 and plan["matched"] == 1 and plan["lines"][0]["matchKind"] == "transfer",
               f"a bank line whose reference is a transfer's matches that transfer (the books and the bank agree) — "
-              f"{r.status_code}, matched {plan.get('matched') if isinstance(plan, dict) else plan}, "
-              f"line {plan['lines'][0] if isinstance(plan, dict) and plan.get('lines') else plan}")
+              f"{r.status_code}, matched {plan.get('matched') if isinstance(plan, dict) else plan}")
         # everything above is table state — it survives a restart
+        n_tx = psql("select count(*) from money_transfers where deleted_at is null")
         restart()
-        tx2 = admin.get(f"{BASE}/accounting/transfers", params={"size": 20}).json()
-        check(tx2["total"] == 4 and any(t["id"] == tf_id and t["process"] == "Cancelled" for t in tx2["data"]),
+        check(psql("select count(*) from money_transfers where deleted_at is null") == n_tx
+              and psql(f"select process from money_transfers where id = '{tf_id}'") == "Cancelled",
               "R9.1: the transfers (and the cancellation) survive the restart")
-        reg2 = admin.get(f"{BASE}/accounting/cheques", params={"size": 30}).json()
+        reg2 = admin.get(f"{BASE}/accounting/cheques", params={"q": open_row["no"], "size": 5}).json()
         check(next(r_ for r_ in reg2["data"] if r_["id"] == open_row["id"])["status"] == "cleared",
               "…the cheque's cleared status too — the events are durable rows")
 
