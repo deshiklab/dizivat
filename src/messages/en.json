@@ -1382,7 +1382,8 @@
    "statement": "Bank statement",
    "schedule": "Schedule",
    "moneyTransfer": "Account transfer",
-   "cheque": "Cheque"
+   "cheque": "Cheque",
+   "journal": "Journal entry"
   },
   "facet": {
    "entity": "Record type",
