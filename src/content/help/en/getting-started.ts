@@ -32,8 +32,10 @@ export default {
       p("The [Dashboard](/) shows the current VAT period at a glance:"),
       list(
         "sales, output VAT, input VAT (rebate) and net VAT payable;",
+        "three twelve-month trends: sales vs purchases, output vs input VAT, and net VAT against the TR-6 deposits counted to each month — the gap between the two lines is what still has to be deposited;",
+        "the **filing strip**: the last twelve tax periods, each marked submitted / draft / overdue / open — a month opens its [9.1 return](/vat/return-9-1);",
         "the compliance calendar with the treasury deposit and 9.1 deadlines;",
-        "top customers, low-stock items and recent invoices;",
+        "top customers and vendors of the fiscal year, the best-selling products, low-stock items and recent invoices;",
         "documents waiting for approval.",
       ),
       p("The status bar at the bottom always shows your BIN, the open VAT period and the days left until the return is due."),

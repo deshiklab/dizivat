@@ -32,7 +32,7 @@ const toRow = (r: Meta): BackupRow => ({ id: `bk${r.id}`, at: toIso(r.at), kind:
 const META = { id: backups.id, at: backups.at, kind: backups.kind, slot: backups.slot, by: backups.by, size: backups.size, sha256: backups.sha256, tables: backups.tables }
 const idOf = (id: string) => { const n = Number(/^bk(\d+)$/.exec(id)?.[1]); return Number.isSafeInteger(n) && n > 0 ? n : null }
 
-/** Every public table (except SKIP) as JSON rows, plus the document collections inside compat_state. Caller holds the state lock. */
+/** Every public table (except SKIP) as JSON rows. Caller holds the state lock. */
 export async function snapshot(): Promise<{ tables: Record<string, unknown[]>; counts: Record<string, number> }> {
   const list = await db.execute(sql`select table_name from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE' order by table_name`)
   const tables: Record<string, unknown[]> = {}
@@ -44,9 +44,9 @@ export async function snapshot(): Promise<{ tables: Record<string, unknown[]>; c
     tables[t] = rows
     counts[t] = rows.length
   }
-  // the business documents still live in compat_state (R5 compat layer) — count them per collection too
-  const state = (tables.compat_state?.[0] as { data?: { db?: Record<string, unknown> } } | undefined)?.data?.db ?? {}
-  for (const [k, v] of Object.entries(state)) if (Array.isArray(v)) counts[`documents.${k}`] = v.length
+  // compat_state is gone (the finale boot drops it once drained), so there are no document collections to
+  // count beyond the tables themselves — an older table reappearing (a skipped-release upgrade or a restored
+  // pre-finale backup) is counted by the walk above like any other table
   return { tables, counts }
 }
 

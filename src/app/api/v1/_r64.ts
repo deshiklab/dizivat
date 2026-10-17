@@ -7,22 +7,56 @@ import { COMPANY, TODAY } from "@/lib/company"
 import { db } from "@/lib/mock/db"
 import { csvResponse, delay, toCSV } from "@/lib/mock/query"
 import { bondRows } from "@/lib/rmg"
-import type { BondRegister } from "@/lib/types"
+import type { BondRegister, VatSettings } from "@/lib/types"
+import type { BondSource } from "@/lib/bond"
 import { json, problem, withAuth } from "./_lib"
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const validDay = (d: string) => DAY_RE.test(d) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d
 
+/** What the register reads: the bond's own source plus the settings its licence line quotes. */
+export type BondWorld = BondSource & { vatSettings: VatSettings }
+
 /** The register for a date range (default: from go-live to today); the company's own bond licence leads. */
-export function bondRegisterOf(from?: string, to?: string): BondRegister {
-  const p = db.vatSettings.profile
+export function bondRegisterFrom(src: BondWorld, from?: string, to?: string): BondRegister {
+  const p = src.vatSettings.profile
   const licence = bondRows({ name: COMPANY.name, licenceNo: p?.bondLicenseNo ?? "", expiry: p?.bondLicenseExpiry ?? "" }, [], TODAY)[0]
   const stock = (id: string) => {
-    const i = db.items.find((x) => x.id === id)
+    const i = src.items.find((x) => x.id === id)
     return i ? i.opening + i.purchased + i.prodReceive - i.prodIssue - i.sold - i.damage : 0
   }
-  return bondRegister(db, { today: TODAY, from, to, licence, stock })
+  return bondRegister(src, { today: TODAY, from, to, licence, stock })
 }
+
+/** The mock's own world; the PostgreSQL build passes the mirror's copies of the same collections. */
+export function bondRegisterOf(from?: string, to?: string): BondRegister {
+  return bondRegisterFrom(db, from, to)
+}
+
+/* The three CSVs the route prints — shared with the native module, so the columns cannot drift. */
+export const BOND_LOTS_CSV: { key: string; label: string }[] = [
+  { key: "boeNo", label: "Bill of Entry" }, { key: "boeDate", label: "BoE date" }, { key: "docNo", label: "Document" }, { key: "source", label: "Source" },
+  { key: "name", label: "Item" }, { key: "uom", label: "Unit" }, { key: "qty", label: "Bonded qty" }, { key: "consumed", label: "Consumed in exports" },
+  { key: "balance", label: "Balance" }, { key: "dutyForegone", label: "Duty foregone" }, { key: "dutyOnBalance", label: "Duty on balance" },
+  { key: "dueDate", label: "Bonding period ends" }, { key: "extendedDue", label: "Latest with extension" }, { key: "daysLeft", label: "Days left" }, { key: "state", label: "Status" },
+]
+export const BOND_DRAWBACK_CSV: { key: string; label: string }[] = [
+  { key: "invoiceNo", label: "Export invoice" }, { key: "exportDate", label: "Export date" }, { key: "billNo", label: "Bill of export" }, { key: "customer", label: "Buyer / exporter" },
+  { key: "purchaseNo", label: "Import" }, { key: "boeNo", label: "Bill of Entry" }, { key: "name", label: "Input" }, { key: "uom", label: "Unit" }, { key: "qty", label: "Qty consumed" },
+  { key: "cd", label: "CD" }, { key: "rd", label: "RD" }, { key: "deadline", label: "Claim by" }, { key: "state", label: "Status" },
+]
+export const BOND_REGISTER_CSV: { key: string; label: string }[] = [
+  { key: "name", label: "Input" }, { key: "hsCode", label: "HS code" }, { key: "uom", label: "Unit" }, { key: "opening", label: "Bonded opening" },
+  { key: "bondedIn", label: "Bonded receipts" }, { key: "bondedUsed", label: "Bonded used in exports" }, { key: "closing", label: "Bonded closing" },
+  { key: "dutyPaidIn", label: "Duty-paid receipts" }, { key: "localIn", label: "Local receipts" }, { key: "exportUse", label: "Export consumption" },
+  { key: "unsourced", label: "Unsourced" }, { key: "physical", label: "Physical stock" }, { key: "shortfall", label: "Shortfall" },
+  { key: "dutyOnBalance", label: "Duty on bonded balance" }, { key: "dutyAtRisk", label: "Duty at risk" }, { key: "state", label: "Status" },
+]
+export const bondCsvName = (view: string, stamp: string) =>
+  view === "lots" ? `bond-boe-${stamp}.csv` : view === "drawback" ? `duty-drawback-${stamp}.csv` : `bond-register-${stamp}.csv`
+/** The drawback CSV flattens every export's inputs to one row each. */
+export const drawbackCsvRows = (rows: BondRegister["drawback"]["rows"]) =>
+  rows.flatMap((r) => r.inputs.map((i) => ({ ...i, invoiceNo: r.invoiceNo, exportDate: r.exportDate, billNo: r.billNo, customer: r.customerName, deadline: r.deadline, state: r.state })))
 
 /**
  * GET /vat/bond — ?from=&to= (YYYY-MM-DD, to ≤ today; physical stock is compared only when the range ends today),
@@ -41,29 +75,9 @@ export const bondRoute = withAuth(null, async (req) => {
   if (sp.get("format") === "csv") {
     const view = sp.get("view") ?? "register"
     const stamp = reg.to
-    if (view === "lots") {
-      return csvResponse(toCSV(reg.lots.map((l) => ({ ...l })), [
-        { key: "boeNo", label: "Bill of Entry" }, { key: "boeDate", label: "BoE date" }, { key: "docNo", label: "Document" }, { key: "source", label: "Source" },
-        { key: "name", label: "Item" }, { key: "uom", label: "Unit" }, { key: "qty", label: "Bonded qty" }, { key: "consumed", label: "Consumed in exports" },
-        { key: "balance", label: "Balance" }, { key: "dutyForegone", label: "Duty foregone" }, { key: "dutyOnBalance", label: "Duty on balance" },
-        { key: "dueDate", label: "Bonding period ends" }, { key: "extendedDue", label: "Latest with extension" }, { key: "daysLeft", label: "Days left" }, { key: "state", label: "Status" },
-      ]), `bond-boe-${stamp}.csv`)
-    }
-    if (view === "drawback") {
-      const rows = reg.drawback.rows.flatMap((r) => r.inputs.map((i) => ({ ...i, invoiceNo: r.invoiceNo, exportDate: r.exportDate, billNo: r.billNo, customer: r.customerName, deadline: r.deadline, state: r.state })))
-      return csvResponse(toCSV(rows, [
-        { key: "invoiceNo", label: "Export invoice" }, { key: "exportDate", label: "Export date" }, { key: "billNo", label: "Bill of export" }, { key: "customer", label: "Buyer / exporter" },
-        { key: "purchaseNo", label: "Import" }, { key: "boeNo", label: "Bill of Entry" }, { key: "name", label: "Input" }, { key: "uom", label: "Unit" }, { key: "qty", label: "Qty consumed" },
-        { key: "cd", label: "CD" }, { key: "rd", label: "RD" }, { key: "deadline", label: "Claim by" }, { key: "state", label: "Status" },
-      ]), `duty-drawback-${stamp}.csv`)
-    }
-    return csvResponse(toCSV(reg.rows.map((r) => ({ ...r, physical: r.physical ?? "" })), [
-      { key: "name", label: "Input" }, { key: "hsCode", label: "HS code" }, { key: "uom", label: "Unit" }, { key: "opening", label: "Bonded opening" },
-      { key: "bondedIn", label: "Bonded receipts" }, { key: "bondedUsed", label: "Bonded used in exports" }, { key: "closing", label: "Bonded closing" },
-      { key: "dutyPaidIn", label: "Duty-paid receipts" }, { key: "localIn", label: "Local receipts" }, { key: "exportUse", label: "Export consumption" },
-      { key: "unsourced", label: "Unsourced" }, { key: "physical", label: "Physical stock" }, { key: "shortfall", label: "Shortfall" },
-      { key: "dutyOnBalance", label: "Duty on bonded balance" }, { key: "dutyAtRisk", label: "Duty at risk" }, { key: "state", label: "Status" },
-    ]), `bond-register-${stamp}.csv`)
+    if (view === "lots") return csvResponse(toCSV(reg.lots.map((l) => ({ ...l })), BOND_LOTS_CSV), bondCsvName(view, stamp))
+    if (view === "drawback") return csvResponse(toCSV(drawbackCsvRows(reg.drawback.rows), BOND_DRAWBACK_CSV), bondCsvName(view, stamp))
+    return csvResponse(toCSV(reg.rows.map((r) => ({ ...r, physical: r.physical ?? "" })), BOND_REGISTER_CSV), bondCsvName(view, stamp))
   }
   await delay(80)
   return json(reg)

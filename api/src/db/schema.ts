@@ -1,13 +1,15 @@
 /**
- * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables;
- * the business documents still live in `compat_state` until R5.2–R5.5 give each module its own tables.
+ * PostgreSQL schema (Drizzle). R5.1 moves identity, sessions, audit and reference data into real tables, R5.2 the
+ * master data (customers and vendors as `parties`, SKUs as `items`, HS-code products as `master_items`) and R5.3
+ * the documents (transfers and damage entries as `stock_documents`, sales invoices as `sales`) with their lines;
+ * the remaining documents still live in `compat_state` until R5.3–R5.6 give each module its own tables.
  * Migrations are generated with `npm run db:generate` into ./drizzle and applied at boot.
  */
 import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange } from "@/lib/types"
+import type { AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, JournalLine, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -30,6 +32,8 @@ export const users = pgTable("users", {
   /** seeded account still on the published demo password (listed on the login page) */
   passwordIsDemo: boolean("password_is_demo").notNull().default(false),
   preferences: jsonb("preferences").$type<Record<string, string>>().notNull().default({}),
+  /** the notification ids this user has already read — the last user-store bit the compat snapshot carried */
+  notifRead: jsonb("notif_read").$type<string[]>().notNull().default([]),
   createdAt: ts("created_at").notNull().defaultNow(),
   lastSignInAt: ts("last_sign_in_at"),
   /** R6.2: VAT officer — last day (Asia/Dhaka) the account may sign in; null for every other role */
@@ -148,8 +152,1384 @@ export const tariffLines = pgTable("tariff_lines", {
 }, (t) => [primaryKey({ columns: [t.fy, t.hsCode] })])
 
 /**
- * Modules not yet migrated (sales, purchases, stock, production, accounting, VAT returns…) keep their exact
+ * R5.2 — customers and vendors: the first business records out of the compat layer. One table, `kind` tells them
+ * apart; documents (still in `compat_state` until R5.3) reference them by id.
+ * A deleted party keeps its row (`deleted_at`) — that is the 10-second undo trash — so master data never leaves
+ * relational storage, and the uniqueness rules the API checks are also enforced here.
+ */
+export const parties = pgTable("parties", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["customer", "vendor"] }).notNull(),
+  /** party names in capitals, as printed on Mushak 6.3 */
+  name: text("name").notNull(),
+  /** BIN (Local), NID (Non-registered) or foreign reference; "" when unknown */
+  bin: text("bin").notNull().default(""),
+  mode: text("mode").notNull(),
+  mobile: text("mobile").notNull().default(""),
+  address: text("address").notNull(),
+  country: text("country"),
+  email: text("email"),
+  contactPerson: text("contact_person"),
+  /** optional in the contract: NULL means active (only `false` is ever stored) */
+  active: boolean("active"),
+  /** R3 (customers): credit limit in BDT and VDS-withholder flag — seeded, not editable through the API */
+  creditLimit: numeric("credit_limit", { precision: 18, scale: 2, mode: "number" }),
+  vdsWithholder: boolean("vds_withholder"),
+  /** R6 (RMG): exporter class, customs bond licence and trade-body membership */
+  exporterType: text("exporter_type"),
+  bondLicenseNo: text("bond_license_no"),
+  bondLicenseExpiry: date("bond_license_expiry", { mode: "string" }),
+  associationNo: text("association_no"),
+  /** in the undo trash: DELETE sets it, restore clears it */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  index("parties_live_kind_idx").on(t.kind).where(sql`${t.deletedAt} is null`),
+  // the duplicate rules of partyErrors(), enforced by the database (per kind, NID prefix ignored, trash excluded)
+  uniqueIndex("parties_live_name_key").on(t.kind, sql`lower(btrim(${t.name}))`).where(sql`${t.deletedAt} is null`),
+  uniqueIndex("parties_live_bin_key").on(t.kind, sql`regexp_replace(${t.bin}, '^NID ', '')`).where(sql`${t.bin} <> '' and ${t.deletedAt} is null`),
+  check("parties_kind_check", sql`${t.kind} in ('customer','vendor')`),
+  check("parties_exporter_check", sql`${t.exporterType} is null or ${t.exporterType} in ('direct','deemed')`),
+])
+
+/**
+ * R5.2 — SKUs. The movement counters live on the row, so an item's `remain`
+ * (opening + purchased + prodReceive − prodIssue − sold − damage) travels with it; the documents that move the
+ * counters are still compat state until R5.3 and write them back through the mirror. Quantities carry the units'
+ * three decimals, money two. Items are never deleted — an unused one is deactivated (its ledger must stay readable).
+ */
+export const items = pgTable("items", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  hsCode: text("hs_code").notNull(),
+  group: text("group").notNull(),
+  /** the master item's *name*: SKUs reference their master by name, so renaming one carries them along */
+  masterItem: text("master_item").notNull(),
+  brand: text("brand").notNull(),
+  name: text("name").notNull(),
+  /** unit-of-measure code from the Units master */
+  unit: text("unit").notNull(),
+  sku: text("sku").notNull(),
+  purchasePrice: numeric("purchase_price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** derived when the SKU is created (from the purchase price, or the sale price without one) and never edited */
+  costPrice: numeric("cost_price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  salePrice: numeric("sale_price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  opening: numeric("opening", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  purchased: numeric("purchased", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  prodReceive: numeric("prod_receive", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  prodIssue: numeric("prod_issue", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  sold: numeric("sold", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  damage: numeric("damage", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  reorderLevel: numeric("reorder_level", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  active: boolean("active").notNull(),
+}, (t) => [
+  // SKUs are unique case-insensitively (skuTaken)
+  uniqueIndex("items_sku_lower_key").on(sql`lower(${t.sku})`),
+  index("items_master_item_idx").on(t.masterItem),
+  index("items_hs_code_idx").on(t.hsCode),
+  check("items_group_check", sql`${t.group} in ('Raw Material','Consumable','Packing Materials','Finished Goods')`),
+])
+
+/**
+ * R5.2 — master items: the HS-code product a SKU belongs to, with its tax profile. Rates default from the tariff
+ * (`tariff_lines`); a difference is flagged as an override and needs a reason. The profile is stored flat, like the
+ * tariff's own columns, so a master item and its HS line can be compared in SQL.
+ */
+export const masterItems = pgTable("master_items", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  group: text("group").notNull(),
+  category: text("category").notNull(),
+  unit: text("unit").notNull(),
+  priceMethod: text("price_method").notNull(),
+  description: text("description"),
+  vat: numeric("vat", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  cd: numeric("cd", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  rd: numeric("rd", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  ait: numeric("ait", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  at: numeric("at", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  /** mandatory once a rate differs from the tariff (buildMaster) */
+  overrideReason: text("override_reason"),
+  active: boolean("active").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the master item's own trail, shown on its register row; the same entries are in `audit_events` */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  // names are unique case-insensitively (buildMaster)
+  uniqueIndex("master_items_name_lower_key").on(sql`lower(${t.name})`),
+  index("master_items_hs_code_idx").on(t.hsCode),
+  check("master_items_group_check", sql`${t.group} in ('Raw Material','Consumable','Packing Materials','Finished Goods')`),
+  check("master_items_category_check", sql`${t.category} in ('general','commercialImporter','medicine','petroleum','superShop')`),
+  check("master_items_price_method_check", sql`${t.priceMethod} in ('average','standard')`),
+])
+
+/**
+ * R5.3 — stock documents: a transfer moves goods between branches, a damage entry writes them off. Both are a
+ * header with priced lines, both are numbered per month and never reuse a number (a deleted draft stays in the
+ * audit trail), and both only move stock once approved. The two kinds share a table because that is how the
+ * registers and the branch-stock derivation read them (`StockDoc`): the branch a document consumes is
+ * `from_branch_id` for either kind, and a transfer also names where the goods go.
+ */
+export const stockDocuments = pgTable("stock_documents", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["transfer", "damage"] }).notNull(),
+  /** TR-MMYY#### / DM-MMYY#### — unique forever, so a deleted draft's number is not handed out again */
+  no: text("no").notNull(),
+  /** the document date the number is derived from and the registers filter by */
+  date: date("date", { mode: "string" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** the branch the stock leaves: a transfer's origin, a damage entry's own branch */
+  fromBranchId: text("from_branch_id").notNull(),
+  fromBranch: text("from_branch").notNull(),
+  /** a transfer's destination; NULL on a damage entry, which moves nothing */
+  toBranchId: text("to_branch_id"),
+  toBranch: text("to_branch"),
+  /** damage only: why the stock was written off */
+  reason: text("reason", { enum: ["damaged", "expired", "wastage", "lost"] }),
+  /** transfer only: the vehicle that carried the goods */
+  vehicle: text("vehicle"),
+  note: text("note"),
+  totalQty: numeric("total_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  totalValue: numeric("total_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail, shown on its register row; the same entries are in `audit_events` */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  uniqueIndex("stock_documents_no_key").on(t.no),
+  index("stock_documents_kind_created_idx").on(t.kind, t.createdAt),
+  check("stock_documents_kind_check", sql`${t.kind} in ('transfer','damage')`),
+  check("stock_documents_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("stock_documents_reason_check", sql`${t.reason} is null or ${t.reason} in ('damaged','expired','wastage','lost')`),
+  // a transfer names both branches, a damage entry only the one it writes off
+  check("stock_documents_branches_check", sql`(${t.kind} = 'transfer' and ${t.toBranchId} is not null) or (${t.kind} = 'damage' and ${t.toBranchId} is null and ${t.reason} is not null)`),
+])
+
+/**
+ * The lines of a stock document: the item, the quantity and the unit cost at posting, so the entry keeps the value
+ * it was approved with even after the SKU's price moves. A child table rather than JSON — that is what lets the
+ * branch stock and an item's ledger be summed in SQL.
+ */
+export const stockDocumentLines = pgTable("stock_document_lines", {
+  docId: text("doc_id").notNull(),
+  /** position on the document */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed on the document: the SKU's name and code at posting */
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  cost: numeric("cost", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.docId, t.ord] }),
+  index("stock_document_lines_item_idx").on(t.itemId),
+])
+
+/**
+ * R5.3 — sales invoices: the first revenue document out of the compat layer. A sale is a header with its priced
+ * lines, and it moves stock only once approved (a service sale moves nothing). The export / deemed-export shipping
+ * documents are flattened onto the header — `export_deemed` is the presence marker, NULL when the invoice is a
+ * local or a service sale — so an LC number, a country or a foreign-currency value can be read in SQL, the way
+ * `master_items` flattened its rate block. The proceeds realised against an export invoice (R6.2, PRC entries) are
+ * rows of their own: they are added and removed one at a time, and one PRC may be split over several invoices.
+ *
+ * A deleted draft is a row with `deleted_at` set rather than a document in the undo buffer, exactly like a deleted
+ * party (R5.2): its number stays retired, and the restore route puts the row back.
+ */
+export const sales = pgTable("sales", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** S-MMYY#### (goods, exports) / SS-MMYY#### (services) — unique forever, so a deleted draft's number is not reused */
+  invoiceNo: text("invoice_no").notNull(),
+  /** delivery challan number, one above the highest ever used */
+  challanNo: text("challan_no").notNull(),
+  /** the invoice date the number is derived from, the registers filter by and the tax period follows */
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  issueTime: text("issue_time").notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** NULL (absent) for a goods sale, which is what every pre-R3 invoice is */
+  category: text("category", { enum: ["goods", "service"] }),
+  /** the branch / warehouse the goods leave */
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  customerId: text("customer_id").notNull(),
+  /** as printed on the invoice: the customer's name, BIN and address at issue */
+  customerName: text("customer_name").notNull(),
+  customerBin: text("customer_bin").notNull(),
+  customerAddress: text("customer_address").notNull(),
+  deliveryAddress: text("delivery_address").notNull(),
+  vehicle: text("vehicle"),
+  /** the customer's mode decides whether the invoice is zero-rated */
+  mode: text("mode", { enum: ["Local", "Foreign"] }).notNull(),
+  method: text("method", { enum: ["Bank", "Cash", "Cheque", "Mobile", "Transaction"] }).notNull(),
+  /** VDS withheld by the customer — never on a zero-rated invoice */
+  vds: boolean("vds").notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  discount: numeric("discount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  netTotal: numeric("net_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  paid: numeric("paid", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  due: numeric("due", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  narration: text("narration"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the invoice's own trail, shown on its register row; the same entries are in `audit_events` */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** the undo buffer: a draft deleted within the last seconds, restorable and still holding its number */
+  deletedAt: ts("deleted_at"),
+
+  /* export / deemed-export shipping documents (Mushak 4.1, zero-rated) — `exportDeemed` is the presence marker */
+  exportDeemed: boolean("export_deemed"),
+  exportLcNo: text("export_lc_no"),
+  exportLcDate: date("export_lc_date", { mode: "string" }),
+  exportCustomsHouse: text("export_customs_house"),
+  exportCountry: text("export_country"),
+  /** bill of export: its number and date (absent on a deemed export, which never leaves the country) */
+  exportBillNo: text("export_bill_no"),
+  /** text, not date: a deemed export carries no bill and the invoice stores an empty string, not NULL */
+  exportBillDate: text("export_bill_date"),
+  exportShippingAddress: text("export_shipping_address"),
+  exportCnfFirm: text("export_cnf_firm"),
+  /** R6 (RMG): the Utilization Declaration / Permission of the exporter that lists this deemed supply */
+  exportUdNo: text("export_ud_no"),
+  /** text, not date: the UD date is optional and the invoice stores an empty string when it is unknown */
+  exportUdDate: text("export_ud_date"),
+  /** R6 (RMG): EXP form number (direct export) */
+  exportExpNo: text("export_exp_no"),
+  /** R6 (RMG): invoice currency, foreign-currency value and exchange rate */
+  exportCurrency: text("export_currency", { enum: ["USD", "EUR", "GBP", "BDT"] }),
+  exportFcValue: numeric("export_fc_value", { precision: 18, scale: 2, mode: "number" }),
+  exportExchangeRate: numeric("export_exchange_rate", { precision: 18, scale: 6, mode: "number" }),
+  /** R6 (RMG): the exporter's bond licence (deemed export; defaults to the customer's) */
+  exportExporterBond: text("export_exporter_bond"),
+  /** R6.5 (RMG): our own UD / UP this shipment is made under — its bonded inputs are settled against it */
+  exportOwnUdNo: text("export_own_ud_no"),
+  /**
+   * Presence marker for the `export.realisations` array: the entries themselves are `sale_realisations` rows, and
+   * an invoice that had one entry and lost it again answers with an empty array, not with no array at all.
+   */
+  exportRealisations: boolean("export_realisations").notNull().default(false),
+}, (t) => [
+  uniqueIndex("sales_invoice_no_key").on(t.invoiceNo),
+  index("sales_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("sales_issue_date_idx").on(t.issueDate),
+  index("sales_customer_idx").on(t.customerId),
+  index("sales_branch_idx").on(t.branchId),
+  check("sales_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("sales_category_check", sql`${t.category} is null or ${t.category} in ('goods','service')`),
+  check("sales_mode_check", sql`${t.mode} in ('Local','Foreign')`),
+  check("sales_method_check", sql`${t.method} in ('Bank','Cash','Cheque','Mobile','Transaction')`),
+  // the shipping documents are a block: either all of the header is there, or none of it is
+  check("sales_export_check", sql`(${t.exportDeemed} is null and ${t.exportLcNo} is null) or (${t.exportDeemed} is not null and ${t.exportLcNo} is not null)`),
+  check("sales_export_currency_check", sql`${t.exportCurrency} is null or ${t.exportCurrency} in ('USD','EUR','GBP','BDT')`),
+])
+
+/**
+ * The lines of a sales invoice: the item (or service code), the quantity and the prices at issue, so the invoice
+ * keeps the values it was approved with even after the SKU's price moves. A child table rather than JSON — that is
+ * what lets the branch stock, an item's ledger and a customer's turnover be summed in SQL.
+ */
+export const saleLines = pgTable("sale_lines", {
+  saleId: text("sale_id").notNull(),
+  /** position on the invoice */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed on the invoice: the SKU's name, HS code and unit at issue (a service line carries its code) */
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** R3: the production batch (lot) the finished goods ship from */
+  batchId: text("batch_id"),
+  batchNo: text("batch_no"),
+}, (t) => [
+  primaryKey({ columns: [t.saleId, t.ord] }),
+  index("sale_lines_item_idx").on(t.itemId),
+])
+
+/**
+ * R6.2 (RMG) — export proceeds realised through the bank: one row per PRC entry against an export invoice. A PRC
+ * may be split over several invoices of the same buyer / LC (a bank file posts one batch), so the number is not
+ * unique here — the register groups by it. `batchId` names the bank file the entry came from, absent when it was
+ * typed in on the invoice.
+ */
+export const saleRealisations = pgTable("sale_realisations", {
+  id: text("id").primaryKey(),
+  saleId: text("sale_id").notNull(),
+  /** position in the invoice's list of entries */
+  ord: integer("ord").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  bank: text("bank").notNull(),
+  prcNo: text("prc_no").notNull(),
+  fcAmount: numeric("fc_amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** the exchange rate the proceeds were booked at */
+  rate: numeric("rate", { precision: 18, scale: 6, mode: "number" }).notNull(),
+  bdt: numeric("bdt", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+  by: text("by").notNull(),
+  at: ts("at").notNull(),
+  batchId: text("batch_id"),
+}, (t) => [
+  index("sale_realisations_sale_idx").on(t.saleId),
+  index("sale_realisations_prc_idx").on(t.prcNo),
+])
+
+/**
+ * R5.3 — a purchase: goods from a local or a foreign vendor, a service purchase, or an import against a Bill of
+ * Entry. Same shape as `sales`, with the vendor's side of the header, the two totals a purchase adds (`tti`, the
+ * total tax incidence, and `rebate`, the input tax credit claimable in Mushak 9.1) and the Bill of Entry block in
+ * place of the export one. Stock arrives when the purchase is approved, so an approval writes `items.purchased`
+ * with the document.
+ */
+export const purchases = pgTable("purchases", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** P-MMYY#### (goods, imports) / PS-MMYY#### (services) — unique forever, so a deleted draft's number is not reused */
+  invoiceNo: text("invoice_no").notNull(),
+  /** the vendor's challan, or the Bill of Entry number on an import */
+  challanNo: text("challan_no").notNull(),
+  challanDate: date("challan_date", { mode: "string" }).notNull(),
+  /** the date the number is derived from, the registers filter by and the tax period follows */
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** R2: goods (stock) or service purchase (no stock movement); NULL = goods, as the mock leaves the key out */
+  category: text("category", { enum: ["goods", "service"] }),
+  /** branch / warehouse the goods arrive at */
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  vendorId: text("vendor_id").notNull(),
+  /** as printed: the vendor's name, BIN (or NID for a non-registered one) and address at issue */
+  vendorName: text("vendor_name").notNull(),
+  vendorBin: text("vendor_bin").notNull(),
+  vendorAddress: text("vendor_address").notNull(),
+  mode: text("mode", { enum: ["Local", "Foreign", "Non-registered"] }).notNull(),
+  method: text("method", { enum: ["Bank", "Cash", "Cheque", "Mobile", "Transaction"] }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  discount: numeric("discount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  netTotal: numeric("net_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  paid: numeric("paid", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  due: numeric("due", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** R2 (imports): total tax incidence — CD + RD + SD + VAT + AIT + AT over the Bill of Entry */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** R2: input tax credit claimable in Mushak 9.1 (the rebateable lines' VAT and AT) */
+  rebate: numeric("rebate", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  narration: text("narration"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted / restored, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** the undo buffer: a deleted draft keeps its row and its lines, so its number stays retired */
+  deletedAt: ts("deleted_at"),
+  /* the Bill of Entry an import purchase clears (R2) — `boeNo` is the presence marker */
+  boeNo: text("boe_no"),
+  boeDate: date("boe_date", { mode: "string" }),
+  boeLcNo: text("boe_lc_no"),
+  boeLcDate: date("boe_lc_date", { mode: "string" }),
+  boeCustomsHouse: text("boe_customs_house"),
+  boeOrigin: text("boe_origin"),
+  boeCnfFirm: text("boe_cnf_firm"),
+  boeReceiveAddress: text("boe_receive_address"),
+  /** R6.4: warehoused under the customs bond (IM-7) — duty and VAT suspended, no input credit, tracked in the bond register */
+  boeBonded: boolean("boe_bonded"),
+  /** R6.5: the own UD / UP the bonded inputs were imported against (settled per UD after export) */
+  boeUdNo: text("boe_ud_no"),
+}, (t) => [
+  uniqueIndex("purchases_invoice_no_key").on(t.invoiceNo),
+  index("purchases_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("purchases_issue_date_idx").on(t.issueDate),
+  index("purchases_vendor_idx").on(t.vendorId),
+  index("purchases_branch_idx").on(t.branchId),
+  /** R6.4: the bond register reads the warehoused BoEs by their number and date */
+  index("purchases_boe_bonded_idx").on(t.boeNo).where(sql`${t.boeBonded} is true`),
+  check("purchases_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("purchases_category_check", sql`${t.category} is null or ${t.category} in ('goods','service')`),
+  check("purchases_mode_check", sql`${t.mode} in ('Local','Foreign','Non-registered')`),
+  check("purchases_method_check", sql`${t.method} in ('Bank','Cash','Cheque','Mobile','Transaction')`),
+  // the Bill of Entry is a block: either all of its header is there, or none of it is
+  check("purchases_boe_check", sql`(${t.boeNo} is null and ${t.boeLcNo} is null) or (${t.boeNo} is not null and ${t.boeLcNo} is not null)`),
+  // only an import is warehoused under bond, and only a bonded entry names our own UD
+  check("purchases_boe_bonded_check", sql`${t.boeBonded} is null or ${t.boeNo} is not null`),
+  check("purchases_boe_ud_check", sql`${t.boeUdNo} is null or ${t.boeBonded} is true`),
+])
+
+/**
+ * The lines of a purchase: the item (or service code), the quantity and the prices at issue. An import line also
+ * carries its duty breakdown as columns, so the duty foregone under bond and the assessable value a BoE cleared
+ * can be summed in SQL (the R6.4 bond register and the R6.5 drawback claims read exactly that) instead of walked
+ * in memory. A NULL `duty_av` is a line with no Bill of Entry.
+ */
+export const purchaseLines = pgTable("purchase_lines", {
+  purchaseId: text("purchase_id").notNull(),
+  /** position on the document */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed: the SKU's name, HS code and unit at issue (a service line carries its code) */
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** an import line's price is the unit assessable value */
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  /** an import line's subtotal is its assessable value (AV) */
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** purchase only: the line's VAT (and AT) is claimable as input tax, and VDS was deducted at source */
+  rebateable: boolean("rebateable"),
+  vds: boolean("vds"),
+  /** imports: this line's total tax incidence (CD + RD + SD + VAT + AIT + AT) */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }),
+  /* R2 — the Bill of Entry duty breakdown: the invoice keeps the rates and the amounts it was cleared with */
+  dutyUsd: numeric("duty_usd", { precision: 18, scale: 2, mode: "number" }),
+  dutyUsdRate: numeric("duty_usd_rate", { precision: 18, scale: 6, mode: "number" }),
+  dutyAv: numeric("duty_av", { precision: 18, scale: 2, mode: "number" }),
+  dutyCdRate: numeric("duty_cd_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyCd: numeric("duty_cd", { precision: 18, scale: 2, mode: "number" }),
+  dutyRdRate: numeric("duty_rd_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyRd: numeric("duty_rd", { precision: 18, scale: 2, mode: "number" }),
+  dutyAitRate: numeric("duty_ait_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyAit: numeric("duty_ait", { precision: 18, scale: 2, mode: "number" }),
+  dutyAtRate: numeric("duty_at_rate", { precision: 7, scale: 2, mode: "number" }),
+  dutyAt: numeric("duty_at", { precision: 18, scale: 2, mode: "number" }),
+  /* R6.4 — a bonded (IM-7) entry: the duty stack suspended under bond, which the register reports as foregone */
+  foregoneCd: numeric("foregone_cd", { precision: 18, scale: 2, mode: "number" }),
+  foregoneRd: numeric("foregone_rd", { precision: 18, scale: 2, mode: "number" }),
+  foregoneSd: numeric("foregone_sd", { precision: 18, scale: 2, mode: "number" }),
+  foregoneVat: numeric("foregone_vat", { precision: 18, scale: 2, mode: "number" }),
+  foregoneAit: numeric("foregone_ait", { precision: 18, scale: 2, mode: "number" }),
+  foregoneAt: numeric("foregone_at", { precision: 18, scale: 2, mode: "number" }),
+  foregoneTotal: numeric("foregone_total", { precision: 18, scale: 2, mode: "number" }),
+}, (t) => [
+  primaryKey({ columns: [t.purchaseId, t.ord] }),
+  index("purchase_lines_item_idx").on(t.itemId),
+  // the duty breakdown is a block: an import line has all of it, a local or service line none
+  check("purchase_lines_duty_check", sql`(${t.dutyAv} is null and ${t.dutyCd} is null) or (${t.dutyAv} is not null and ${t.dutyCd} is not null)`),
+  check("purchase_lines_foregone_check", sql`${t.foregoneTotal} is null or ${t.dutyAv} is not null`),
+])
+
+/**
+ * R5.3 — credit notes (Mushak 6.7, goods a customer returns against a sales invoice) and debit notes (Mushak 6.8,
+ * goods returned to a vendor against a purchase) in one table, `kind` telling them apart — the same choice the
+ * stock documents made, because the two registers, the two lists a document's `creditable` / `returnable` answer
+ * comes from and the input- and output-tax sides of a VAT return read them the same way.
+ *
+ * The document each note was raised against is `source_id` (a sale or a purchase) and the party is `party_id` (a
+ * customer or a vendor); the response names them by kind, as the mock's two shapes do. A debit note carries two
+ * totals a credit note does not — `tti` and the `rebate` it reverses — so they are NULL on the credit side and a
+ * check constraint says so.
+ */
+export const notes = pgTable("notes", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["credit", "debit"] }).notNull(),
+  /** CN-MMYY#### / DN-MMYY#### — unique, and never reused: the audit trail keeps a deleted draft's number */
+  no: text("no").notNull(),
+  /** the sales invoice (credit) or purchase (debit) the note was raised against */
+  sourceId: text("source_id").notNull(),
+  sourceNo: text("source_no").notNull(),
+  sourceDate: date("source_date", { mode: "string" }).notNull(),
+  sourceMode: text("source_mode").notNull(),
+  challanNo: text("challan_no").notNull(),
+  /** the customer (credit) or vendor (debit) as printed on the note */
+  partyId: text("party_id").notNull(),
+  partyName: text("party_name").notNull(),
+  partyBin: text("party_bin").notNull(),
+  partyAddress: text("party_address").notNull(),
+  /** branch the goods come back into (credit) or leave again from (debit) */
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  issueTime: text("issue_time").notNull(),
+  reason: text("reason").notNull(),
+  note: text("note"),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** debit notes only: the tax incidence of the returned goods, and the input tax credit this note reverses */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }),
+  rebate: numeric("rebate", { precision: 18, scale: 2, mode: "number" }),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the note's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later note taking the same id. There is no undo for a note.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("notes_no_key").on(t.no),
+  index("notes_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("notes_kind_idx").on(t.kind),
+  index("notes_issue_date_idx").on(t.issueDate),
+  /** the register's `?sale=` / `?purchase=` filter, and what a document's creditable / returnable deducts */
+  index("notes_source_idx").on(t.sourceId),
+  index("notes_party_idx").on(t.partyId),
+  index("notes_branch_idx").on(t.branchId),
+  check("notes_kind_check", sql`${t.kind} in ('credit','debit')`),
+  check("notes_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("notes_reason_check", sql`${t.reason} in ('damaged','quality','excess','wrongItem','priceAdjustment','priceDispute')`),
+  check("notes_source_mode_check", sql`${t.sourceMode} in ('Local','Foreign','Non-registered')`),
+  // the two totals only a debit note has
+  check("notes_debit_totals_check", sql`${t.kind} = 'debit' or (${t.tti} is null and ${t.rebate} is null)`),
+])
+
+/**
+ * The lines of a note: what came back, at the price and the rates the source document carried. The quantity the
+ * source document had (`sold_qty` on a credit note, `purchased_qty` on a debit note) is what the register's
+ * "remaining" column is measured against, so it stays on the line.
+ */
+export const noteLines = pgTable("note_lines", {
+  noteId: text("note_id").notNull(),
+  /** position on the note */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  /** credit note: the quantity the sales invoice sold */
+  soldQty: numeric("sold_qty", { precision: 18, scale: 3, mode: "number" }),
+  /** debit note: the quantity the purchase bought */
+  purchasedQty: numeric("purchased_qty", { precision: 18, scale: 3, mode: "number" }),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sdRate: numeric("sd_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  vatRate: numeric("vat_rate", { precision: 7, scale: 2, mode: "number" }).notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  total: numeric("total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** debit notes only */
+  tti: numeric("tti", { precision: 18, scale: 2, mode: "number" }),
+  rebate: numeric("rebate", { precision: 18, scale: 2, mode: "number" }),
+}, (t) => [
+  primaryKey({ columns: [t.noteId, t.ord] }),
+  index("note_lines_item_idx").on(t.itemId),
+  // exactly one of the two source quantities, and the debit-only totals, follow the note's kind
+  check("note_lines_qty_check", sql`(${t.soldQty} is null) <> (${t.purchasedQty} is null)`),
+  check("note_lines_debit_check", sql`(${t.tti} is null and ${t.rebate} is null) or ${t.purchasedQty} is not null`),
+])
+
+/**
+ * R5.4 — an opening stock entry (legacy "Opening Stock"): the quantity a SKU was brought forward with at go-live,
+ * its purchase value and the input-tax class that value belongs to. One row per entry, one item each — the branch
+ * stock and an item's ledger both read them, which is why they are the first of the two collections the derivation
+ * still needed (the other is the production batches).
+ */
+export const openingEntries = pgTable("opening_entries", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** OS-MMYY#### — unique, and never reused: the audit trail keeps a deleted draft's number */
+  no: text("no").notNull(),
+  itemId: text("item_id").notNull(),
+  /** as printed: the SKU's name, HS code, SKU and unit when the entry was made */
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  /** the input-tax class the opening value belongs to in Mushak 6.1 */
+  inputTax: text("input_tax", { enum: ["standard", "reduced", "zero", "exempt"] }).notNull(),
+  /** rounded to the unit's own decimals, as the mock rounded it */
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** VAT paid on this stock when it was bought — the 6.1 opening value's tax column */
+  vatPaid: numeric("vat_paid", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+  /* R6.4: the part of this opening stock still warehoused under the customs bond at go-live */
+  bondBoeNo: text("bond_boe_no"),
+  bondBoeDate: date("bond_boe_date", { mode: "string" }),
+  bondQty: numeric("bond_qty", { precision: 18, scale: 3, mode: "number" }),
+  bondDutyForegone: numeric("bond_duty_foregone", { precision: 18, scale: 2, mode: "number" }),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the entry's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later entry taking the same id. There is no undo for an entry.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("opening_entries_no_key").on(t.no),
+  index("opening_entries_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("opening_entries_date_idx").on(t.date),
+  /** the register's `?item=` filter, and the ledger's opening rows */
+  index("opening_entries_item_idx").on(t.itemId),
+  index("opening_entries_branch_idx").on(t.branchId),
+  check("opening_entries_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("opening_entries_input_tax_check", sql`${t.inputTax} in ('standard','reduced','zero','exempt')`),
+  // the bond block is all there or not at all
+  check("opening_entries_bond_check", sql`(${t.bondBoeNo} is null and ${t.bondQty} is null) or (${t.bondBoeNo} is not null and ${t.bondQty} is not null)`),
+])
+
+/**
+ * R5.4 — a production batch (PB-MMYY####): finished goods put into production. `mode` says how — in-house at the
+ * factory, contractual (the inputs go to a contract manufacturer under a Mushak 6.4 challan and the goods come back
+ * later) or opening (work in progress brought forward at go-live). A batch's lines are the finished goods, its
+ * consumption the inputs the BOM says they take, and approving one moves both: the inputs leave the store
+ * (`items.prod_issue`), the goods received come into the factory (`items.prod_receive`). These were the last
+ * collection the derived stock read from memory, so with these rows the branch split and an item's ledger come out
+ * of the database.
+ */
+export const batches = pgTable("batches", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** PB-MMYY#### — unique, and never reused: the audit trail keeps a deleted draft's number */
+  no: text("no").notNull(),
+  mode: text("mode", { enum: ["inHouse", "contractual", "opening"] }).notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  /** when the finished goods came (or are expected) back */
+  receiveDate: date("receive_date", { mode: "string" }),
+  /** contractual: the contractor the inputs are sent to */
+  vendorId: text("vendor_id"),
+  vendorName: text("vendor_name"),
+  vendorBin: text("vendor_bin"),
+  vendorAddress: text("vendor_address"),
+  /** contractual: where the inputs are delivered */
+  address: text("address"),
+  /** R6.2 (RMG): contractual — what the contractor does (full manufacture, or one process) */
+  jobProcess: text("job_process", { enum: ["manufacture", "printing", "embroidery", "washing", "dyeing", "lamination", "other"] }),
+  remark: text("remark"),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  issueTime: text("issue_time"),
+  totalIssue: numeric("total_issue", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  totalReceive: numeric("total_receive", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  totalDamage: numeric("total_damage", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** what the consumed inputs are worth, and what the finished goods received are worth */
+  materialValue: numeric("material_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** contractual: when the goods actually came back (completes the Mushak 6.4 challan) */
+  receivedAt: ts("received_at"),
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the batch's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later batch taking the same id. There is no undo for a batch.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("batches_no_key").on(t.no),
+  index("batches_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("batches_issue_date_idx").on(t.issueDate),
+  index("batches_mode_idx").on(t.mode),
+  /** the subcontracting register: what is still at a contractor, and for how long */
+  index("batches_vendor_idx").on(t.vendorId),
+  index("batches_branch_idx").on(t.branchId),
+  check("batches_mode_check", sql`${t.mode} in ('inHouse','contractual','opening')`),
+  check("batches_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  // the contractor, the job it does and the receipt all belong to a contractual batch only
+  check("batches_vendor_check", sql`${t.vendorId} is null or ${t.mode} = 'contractual'`),
+  check("batches_received_check", sql`${t.receivedAt} is null or ${t.mode} = 'contractual'`),
+  check("batches_job_process_check", sql`${t.jobProcess} is null or (${t.mode} = 'contractual' and ${t.jobProcess} in ('manufacture','printing','embroidery','washing','dyeing','lamination','other'))`),
+])
+
+/**
+ * The finished goods of a batch: what was put into production, what came back, what was rejected — each line at the
+ * unit cost of the BOM version it was produced under (an opening batch may state its own), and on the work order it
+ * draws the quantity from, if any.
+ */
+export const batchLines = pgTable("batch_lines", {
+  batchId: text("batch_id").notNull(),
+  /** position on the batch */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  workOrderId: text("work_order_id"),
+  workOrderNo: text("work_order_no"),
+  issueQty: numeric("issue_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  receiveQty: numeric("receive_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  damageQty: numeric("damage_qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  bomId: text("bom_id"),
+  bomVersion: integer("bom_version"),
+  unitCost: numeric("unit_cost", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.batchId, t.ord] }),
+  /** the finished-goods lots: what a sales invoice may draw on */
+  index("batch_lines_item_idx").on(t.itemId),
+  index("batch_lines_work_order_idx").on(t.workOrderId),
+  // a line can never receive or reject more than it was issued
+  check("batch_lines_qty_check", sql`${t.receiveQty} + ${t.damageQty} <= ${t.issueQty}`),
+])
+
+/**
+ * The inputs a batch consumes: what the BOM says the issued quantity takes (merged per input), or, when the
+ * production configuration asks for the actual consumption, the quantities the batch states. Approving takes them
+ * out of the store; cancelling puts them back.
+ */
+export const batchConsumption = pgTable("batch_consumption", {
+  batchId: text("batch_id").notNull(),
+  /** position in the consumption list */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.batchId, t.ord] }),
+  /** the inputs' ledger rows and the branch stock */
+  index("batch_consumption_item_idx").on(t.itemId),
+])
+
+/**
+ * The production configuration (R5.5): one row — the procedure a production batch follows (straight into stock, or
+ * against a work order) and the consumption it records (what the declaration says the goods take, or what the batch
+ * states). `buildBatch` reads both, so this settings screen decides how every later batch is priced.
+ */
+export const productionConfig = pgTable("production_config", {
+  id: integer("id").primaryKey().default(1),
+  procedure: text("procedure", { enum: ["directStock", "workOrder"] }).notNull(),
+  consumption: text("consumption", { enum: ["standard", "actual"] }).notNull(),
+  updatedAt: ts("updated_at"),
+  updatedBy: text("updated_by"),
+}, (t) => [
+  check("production_config_single_row", sql`${t.id} = 1`),
+  check("production_config_procedure_check", sql`${t.procedure} in ('directStock','workOrder')`),
+  check("production_config_consumption_check", sql`${t.consumption} in ('standard','actual')`),
+])
+
+/**
+ * A price declaration / bill of materials (Mushak 4.3, R5.5): the input–output coefficients of ONE unit of a
+ * finished good, the cost heads that turn them into the declared price, and the version of the item it is filed
+ * under. What a production batch consumes and what a receipt is valued at both come from the version in force, so
+ * the row is what makes those sums answerable in SQL:
+ *   - the inputs are rows of `bom_inputs` and the cost heads rows of `bom_costs`, in the order they are printed;
+ *   - approving a version supersedes the one in force (`superseded_at`), and only a draft may be approved, edited,
+ *     cancelled or deleted;
+ *   - a deleted draft leaves the register but keeps its row with `deleted_at`: the mock removed it from its array
+ *     for good, and its version may then be filed again — but its id counter had moved on, so the stamped row is
+ *     what stops a later declaration taking the same id;
+ *   - the number carries the version (`BOM-{sku}-v{n}`), so it is unique among the live declarations only.
+ */
+export const boms = pgTable("boms", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** BOM-{sku}-v{n} */
+  no: text("no").notNull(),
+  /** the finished good it declares */
+  itemId: text("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  sku: text("sku").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  version: integer("version").notNull(),
+  /**
+   * Date the declaration is submitted to / accepted by the VAT office. Text, not a date: a draft may be filed
+   * without one, and the demo data set holds that as an empty string — the same reason a sale's export bill date is
+   * text. The rules still require a `YYYY-MM-DD` shape when there is one.
+   */
+  licenseDate: text("license_date"),
+  /** date the coefficients take effect */
+  effectiveDate: date("effective_date", { mode: "string" }).notNull(),
+  /** why this version replaced the previous one (version 2 and up) */
+  amendmentReason: text("amendment_reason"),
+  note: text("note"),
+  /** what the inputs are worth, what the wastage is worth, and what the cost heads add */
+  materialValue: numeric("material_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  wastageValue: numeric("wastage_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  valueAdded: numeric("value_added", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** declared price per unit = material value + value added (profit included) */
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** what a production receipt is valued at: the price less the profit head */
+  unitCost: numeric("unit_cost", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** set when a later version of the item was approved */
+  supersededAt: ts("superseded_at"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the declaration's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  /** two live declarations cannot share a number; a deleted draft's version may be filed again */
+  uniqueIndex("boms_live_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  index("boms_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the version in force for an item on a date */
+  index("boms_item_idx").on(t.itemId),
+  index("boms_effective_date_idx").on(t.effectiveDate),
+  check("boms_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  // only a version that was approved can be superseded by a later one
+  check("boms_superseded_check", sql`${t.supersededAt} is null or ${t.process} = 'Approved'`),
+  check("boms_version_check", sql`${t.version} > 0`),
+])
+
+/**
+ * The inputs a declaration prices: per ONE unit of the finished good, the net quantity, the wastage it allows and
+ * what the gross quantity costs. Together they are the Mushak 4.3 material value.
+ */
+export const bomInputs = pgTable("bom_inputs", {
+  bomId: text("bom_id").notNull(),
+  /** position in the input list */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  /** net quantity per unit of output */
+  qty: numeric("qty", { precision: 18, scale: 4, mode: "number" }).notNull(),
+  wastagePct: numeric("wastage_pct", { precision: 8, scale: 6, mode: "number" }).notNull(),
+  /** qty × wastage% */
+  wastageQty: numeric("wastage_qty", { precision: 18, scale: 4, mode: "number" }).notNull(),
+  /** qty + wastage */
+  grossQty: numeric("gross_qty", { precision: 18, scale: 4, mode: "number" }).notNull(),
+  price: numeric("price", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** grossQty × price */
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** wastageQty × price */
+  wastageValue: numeric("wastage_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.bomId, t.ord] }),
+  /** what a batch consumes, and the inputs' ledger rows */
+  index("bom_inputs_item_idx").on(t.itemId),
+  // an input appears once per declaration, and the wastage it allows is the 0–50% the form accepts
+  uniqueIndex("bom_inputs_item_key").on(t.bomId, t.itemId),
+  check("bom_inputs_wastage_check", sql`${t.wastagePct} >= 0 and ${t.wastagePct} <= 50`),
+])
+
+/** The cost heads that turn the material value into the declared price: labour, power, … and the profit. */
+export const bomCosts = pgTable("bom_costs", {
+  bomId: text("bom_id").notNull(),
+  /** position in the cost list */
+  ord: integer("ord").notNull(),
+  head: text("head", { enum: ["labour", "power", "overhead", "packing", "admin", "finance", "profit", "other"] }).notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.bomId, t.ord] }),
+  /** a head appears at most once per declaration, and only the heads the form offers */
+  uniqueIndex("bom_costs_head_key").on(t.bomId, t.head),
+  check("bom_costs_head_check", sql`${t.head} in ('labour','power','overhead','packing','admin','finance','profit','other')`),
+  // a zero head is dropped before the declaration is priced, so it is never stored
+  check("bom_costs_amount_check", sql`${t.amount} > 0`),
+])
+
+/**
+ * A production work order (R5.5): what the floor has to produce, drawn on by the batches that put the goods into
+ * production. Its progress is never entered — it is what the *approved* batches say — so the columns below are
+ * recomputed whenever a batch or a work order is written, and what the floor has produced, received and still owes
+ * is a `SUM` over `work_order_lines` instead of a walk over every batch in memory:
+ *   - the goods it asks for are rows of `work_order_lines`, in the order they are printed;
+ *   - the number is unique and never reused (the audit trail takes part in it), so a deleted draft's number stays
+ *     retired — and its row is stamped with `deleted_at`, exactly as a deleted batch's is, because the mock's id
+ *     counter moved on when it was removed;
+ *   - `status` is derived: a draft is `draft`, a cancelled one `cancelled`, and an approved one `open`, `partial` or
+ *     `completed` according to what the batches have received and rejected.
+ */
+export const workOrders = pgTable("work_orders", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** PW-MMYY#### */
+  no: text("no").notNull(),
+  /** the requisition the floor raised, if the work order answers one */
+  requisitionNo: text("requisition_no"),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  dueDate: date("due_date", { mode: "string" }),
+  remark: text("remark"),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  /** derived from the approved batches that draw on it */
+  status: text("status", { enum: ["draft", "open", "partial", "completed", "cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the work order's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("work_orders_no_key").on(t.no),
+  index("work_orders_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("work_orders_issue_date_idx").on(t.issueDate),
+  /** what the floor still owes, and the batches' `?workOrder=` filter */
+  index("work_orders_status_idx").on(t.status),
+  check("work_orders_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("work_orders_status_check", sql`${t.status} in ('draft','open','partial','completed','cancelled')`),
+  // the two lifecycle columns agree: a draft is a draft and a cancelled work order is cancelled
+  check("work_orders_draft_check", sql`(${t.process} = 'Created') = (${t.status} = 'draft')`),
+  check("work_orders_cancelled_check", sql`(${t.process} = 'Cancelled') = (${t.status} = 'cancelled')`),
+  check("work_orders_due_check", sql`${t.dueDate} is null or ${t.dueDate} >= ${t.issueDate}`),
+])
+
+/**
+ * What a work order asks for: one row per finished good, with the quantity ordered and the progress the approved
+ * batches have made on it — what was put into production, what came back, what was rejected, and what is still owed.
+ */
+export const workOrderLines = pgTable("work_order_lines", {
+  workOrderId: text("work_order_id").notNull(),
+  /** position on the work order */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  sku: text("sku").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** put into production by approved batches — NULL until the first refresh, which is how the demo data set starts */
+  issued: numeric("issued", { precision: 18, scale: 3, mode: "number" }),
+  received: numeric("received", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  damaged: numeric("damaged", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** still to put into production */
+  remaining: numeric("remaining", { precision: 18, scale: 3, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.workOrderId, t.ord] }),
+  index("work_order_lines_item_idx").on(t.itemId),
+  // a finished good appears once per work order, and the batches cannot have returned more than they took
+  uniqueIndex("work_order_lines_item_key").on(t.workOrderId, t.itemId),
+  check("work_order_lines_qty_check", sql`${t.received} + ${t.damaged} <= ${t.issued}`),
+  check("work_order_lines_remaining_check", sql`${t.remaining} >= 0`),
+])
+
+/**
+ * A money account (R5.6): where the company's money is — a bank account, a mobile wallet (bKash, Nagad …) or a cash
+ * box. What the account holds is derived: the opening balance plus every approved receipt less every approved payment
+ * and treasury deposit, which is `accountRow`'s own sum, so a balance is never entered twice.
+ */
+export const moneyAccounts = pgTable("money_accounts", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["bank", "mobile", "cash"] }).notNull(),
+  /** bank name, wallet service or cash-box name */
+  provider: text("provider").notNull(),
+  /** bank: account number · mobile: wallet number · cash: optional code */
+  accountNo: text("account_no").notNull(),
+  owner: text("owner").notNull(),
+  branch: text("branch"),
+  address: text("address"),
+  bankType: text("bank_type", { enum: ["current", "savings", "transaction", "other"] }),
+  /** merchant wallets carry the provider's own; the type is the account's, not the service's */
+  walletType: text("wallet_type", { enum: ["personal", "general", "merchant"] }),
+  /** mobile: the person authorised to operate the wallet */
+  authorised: text("authorised"),
+  /** % the bank / MFS charges on incoming money */
+  serviceCharge: numeric("service_charge", { precision: 6, scale: 3, mode: "number" }).notNull(),
+  openingBalance: numeric("opening_balance", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** the date the opening balance is taken from */
+  openingDate: date("opening_date", { mode: "string" }).notNull(),
+  active: boolean("active").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the account's own trail: created / updated / activated / deactivated / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  index("money_accounts_kind_idx").on(t.kind),
+  // the account number is unique within a provider, digits only — the rule the mock's duplicate check used
+  index("money_accounts_provider_idx").on(t.provider),
+  check("money_accounts_kind_check", sql`${t.kind} in ('bank','mobile','cash')`),
+  check("money_accounts_bank_type_check",
+    sql`${t.bankType} is null or ${t.bankType} in ('current','savings','transaction','other')`),
+  check("money_accounts_wallet_type_check",
+    sql`${t.walletType} is null or ${t.walletType} in ('personal','general','merchant')`),
+  // the bank-only and wallet-only columns belong to their kind
+  check("money_accounts_branch_check", sql`${t.branch} is null or ${t.kind} = 'bank'`),
+  check("money_accounts_bank_check", sql`${t.bankType} is null or ${t.kind} = 'bank'`),
+  check("money_accounts_wallet_check",
+    sql`(${t.walletType} is null and ${t.authorised} is null) or ${t.kind} = 'mobile'`),
+])
+
+/**
+ * A customer receipt (MR-) or a supplier payment (PV-): money in or out, allocated to the invoices it settles. Both
+ * kinds share one table — `kind` tells them apart, as it does for the transfers, the damage entries and the notes —
+ * because the register, the audit trail and the party statement read them the same way.
+ *
+ * The allocations are rows of `money_allocations`, and approving one writes the invoice's `paid` and `due` in the same
+ * transaction — those are columns of `sales` and `purchases`, so a settlement reaches the invoice registers at once.
+ */
+export const moneyDocs = pgTable("money_docs", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** MR-MMYY#### (receipt) / PV-MMYY#### (payment) */
+  no: text("no").notNull(),
+  kind: text("kind", { enum: ["receipt", "payment"] }).notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  partyId: text("party_id").notNull(),
+  partyName: text("party_name").notNull(),
+  partyBin: text("party_bin").notNull(),
+  method: text("method", { enum: ["cash", "bankTransfer", "cheque", "mobile"] }).notNull(),
+  /** the account the money went into or came out of */
+  accountId: text("account_id").notNull(),
+  accountName: text("account_name").notNull(),
+  /** cheque: the number, the date it is drawn on and the bank it is drawn against */
+  chequeNo: text("cheque_no"),
+  chequeDate: date("cheque_date", { mode: "string" }),
+  chequeBank: text("cheque_bank"),
+  /** mobile-wallet transaction id / bank reference */
+  reference: text("reference"),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** bank / MFS charge deducted (receipts) */
+  charge: numeric("charge", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** what the allocations add up to, and what is left on account */
+  allocated: numeric("allocated", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  unallocated: numeric("unallocated", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /**
+   * A deleted draft leaves the register but keeps its row: the mock removed it from its array and its id counter
+   * moved on, so the row is what stops a later document taking the same id. There is no undo for a money document.
+   */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("money_docs_no_key").on(t.no),
+  index("money_docs_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?party=`, `?account=` and `?invoice=` filters, and a party's statement */
+  index("money_docs_kind_idx").on(t.kind),
+  index("money_docs_party_idx").on(t.partyId),
+  index("money_docs_account_idx").on(t.accountId),
+  index("money_docs_date_idx").on(t.date),
+  check("money_docs_kind_check", sql`${t.kind} in ('receipt','payment')`),
+  check("money_docs_method_check", sql`${t.method} in ('cash','bankTransfer','cheque','mobile')`),
+  check("money_docs_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  // the cheque block belongs to a cheque, and the money never allocates more than it takes
+  check("money_docs_cheque_check", sql`${t.chequeNo} is null or ${t.method} = 'cheque'`),
+  check("money_docs_allocated_check",
+    sql`${t.allocated} >= 0 and ${t.allocated} <= ${t.amount} + 0.004 and ${t.unallocated} = ${t.amount} - ${t.allocated}`),
+])
+
+/**
+ * What a receipt or payment settles: one row per invoice, with the amount set against it and the invoice's own total
+ * beside it, in the order they are printed. An allocation of zero is dropped before the document is stored.
+ */
+export const moneyAllocations = pgTable("money_allocations", {
+  docId: text("doc_id").notNull(),
+  /** position on the receipt / payment */
+  ord: integer("ord").notNull(),
+  /** the invoice settled — a `sales` or `purchases` id */
+  invoiceId: text("invoice_id").notNull(),
+  invoiceNo: text("invoice_no").notNull(),
+  invoiceDate: date("invoice_date", { mode: "string" }).notNull(),
+  invoiceTotal: numeric("invoice_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.docId, t.ord] }),
+  /** the register's `?invoice=` filter, and a party's statement */
+  index("money_allocations_invoice_idx").on(t.invoiceId),
+  // an invoice is settled at most once per document
+  uniqueIndex("money_allocations_invoice_key").on(t.docId, t.invoiceId),
+  check("money_allocations_amount_check", sql`${t.amount} > 0`),
+])
+
+/**
+ * The accounting configuration (R5.6): one row — how far the books are closed, whether a receipt may exceed the
+ * invoices it settles (an advance), and whether a new one pre-allocates the oldest invoices first. A receipt or
+ * payment dated inside the closed period is refused, so this row is a control on every money document written after
+ * it, which is why it belongs in the database and not in the JSONB document.
+ */
+export const accountingConfig = pgTable("accounting_config", {
+  id: integer("id").primaryKey().default(1),
+  /** receipts/payments dated on or before this date are rejected (legacy "Account close") */
+  closedUpTo: date("closed_up_to", { mode: "string" }),
+  /** allow receipts/payments larger than the invoices they settle (advance / on-account) */
+  allowAdvance: boolean("allow_advance").notNull(),
+  /** new receipts/payments pre-allocate oldest invoices first */
+  autoAllocate: boolean("auto_allocate").notNull(),
+  updatedAt: ts("updated_at"),
+  updatedBy: text("updated_by"),
+}, (t) => [
+  check("accounting_config_single_row", sql`${t.id} = 1`),
+])
+
+/**
+ * R5.6: a treasury deposit (TR-6) — the challan the VAT, the VDS, the SD, the interest or a penalty was paid into the
+ * government treasury with. It is what Mushak 9.1 counts as tax already paid, and what a purchase VDS certificate
+ * quotes, so it is a document of its own and not a column of the return.
+ */
+export const treasuryDeposits = pgTable("treasury_deposits", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** TC-MMYY#### */
+  no: text("no").notNull(),
+  head: text("head", { enum: ["vat", "vds", "sd", "interest", "penalty", "excise", "devSurcharge", "ictSurcharge", "healthSurcharge", "envSurcharge"] }).notNull(),
+  /** economic code, e.g. 1/1133/0015/0311 — derived from the head and the company's zone */
+  code: text("code").notNull(),
+  /** the VAT return period the deposit counts toward (YYYY-MM) */
+  taxPeriod: text("tax_period").notNull(),
+  challanNo: text("challan_no").notNull(),
+  challanDate: date("challan_date", { mode: "string" }).notNull(),
+  mode: text("mode", { enum: ["cash", "cheque", "payOrder", "draft", "online"] }).notNull(),
+  bank: text("bank").notNull(),
+  bankBranch: text("bank_branch").notNull(),
+  district: text("district").notNull(),
+  bankAddress: text("bank_address"),
+  /** the company bank account the money left from (optional) */
+  accountId: text("account_id"),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  depositor: text("depositor").notNull(),
+  designation: text("designation"),
+  address: text("address").notNull(),
+  description: text("description").notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** A deleted draft leaves the register but keeps its row, so its id and its number stay retired. */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("treasury_deposits_no_key").on(t.no),
+  index("treasury_deposits_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?head=`, `?period=` and `?mode=` facets, and the balance a deposit leaves an account with */
+  index("treasury_deposits_head_idx").on(t.head),
+  index("treasury_deposits_period_idx").on(t.taxPeriod),
+  index("treasury_deposits_account_idx").on(t.accountId),
+  index("treasury_deposits_challan_date_idx").on(t.challanDate),
+  check("treasury_deposits_head_check",
+    sql`${t.head} in ('vat','vds','sd','interest','penalty','excise','devSurcharge','ictSurcharge','healthSurcharge','envSurcharge')`),
+  check("treasury_deposits_mode_check", sql`${t.mode} in ('cash','cheque','payOrder','draft','online')`),
+  check("treasury_deposits_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("treasury_deposits_amount_check", sql`${t.amount} > 0`),
+])
+
+/**
+ * R5.6: a VAT deduction at source (Mushak 6.6) — VAT withheld on a supply. `purchase` is what we withheld from a
+ * supplier (we issue the certificate, and it may be deposited with a treasury challan); `sales` is what a withholding
+ * customer withheld from us. An approved certificate settles part of what the invoice still has due, so its approval
+ * writes the invoice's `paid` and `due` in the same transaction — those are columns of `sales` and `purchases`.
+ */
+export const vdsEntries = pgTable("vds_entries", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** VDS-MMYY#### */
+  no: text("no").notNull(),
+  mode: text("mode", { enum: ["purchase", "sales"] }).notNull(),
+  /** the invoice the certificate was written against */
+  docId: text("doc_id").notNull(),
+  docNo: text("doc_no").notNull(),
+  challanNo: text("challan_no").notNull(),
+  docDate: date("doc_date", { mode: "string" }).notNull(),
+  partyId: text("party_id").notNull(),
+  partyName: text("party_name").notNull(),
+  partyBin: text("party_bin").notNull(),
+  partyAddress: text("party_address").notNull(),
+  /** value of the supply subject to VDS, and the VAT charged on it */
+  docValue: numeric("doc_value", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  docVat: numeric("doc_vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  certificateNo: text("certificate_no"),
+  certificateDate: date("certificate_date", { mode: "string" }).notNull(),
+  taxPeriod: text("tax_period").notNull(),
+  /** purchase VDS: the treasury challan it was deposited with (both optional) */
+  treasuryId: text("treasury_id"),
+  treasuryChallan: text("treasury_challan"),
+  remark: text("remark"),
+  /** the part of `amount` that settled the invoice's due when the certificate was approved (reversed on cancel) */
+  settled: numeric("settled", { precision: 18, scale: 2, mode: "number" }),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** A deleted draft leaves the register but keeps its row, so its id and its number stay retired. */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("vds_entries_no_key").on(t.no),
+  index("vds_entries_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?mode=`, `?party=` and `?period=` facets, and the invoice a certificate was written against */
+  index("vds_entries_mode_idx").on(t.mode),
+  index("vds_entries_doc_idx").on(t.docId),
+  index("vds_entries_party_idx").on(t.partyId),
+  index("vds_entries_period_idx").on(t.taxPeriod),
+  index("vds_entries_treasury_idx").on(t.treasuryId),
+  index("vds_entries_certificate_date_idx").on(t.certificateDate),
+  check("vds_entries_mode_check", sql`${t.mode} in ('purchase','sales')`),
+  check("vds_entries_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("vds_entries_amount_check", sql`${t.amount} > 0`),
+  // a certificate settles at most what it withheld, and only a purchase one quotes a challan
+  check("vds_entries_settled_check", sql`${t.settled} is null or (${t.settled} >= 0 and ${t.settled} <= ${t.amount} + 0.004)`),
+  check("vds_entries_treasury_check", sql`${t.treasuryId} is null or ${t.mode} = 'purchase'`),
+])
+
+/**
+ * R5.6: a manual VAT adjustment — one of the Mushak 9.1 notes 27 / 32 / 38 / 39 / 40 that a book cannot derive: an
+ * increase or a decrease of output tax, of input tax credit or of SD, and (R6.3) the SD paid on an input that went
+ * into goods exported within six months, whose link to the purchase line and the export sale is kept with it.
+ */
+export const vatAdjustments = pgTable("vat_adjustments", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** VA-MMYY#### */
+  no: text("no").notNull(),
+  kind: text("kind", { enum: ["otherIncrease", "otherDecrease", "sdIncrease", "sdDecrease", "sdExport"] }).notNull(),
+  /** the 9.1 note the amount lands in: 27 / 32 / 38 / 39 / 40 */
+  note: integer("note").notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  taxPeriod: text("tax_period").notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  description: text("description").notNull(),
+  reference: text("reference"),
+  /** kind `sdExport`: the SD-paid input and the export invoice it went into */
+  sdExport: jsonb("sd_export").$type<SdExportLink>(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled / deleted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** A deleted draft leaves the register but keeps its row, so its id and its number stay retired. */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("vat_adjustments_no_key").on(t.no),
+  index("vat_adjustments_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?kind=` and `?period=` facets, and the 9.1 return's own notes */
+  index("vat_adjustments_kind_idx").on(t.kind),
+  index("vat_adjustments_period_idx").on(t.taxPeriod),
+  index("vat_adjustments_issue_date_idx").on(t.issueDate),
+  check("vat_adjustments_kind_check",
+    sql`${t.kind} in ('otherIncrease','otherDecrease','sdIncrease','sdDecrease','sdExport')`),
+  check("vat_adjustments_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("vat_adjustments_note_check", sql`${t.note} in (27, 32, 38, 39, 40)`),
+  check("vat_adjustments_amount_check", sql`${t.amount} > 0`),
+  // only a claim for SD on the inputs of exported goods carries its link
+  check("vat_adjustments_sd_export_check",
+    sql`(${t.sdExport} is null and ${t.kind} <> 'sdExport') or (${t.sdExport} is not null and ${t.kind} = 'sdExport')`),
+])
+
+/**
+ * R5.6: the Mushak 9.1 return of one tax period (s.61). The period *is* the id — one return per period, and the
+ * period is what every document is locked against — so there is no number series and no `process`. A return is a
+ * draft until it is submitted, and submitting it freezes the computation it was filed with (`snapshot`): the
+ * documents it was computed from keep moving, the return does not.
+ */
+export const vatReturns = pgTable("vat_returns", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** YYYY-MM */
+  period: text("period").notNull(),
+  /** an original filed after the due date is recorded as `late`; `amended` is a corrected return (s.66) */
+  type: text("type", { enum: ["original", "amended", "full", "late"] }).notNull(),
+  amendReason: text("amend_reason"),
+  /** Mushak 9.1 part 2: whether there were taxable activities in the period at all */
+  activities: boolean("activities").notNull(),
+  status: text("status", { enum: ["draft", "submitted"] }).notNull(),
+  submissionDate: date("submission_date", { mode: "string" }),
+  /** the manual notes (parts 4–5): interest, penalty, the surcharges and the refund claimed */
+  manual: jsonb("manual").$type<ReturnManual>().notNull(),
+  /** every note as it was filed — frozen at submission */
+  snapshot: jsonb("snapshot").$type<ReturnComputation>(),
+  /** acknowledgement number from the NBR portal */
+  ackNo: text("ack_no"),
+  submittedBy: text("submitted_by"),
+  submittedAt: ts("submitted_at"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the document's own trail: created / edited / submitted, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+}, (t) => [
+  uniqueIndex("vat_returns_period_key").on(t.period),
+  index("vat_returns_status_idx").on(t.status),
+  index("vat_returns_type_idx").on(t.type),
+  index("vat_returns_ord_idx").on(t.ord),
+  check("vat_returns_status_check", sql`${t.status} in ('draft','submitted')`),
+  check("vat_returns_type_check", sql`${t.type} in ('original','amended','full','late')`),
+  // a draft is not filed, and a filed return is frozen: the snapshot, the acknowledgement and the date travel together
+  check("vat_returns_submitted_check",
+    sql`(${t.status} = 'draft' and ${t.snapshot} is null and ${t.ackNo} is null) or (${t.status} = 'submitted' and ${t.snapshot} is not null and ${t.ackNo} is not null and ${t.submissionDate} is not null)`),
+  // only an amended return says why
+  check("vat_returns_amend_reason_check", sql`(${t.type} = 'amended') = (${t.amendReason} is not null)`),
+])
+
+/**
+ * R5.6: the NBR settings — one row. The zone the economic codes are derived from, and the business profile that
+ * drives advance tax, the return's deadline and the RMG features.
+ */
+export const vatSettings = pgTable("vat_settings", {
+  id: integer("id").primaryKey().default(1),
+  zoneCode: text("zone_code").notNull(),
+  profile: jsonb("profile").$type<VatProfile>(),
+  updatedAt: ts("updated_at"),
+  updatedBy: text("updated_by"),
+}, (t) => [
+  check("vat_settings_single_row", sql`${t.id} = 1`),
+])
+
+/**
+ * Modules not yet migrated (the VAT returns, the registers that are derived from documents…) keep their exact
  * mock behaviour: their state is one JSONB document, saved after every write. R5.2+ replaces it table by table.
+ */
+/**
+ * The R5.1 compat snapshot. Every collection it ever held has a table now, and the finale boot drops the table
+ * once the stored snapshot is drained (the counters re-derive from the rows, the notification read-ids moved to
+ * `users.notif_read`, the undo buffer has been empty since the last mock route went native). It stays in the
+ * schema for one more release: a database written before the finale still upgrades through the boot's adoption
+ * legs, which read this table before dropping it. Remove from the schema once every installed base has passed
+ * a finale boot.
  */
 export const compatState = pgTable("compat_state", {
   key: text("key").primaryKey(),
@@ -179,4 +1559,569 @@ export const backups = pgTable("backups", {
   index("backups_at_idx").on(t.at),
   uniqueIndex("backups_scheduled_slot_key").on(t.slot).where(sql`${t.kind} = 'scheduled'`),
   check("backups_kind_check", sql`${t.kind} in ('scheduled','manual')`),
+])
+
+/**
+ * R6.2 — a Utilization Declaration (BGMEA / BKMEA) or Utilization Permission (customs) of an exporter customer: the
+ * raw materials it may procure duty- and VAT-free for one export order. A deemed-export invoice has to fit inside an
+ * active declaration's quantities, which is what the register and the sales form's live check answer.
+ */
+export const uds = pgTable("uds", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** the exporter's own reference (BGMEA / BKMEA) or the customs UP number — unique per exporter */
+  no: text("no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  kind: text("kind", { enum: ["UD", "UP"] }).notNull(),
+  customerId: text("customer_id").notNull(),
+  customerName: text("customer_name").notNull(),
+  customerBin: text("customer_bin").notNull(),
+  /** the export LC / sales contract of the garment order behind the declaration, and the foreign buyer */
+  masterLcNo: text("master_lc_no").notNull(),
+  buyer: text("buyer"),
+  expiry: date("expiry", { mode: "string" }).notNull(),
+  status: text("status", { enum: ["active", "closed"] }).notNull(),
+  note: text("note"),
+  /** R6.3: the export LC (garment order) value, in the declaration's own currency — the ceiling for back-to-back LCs */
+  masterLcValue: numeric("master_lc_value", { precision: 18, scale: 2, mode: "number" }),
+  currency: text("currency"),
+  /** R6.3: the amendment certificates, oldest first — what changed, when and why */
+  amendments: jsonb("amendments").$type<UdAmendment[]>(),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the declaration's own trail: created / edited / amended, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one exporter cannot hold the same declaration number twice; a deleted one frees its number again, as the
+  // mock's array did
+  uniqueIndex("uds_no_key").on(t.customerId, t.no).where(sql`${t.deletedAt} is null`),
+  index("uds_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?customer=` filter, and the sales form's lookups */
+  index("uds_customer_idx").on(t.customerId),
+  /** the bond watch-list walks the live declarations' expiries */
+  index("uds_expiry_idx").on(t.expiry),
+  check("uds_kind_check", sql`${t.kind} in ('UD','UP')`),
+  check("uds_status_check", sql`${t.status} in ('active','closed')`),
+  check("uds_expiry_check", sql`${t.expiry} >= ${t.date}`),
+  check("uds_master_lc_value_check", sql`${t.masterLcValue} is null or ${t.masterLcValue} >= 0`),
+])
+
+/** What a declaration permits: one row per input, with the quantity and (R6.3) the value it may be procured for. */
+export const udLines = pgTable("ud_lines", {
+  udId: text("ud_id").notNull(),
+  /** position on the declaration */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+  /** R6.3: the value the declaration permits for this input, in its currency — NULL means "not stated" */
+  value: numeric("value", { precision: 18, scale: 2, mode: "number" }),
+}, (t) => [
+  primaryKey({ columns: [t.udId, t.ord] }),
+  /** what the fit check looks up: every declaration an input appears on */
+  index("ud_lines_item_idx").on(t.itemId),
+  check("ud_lines_qty_check", sql`${t.qty} > 0`),
+  check("ud_lines_value_check", sql`${t.value} is null or ${t.value} >= 0`),
+])
+
+/**
+ * R6.5 — our own UD (BGMEA / BKMEA) or UP (Bond Commissionerate) for one export order: the bonded inputs it permits
+ * us to import and the garments it exports, and the settlement the Bond Commissionerate records once the order has
+ * shipped (or the UD has expired). There is no delete: an own UD is a permit that was issued, so it lives until it is
+ * settled — and a settlement freezes the statement it was based on.
+ */
+export const bondUds = pgTable("bond_uds", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** the BGMEA / BKMEA UD number or the customs UP number — ours, so unique across the company */
+  no: text("no").notNull(),
+  kind: text("kind", { enum: ["UD", "UP"] }).notNull(),
+  issuer: text("issuer", { enum: ["BGMEA", "BKMEA", "Customs"] }).notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  expiry: date("expiry", { mode: "string" }).notNull(),
+  /** the export LC / sales contract of the order behind the UD, and the foreign buyer */
+  masterLcNo: text("master_lc_no").notNull(),
+  masterLcValue: numeric("master_lc_value", { precision: 18, scale: 2, mode: "number" }),
+  currency: text("currency"),
+  buyer: text("buyer"),
+  note: text("note"),
+  /**
+   * The Bond Commissionerate's settlement, frozen as it was recorded: the statement lines it disposed of (cleared on
+   * duty and / or carried to another UD) and the duty paid — a record of the settlement, not a figure anything adds
+   * up, so it travels with the head as JSONB the way a declaration's amendment certificates do.
+   */
+  settlement: jsonb("settlement").$type<UdSettlement>(),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  /** the UD's own trail: created / edited / settled, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a compat handler that dropped an own UD from the in-memory world (a restored older backup) stamps its row */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one number of ours per permit, while it lives — the mock's array refused the duplicate the same way
+  uniqueIndex("bond_uds_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  index("bond_uds_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register walks the live expiries for the ready state and the expired warning */
+  index("bond_uds_expiry_idx").on(t.expiry),
+  check("bond_uds_kind_check", sql`${t.kind} in ('UD','UP')`),
+  check("bond_uds_issuer_check", sql`${t.issuer} in ('BGMEA','BKMEA','Customs')`),
+  check("bond_uds_expiry_check", sql`${t.expiry} >= ${t.date}`),
+  check("bond_uds_master_lc_value_check", sql`${t.masterLcValue} is null or ${t.masterLcValue} >= 0`),
+])
+
+/**
+ * R6.6 — a Mushak 9.3 application (s.65, rule 48): ask the Commissioner to file one period's return late, inside
+ * seven days of the due date and at most a month past it. Granted (or deemed after seven days) the return is filed
+ * without the late-return penalty; refused, the penalty stands.
+ */
+export const lateFilings = pgTable("late_filings", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** LF-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  /** the tax period the application asks to file late (the return's own id) */
+  period: text("period").notNull(),
+  reasonKind: text("reason_kind", { enum: ["systemFailure", "disaster", "illness", "documents", "other"] }).notNull(),
+  reason: text("reason").notNull(),
+  /** the filing date asked for — after the due date, at most one month after it */
+  requestedDate: date("requested_date", { mode: "string" }).notNull(),
+  status: text("status", { enum: ["draft", "filed", "approved", "rejected"] }).notNull(),
+  filedOn: date("filed_on", { mode: "string" }),
+  filedRef: text("filed_ref"),
+  decidedOn: date("decided_on", { mode: "string" }),
+  commissionerRef: text("commissioner_ref"),
+  /** approved: the filing date actually allowed (at most the one asked for) */
+  grantedDate: date("granted_date", { mode: "string" }),
+  rejectReason: text("reject_reason"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft is stamped, not removed — the mock's id counter moved on, so the row retires its id */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one application number while it lives, and one live application per period — a rejected one frees the period,
+  // exactly as the mock's array did
+  uniqueIndex("late_filings_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  uniqueIndex("late_filings_period_key").on(t.period).where(sql`${t.deletedAt} is null and ${t.status} <> 'rejected'`),
+  index("late_filings_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?status=` filter walks the states */
+  index("late_filings_status_idx").on(t.status),
+  check("late_filings_status_check", sql`${t.status} in ('draft','filed','approved','rejected')`),
+])
+
+/**
+ * R6.6 — a Mushak 9.4 application (s.66, rule 49): amend a submitted return's 9.1 source notes within four years,
+ * declaring that no VAT audit has started. An increase is paid with interest; a decrease becomes a decreasing
+ * adjustment in a later open period, and the application files the amended return itself.
+ */
+export const returnAmendments = pgTable("return_amendments", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** AM-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  /** the tax period of the return being amended */
+  period: text("period").notNull(),
+  reasonKind: text("reason_kind", { enum: ["clerical", "underpaid", "overpaid", "other"] }).notNull(),
+  description: text("description").notNull(),
+  /** the corrections asked for, with their "as filed" values — a record of the change, so it travels as JSONB */
+  corrections: jsonb("corrections").$type<ReturnAmendment["corrections"]>().notNull(),
+  /** the declaration that no VAT audit / enquiry has started for the period */
+  noAudit: boolean("no_audit").notNull(),
+  /** 1 = amends the original return; 2 = amends the first amended return, … */
+  revision: integer("revision").notNull(),
+  status: text("status", { enum: ["draft", "filed", "approved", "rejected", "amended"] }).notNull(),
+  filedOn: date("filed_on", { mode: "string" }),
+  filedRef: text("filed_ref"),
+  decidedOn: date("decided_on", { mode: "string" }),
+  commissionerRef: text("commissioner_ref"),
+  rejectReason: text("reject_reason"),
+  /** decrease: the tax period the Commissioner allows the decreasing adjustment in */
+  adjustPeriod: text("adjust_period"),
+  /**
+   * The amended return once filed — the acknowledgement, the deposit (an increase), the decreasing adjustments
+   * posted (a decrease), the effect and the computation it was filed with. A record, so it travels as JSONB the
+   * way a settlement does.
+   */
+  amended: jsonb("amended").$type<NonNullable<ReturnAmendment["amended"]>>(),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft is stamped, not removed — the mock's id counter moved on, so the row retires its id */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one application number while it lives, and one live application per period — a rejected or already-amended one
+  // frees the period for a later revision, exactly as the mock's array did
+  uniqueIndex("return_amendments_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  uniqueIndex("return_amendments_period_key").on(t.period).where(sql`${t.deletedAt} is null and ${t.status} <> 'rejected' and ${t.status} <> 'amended'`),
+  index("return_amendments_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  /** the register's `?status=` filter walks the states */
+  index("return_amendments_status_idx").on(t.status),
+  check("return_amendments_status_check", sql`${t.status} in ('draft','filed','approved','rejected','amended')`),
+  check("return_amendments_revision_check", sql`${t.revision} >= 1`),
+])
+
+/**
+ * R6.6 (proceeds): a bank-file PRC batch — the file it was posted from, every line with its allocations (the
+ * proceeds entries it posted, by their ids, so a reversal can take them back out), the totals it computed and the
+ * history of its reversal. The lines are a frozen record of what was posted, the way a settlement travels with its
+ * UD — the live proceeds entries themselves are `sale_realisations` rows.
+ */
+export const prcBatches = pgTable("prc_batches", {
+  id: text("id").primaryKey(),
+  /** insertion order — the register is newest first, with ties keeping the order they were posted in */
+  ord: serial("ord").notNull(),
+  /** PB-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  fileName: text("file_name").notNull(),
+  status: text("status", { enum: ["posted", "reversed"] }).notNull(),
+  /** every line of the file that was posted: its PRC, the allocations (invoice, FC amount, basis, realisation id) */
+  lines: jsonb("lines").$type<PrcBatchLine[]>().notNull(),
+  /** rows of the file left out (unmatched / duplicates / not ticked) */
+  skipped: integer("skipped").notNull(),
+  invoices: integer("invoices").notNull(),
+  fcTotals: jsonb("fc_totals").$type<{ currency: string; fc: number }[]>().notNull(),
+  bdt: numeric("bdt", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  reversedOn: date("reversed_on", { mode: "string" }),
+  reverseReason: text("reverse_reason"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a restored older backup that drops a batch from the in-memory world retires its row the same way */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one batch number while it lives
+  uniqueIndex("prc_batches_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  // the register is newest first
+  index("prc_batches_created_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  check("prc_batches_status_check", sql`${t.status} in ('posted','reversed')`),
+])
+
+/**
+ * R6.5 (drawback claims): a duty-drawback claim (DEDO, Mushak-22) over one or more exports — the customs and
+ * regulatory duty the drawback view worked out for each, frozen at creation the way a settlement travels with its
+ * UD, and the claim's own journey: draft → filed (DEDO reference) → sanctioned (possibly less, with the reason) →
+ * paid, or rejected. A deleted draft is stamped, which retires its number — the exports go back on the view.
+ */
+export const drawbackClaims = pgTable("drawback_claims", {
+  id: text("id").primaryKey(),
+  /** insertion order — the register sorts by status then recency */
+  ord: serial("ord").notNull(),
+  /** DBK-MMYY#### — the counter runs across months and is never reused */
+  no: text("no").notNull(),
+  status: text("status", { enum: ["draft", "filed", "sanctioned", "paid", "rejected"] }).notNull(),
+  method: text("method", { enum: ["actual"] }).notNull(),
+  /** every export the claim takes: the invoice, the bill, the deadline (6 months from export), the duties */
+  lines: jsonb("lines").$type<DrawbackClaimLine[]>().notNull(),
+  cd: numeric("cd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  rd: numeric("rd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  claimed: numeric("claimed", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  filedOn: date("filed_on", { mode: "string" }),
+  dedoRef: text("dedo_ref"),
+  sanctionedOn: date("sanctioned_on", { mode: "string" }),
+  sanctioned: numeric("sanctioned", { precision: 18, scale: 2, mode: "number" }),
+  disallowedReason: text("disallowed_reason"),
+  paidOn: date("paid_on", { mode: "string" }),
+  paid: numeric("paid", { precision: 18, scale: 2, mode: "number" }),
+  payRef: text("pay_ref"),
+  rejectedOn: date("rejected_on", { mode: "string" }),
+  rejectReason: text("reject_reason"),
+  note: text("note"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft — its exports are claimable again, and its number stays retired */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  // one claim number while it lives
+  uniqueIndex("drawback_claims_no_key").on(t.no).where(sql`${t.deletedAt} is null`),
+  // the register sorts by status then recency
+  index("drawback_claims_created_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  check("drawback_claims_status_check", sql`${t.status} in ('draft','filed','sanctioned','paid','rejected')`),
+])
+
+/** What our own UD permits us to import under bond: one row per input, in the order it was entered. */
+export const bondUdInputs = pgTable("bond_ud_inputs", {
+  udId: text("ud_id").notNull(),
+  /** position on the UD */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  hsCode: text("hs_code").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.udId, t.ord] }),
+  /** what a settlement's carry target looks up: the open UDs that list the input */
+  index("bond_ud_inputs_item_idx").on(t.itemId),
+  check("bond_ud_inputs_qty_check", sql`${t.qty} > 0`),
+])
+
+/** What the order exports: one row per finished good the UD carries. */
+export const bondUdGarments = pgTable("bond_ud_garments", {
+  udId: text("ud_id").notNull(),
+  /** position on the UD */
+  ord: integer("ord").notNull(),
+  itemId: text("item_id").notNull(),
+  name: text("name").notNull(),
+  uom: text("uom").notNull(),
+  qty: numeric("qty", { precision: 18, scale: 3, mode: "number" }).notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.udId, t.ord] }),
+  /** the shipment progress and the over-shipped warning read the finished goods every UD lists */
+  index("bond_ud_garments_item_idx").on(t.itemId),
+  check("bond_ud_garments_qty_check", sql`${t.qty} > 0`),
+])
+
+/**
+ * R8.2 (bank reconciliation) — one imported bank statement, the ground truth an account's money registers are
+ * checked against. The statement itself is a header: which account, which span, how many lines, what the bank
+ * said the balance was. Its lines live in `bank_statement_lines`; this row is what the reconcile view and the
+ * audit trail point at.
+ */
+export const bankStatements = pgTable("bank_statements", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** BS-MMYY#### */
+  no: text("no").notNull(),
+  accountId: text("account_id").notNull(),
+  /** `${provider} · ${accountNo}` as of import */
+  accountName: text("account_name").notNull(),
+  /** file name or note the operator gave */
+  source: text("source").notNull(),
+  from: date("from", { mode: "string" }).notNull(),
+  to: date("to", { mode: "string" }).notNull(),
+  /** the balance the statement itself claims at its end — null when the operator did not key it in */
+  closingBalance: numeric("closing_balance", { precision: 18, scale: 2, mode: "number" }),
+  importedAt: ts("imported_at").notNull(),
+  importedBy: text("imported_by").notNull(),
+  lineCount: integer("line_count").notNull(),
+  depositTotal: numeric("deposit_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  withdrawalTotal: numeric("withdrawal_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+}, (t) => [
+  uniqueIndex("bank_statements_no_key").on(t.no),
+  /** the register's `?account=` facet and the books-vs-bank answer an account's reconcile view opens with */
+  index("bank_statements_account_idx").on(t.accountId),
+])
+
+/**
+ * R8.2 — one line of an imported statement, with what the matcher said about it: matched (a TR-6 challan or a
+ * receipt / payment already on the books), open (unexplained — the operator turns it into a receipt / voucher,
+ * parks it as a bank charge, or ignores it), or receipt (a money document was created from it). The match is
+ * frozen at import; the status is the operator's to move.
+ */
+export const bankStatementLines = pgTable("bank_statement_lines", {
+  id: text("id").primaryKey(),
+  statementId: text("statement_id").notNull(),
+  /** the line's place on the sheet, 1-based */
+  ord: integer("ord").notNull(),
+  rowNo: integer("row_no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  narration: text("narration").notNull(),
+  reference: text("reference"),
+  chequeNo: text("cheque_no"),
+  /** money into the account (credit) */
+  deposit: numeric("deposit", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** money out (debit) */
+  withdrawal: numeric("withdrawal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  status: text("status", { enum: ["open", "matched", "receipt", "charge", "ignored"] }).notNull(),
+  matchKind: text("match_kind", { enum: ["treasury", "receipt", "payment", "transfer"] }),
+  matchId: text("match_id"),
+  matchNo: text("match_no"),
+  /** the money document created from this line, when one was */
+  moneyId: text("money_id"),
+  moneyNo: text("money_no"),
+  note: text("note"),
+}, (t) => [
+  uniqueIndex("bank_statement_lines_statement_ord_key").on(t.statementId, t.ord),
+  index("bank_statement_lines_statement_idx").on(t.statementId),
+  /** the reconcile view's "which lines still need explaining" and the created receipt's link back */
+  index("bank_statement_lines_status_idx").on(t.statementId, t.status),
+  index("bank_statement_lines_money_idx").on(t.moneyId),
+])
+
+/* ── R8.3: the statutory reminder and report-delivery schedule ─────────── */
+
+/** The one row of reminder settings: which deadlines are watched and at which lead times. */
+export const reminderSettings = pgTable("reminder_settings", {
+  id: integer("id").primaryKey().default(1),
+  settings: jsonb("settings").$type<{
+    return91: { enabled: boolean; leads: number[] }; treasury: { enabled: boolean; leads: number[] }; vds: { enabled: boolean; leads: number[] }
+    updatedAt: string; updatedBy: string
+  }>().notNull(),
+})
+
+/** A reminder the schedule has fired — one row per (deadline, due date, lead), which makes a re-run idempotent. */
+export const reminders = pgTable("reminders", {
+  id: text("id").primaryKey(),
+  kind: text("kind", { enum: ["return91", "treasury", "vds"] }).notNull(),
+  due: date("due", { mode: "string" }).notNull(),
+  lead: integer("lead").notNull(),
+  period: text("period").notNull(),
+  at: ts("at").notNull(),
+}, (t) => [index("reminders_due_idx").on(t.due)])
+
+/** A delivery schedule: which report, how often, to whom. */
+export const deliverySchedules = pgTable("delivery_schedules", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  kind: text("kind", { enum: ["vatDigest", "receivablesDigest"] }).notNull(),
+  frequency: text("frequency", { enum: ["monthly", "weekly"] }).notNull(),
+  /** monthly: day of the month (1–28); weekly: weekday (1 = Monday) */
+  day: integer("day").notNull(),
+  recipients: jsonb("recipients").$type<string[]>().notNull(),
+  enabled: boolean("enabled").notNull(),
+  lastRun: date("last_run", { mode: "string" }),
+  nextRun: date("next_run", { mode: "string" }).notNull(),
+  note: text("note"),
+  createdBy: text("created_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+})
+
+/** One delivered report, the figures it froze at delivery time inside `document`. */
+export const deliveryLog = pgTable("delivery_log", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  scheduleId: text("schedule_id").notNull(),
+  kind: text("kind", { enum: ["vatDigest", "receivablesDigest"] }).notNull(),
+  /** the VAT digest's tax period (the receivables digest has none) */
+  period: text("period"),
+  asOf: date("as_of", { mode: "string" }).notNull(),
+  generatedAt: ts("generated_at").notNull(),
+  recipients: jsonb("recipients").$type<string[]>().notNull(),
+  document: jsonb("document").$type<Record<string, unknown>>().notNull(),
+}, (t) => [
+  uniqueIndex("delivery_log_schedule_asof_key").on(t.scheduleId, t.asOf),
+  index("delivery_log_generated_idx").on(t.generatedAt),
+])
+
+/**
+ * R9.1 — a transfer between two of the company's own accounts (TX-): the cash deposited at the bank, the
+ * withdrawal for wages, the wallet top-up. The balances are derived (every page reads `accountRow`), so the
+ * approved document itself is the only thing to store — there is no side effect to write when it is approved.
+ */
+export const moneyTransfers = pgTable("money_transfers", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** TX-MMYY#### */
+  no: text("no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  fromAccountId: text("from_account_id").notNull(),
+  /** `${provider} · ${accountNo}` as of the transfer */
+  fromAccount: text("from_account").notNull(),
+  toAccountId: text("to_account_id").notNull(),
+  toAccount: text("to_account").notNull(),
+  amount: numeric("amount", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  /** what the bank charged for the move — leaves the from-account without reaching the to-account */
+  charge: numeric("charge", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  reference: text("reference"),
+  note: text("note"),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft leaves the register but keeps its row, so its id and number stay retired */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("money_transfers_no_key").on(t.no),
+  index("money_transfers_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("money_transfers_date_idx").on(t.date),
+  index("money_transfers_accounts_idx").on(t.fromAccountId, t.toAccountId),
+  check("money_transfers_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+  check("money_transfers_pair_check", sql`${t.fromAccountId} <> ${t.toAccountId}`),
+  check("money_transfers_amount_check", sql`${t.amount} > 0 and ${t.charge} >= 0`),
+])
+
+/**
+ * R9.1 — one lifecycle event on a cheque (presented / cleared / bounced), appended to the register's read model.
+ * The register itself is derived from the approved cheque money documents; these rows are the only writes.
+ */
+export const chequeEvents = pgTable("cheque_events", {
+  id: text("id").primaryKey(),
+  /** the money document the cheque belongs to (`money_docs.id`) */
+  chequeId: text("cheque_id").notNull(),
+  action: text("action", { enum: ["presented", "cleared", "bounced"] }).notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  /** the bounce's reason, when there is one */
+  reason: text("reason"),
+  by: text("by").notNull(),
+  at: ts("at").notNull(),
+}, (t) => [
+  index("cheque_events_cheque_idx").on(t.chequeId),
+  index("cheque_events_at_idx").on(t.at),
+  check("cheque_events_action_check", sql`${t.action} in ('presented','cleared','bounced')`),
+])
+
+/**
+ * R9.2 — one row of the chart of accounts. The template rows are seeded; the money-account rows
+ * (1010.xx / 1020.xx / 1030.xx) are one per account. The figures the register shows are derived
+ * (`lib/gl` folds every posting), so the row itself is only the identity of an account.
+ */
+export const glAccounts = pgTable("gl_accounts", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** 4-digit code for the template rows, `4.2` digits for a money account's own row */
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  kind: text("kind", { enum: ["asset", "liability", "equity", "revenue", "expense"] }).notNull(),
+  group: text("group").notNull(),
+  /** the money account whose postings this row receives (`money_accounts.id`) — template rows carry none */
+  moneyAccountId: text("money_account_id"),
+  active: boolean("active").notNull().default(true),
+  note: text("note"),
+}, (t) => [
+  uniqueIndex("gl_accounts_code_key").on(t.code),
+  index("gl_accounts_money_idx").on(t.moneyAccountId),
+])
+
+/**
+ * R9.2 — the manual journal entries (JE-): the only journal documents, kept for what no other document
+ * carries (a prepaid, an accrual). Every other posting is derived at read time (`journalOf`), so nothing
+ * derived is ever stored. A deleted draft keeps its row, so its id and number stay retired.
+ */
+export const journalEntries = pgTable("journal_entries", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** JE-MMYY#### */
+  no: text("no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  memo: text("memo").notNull(),
+  /** the entry's lines — balanced by construction (the builder refuses what does not balance) */
+  lines: jsonb("lines").$type<JournalLine[]>().notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft leaves the register but keeps its row, so its id and number stay retired */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("journal_entries_no_key").on(t.no),
+  index("journal_entries_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("journal_entries_date_idx").on(t.date),
+  check("journal_entries_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
 ])

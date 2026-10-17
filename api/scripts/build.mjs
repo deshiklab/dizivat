@@ -4,13 +4,11 @@
 //                   only after the saved state has been restored into the globals they read.
 //  dist/restore.js — R6.3 backup restore + restore drill (see docs/BACKUP_RESTORE.md)
 import { build } from "esbuild"
-import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 
 const here = fileURLToPath(new URL(".", import.meta.url))
 const api = join(here, "..")
-execFileSync(process.execPath, [join(here, "gen-compat-routes.mjs")], { stdio: "inherit" })
 
 // "@/…" (and the session-user shim) resolve through api/tsconfig.json paths, applied to every file incl. ../src
 const alias = { "server-only": join(api, "src/compat/empty.ts") }

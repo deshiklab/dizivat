@@ -2,7 +2,7 @@
  * Language-neutral article registry: order, category, the app screens each article documents and related reading.
  * Small on purpose — the shell imports it for "Help for this page"; article text lives in ./en and ./bn.
  */
-export const HELP_UPDATED = "2026-10-02"
+export const HELP_UPDATED = "2026-10-16"
 
 export const CATEGORIES = ["gettingStarted", "sales", "purchase", "inventory", "production", "accounting", "nbrVat", "masterData", "reference"] as const
 export type Category = (typeof CATEGORIES)[number]
@@ -16,10 +16,11 @@ export const REGISTRY = {
   "lists-and-preferences": { category: "gettingStarted", related: ["navigation"] },
   "using-this-help": { category: "gettingStarted", routes: ["/help"], related: ["welcome", "faq"] },
 
-  "sales-invoices": { category: "sales", routes: ["/sales"], related: ["credit-notes", "document-lifecycle", "purchase-sales-books"] },
+  "sales-invoices": { category: "sales", routes: ["/sales"], related: ["credit-notes", "document-lifecycle", "purchase-sales-books", "invoice-qr"] },
   "service-sales": { category: "sales", routes: ["/sales/services"], related: ["sales-invoices", "vds-certificates"] },
   "exports": { category: "sales", routes: ["/sales/exports"], related: ["sales-invoices", "vat-return-9-1"] },
   "credit-notes": { category: "sales", routes: ["/sales/credit-notes"], related: ["sales-invoices", "debit-notes"] },
+  "invoice-qr": { category: "sales", routes: ["/sales"], related: ["sales-invoices", "exports"] },
 
   "local-purchases": { category: "purchase", routes: ["/purchases"], related: ["service-purchases-vds", "debit-notes", "purchase-sales-books"] },
   "service-purchases-vds": { category: "purchase", routes: ["/purchases/services"], related: ["vds-certificates", "local-purchases"] },
@@ -34,8 +35,11 @@ export const REGISTRY = {
   "work-orders-and-batches": { category: "production", routes: ["/production/work-orders", "/production/batches", "/production/opening", "/production/config"], related: ["bom", "damage-and-finished-goods"] },
   "subcontracting": { category: "production", routes: ["/production/subcontract"], related: ["work-orders-and-batches", "bom"] },
 
-  "receipts-and-payments": { category: "accounting", routes: ["/accounting/receipts", "/accounting/payments"], related: ["bank-accounts-and-statements", "local-purchases"] },
+  "receipts-and-payments": { category: "accounting", routes: ["/accounting/receipts", "/accounting/payments"], related: ["bank-accounts-and-statements", "bank-reconciliation", "local-purchases"] },
   "bank-accounts-and-statements": { category: "accounting", routes: ["/accounting/bank-accounts", "/accounting/statements", "/accounting/config"], related: ["receipts-and-payments"] },
+  "bank-reconciliation": { category: "accounting", routes: ["/accounting/reconcile"], related: ["receipts-and-payments", "bank-accounts-and-statements"] },
+  "account-transfers-and-cheques": { category: "accounting", routes: ["/accounting/transfers", "/accounting/cheques"], related: ["receipts-and-payments", "bank-reconciliation", "bank-accounts-and-statements"] },
+  "general-ledger": { category: "accounting", routes: ["/accounting/chart", "/accounting/journal", "/accounting/ledger"], related: ["receipts-and-payments", "vat-return-9-1", "bank-reconciliation"] },
 
   "compliance-centre": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "purchase-sales-books"] },
   "vat-return-9-1": { category: "nbrVat", routes: ["/vat/return-9-1"], related: ["treasury-tr6", "vat-adjustments", "vds-certificates"] },
@@ -62,6 +66,7 @@ export const REGISTRY = {
   "audit-log": { category: "masterData", routes: ["/master/audit"], related: ["users-and-roles", "document-lifecycle"] },
   "backups-and-data-import": { category: "masterData", routes: ["/master/backups", "/master/import"], related: ["items-and-hs-codes", "customers-and-vendors"] },
   "backup-restore": { category: "masterData", routes: ["/master/backups"], related: ["backups-and-data-import", "audit-log"] },
+  "reminders-and-delivery": { category: "masterData", routes: ["/master/schedule"], related: ["vat-return-9-1", "treasury-tr6", "backups-and-data-import"] },
   "vat-officer-access": { category: "masterData", related: ["users-and-roles", "audit-log"] },
 
   "document-lifecycle": { category: "reference", related: ["sales-invoices", "vat-return-9-1"] },

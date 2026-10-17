@@ -1,13 +1,13 @@
-import type { BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { AccountInput, AccountingConfigInput, AdjustmentInput, MoneyInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
+import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, GlAccountRow, GlLedger, JournalRow, ManualJournalEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { AccountInput, AccountingConfigInput, AdjustmentInput, ChequeActionInput, JournalEntryInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
-import type { BackupRow, BackupStatus, BackupVerify, ImportEntity, ImportResult, Sale as R62Sale, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
+import type { BackupRow, BackupStatus, BackupVerify, BankStatement, BankStatementLine, ImportEntity, ImportResult, Sale as R62Sale, StatementPlanAnswer, StatementView, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
 import type { RealisationInput, UdInput } from "../schemas"
 import type { UdFit } from "../rmg"
 import type { BondUdRegister, BondUdRow, DrawbackClaimList, DrawbackClaimRow } from "../types"
 import type { BondUdInputT, ClaimActionInputT, SettleInputT } from "../schemas"
-import type { LateFilingRow, PrcBatch, PrcMatchResult, ProceedsOverview, ReturnAmendmentRow } from "../types"
+import type { LateFilingRow, PrcBatch, PrcMatchResult, ProceedsOverview, ReturnAmendmentRow, DeliveryLogRow, DeliverySchedule, FiredReminder, ReminderSettings } from "../types"
 import type { AmendActionInputT, AmendmentInputT, LateActionInputT, LateFilingInputT, PrcMatchInputT, PrcPostInputT, PrcReverseInputT } from "../schemas"
 import { appPathname, appUrl } from "../base-path"
 
@@ -118,6 +118,9 @@ export const api = {
     list: (p: ListParams) => req<ListResult<TariffLine> & { fy: string }>(`/tariff${qs({ ...p, view: "table" })}`),
     lookup: (hs: string) => req<TariffLine>(`/tariff${qs({ hs })}`),
     csvUrl: (p: ListParams) => `${BASE}/tariff${qs({ ...p, view: "table", page: undefined, size: undefined, format: "csv" })}`,
+    /** R7.1 — the sheet template, and the import (preview with dryRun, apply without) */
+    sampleUrl: () => `${BASE}/tariff/sample`,
+    import: (b: { fiscalYear: string; rows: Record<string, unknown>[]; dryRun: boolean }) => req<TariffImportResult>("/tariff/import", { method: "POST", body: JSON.stringify(b) }),
   },
   audit: {
     list: (p: ListParams) => req<ListResult<AuditEvent>>(`/audit${qs(p)}`),
@@ -244,9 +247,42 @@ export const api = {
     },
     receipts: docResource<MoneyDoc, MoneyInput>("/accounting/receipts"),
     payments: docResource<MoneyDoc, MoneyInput>("/accounting/payments"),
+    /** R9.1: transfers between the company's own accounts */
+    transfers: docResource<MoneyTransfer, MoneyTransferInput>("/accounting/transfers"),
+    /** R9.2: the chart of accounts, and one account's ledger between two dates */
+    chart: {
+      list: (p?: ListParams) => req<GlAccountRow[]>(`/accounting/chart${qs(p)}`),
+      csvUrl: (p?: ListParams) => `${BASE}/accounting/chart${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
+    ledger: (p: { account: string; from?: string; to?: string }) => req<GlLedger>(`/accounting/ledger${qs(p)}`),
+    /** R9.2: the journal register (every posting, derived and manual) — the write side is the manual JE- series */
+    journal: {
+      list: (p: ListParams) => req<ListResult<JournalRow>>(`/accounting/journal${qs(p)}`),
+      get: (id: string) => req<ManualJournalEntry>(`/accounting/journal/${id}`),
+      create: (b: JournalEntryInput) => req<ManualJournalEntry>("/accounting/journal", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: JournalEntryInput) => req<ManualJournalEntry>(`/accounting/journal/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+      setProcess: (id: string, b: CancelBody) => req<ManualJournalEntry>(`/accounting/journal/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true }>(`/accounting/journal/${id}`, { method: "DELETE" }),
+      csvUrl: (p: ListParams) => `${BASE}/accounting/journal${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
+    /** R9.1: the cheque register (read model; lifecycle actions append events) */
+    cheques: {
+      list: (p: ListParams) => req<ListResult<ChequeRow>>(`/accounting/cheques${qs(p)}`),
+      action: (id: string, b: ChequeActionInput) => req<ChequeRow>(`/accounting/cheques/${id}/action`, { method: "POST", body: JSON.stringify(b) }),
+      csvUrl: (p: ListParams) => `${BASE}/accounting/cheques${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
     openInvoices: (kind: "receipt" | "payment", party: string) => req<OpenInvoice[]>(`/accounting/open-invoices${qs({ kind, party })}`),
     statement: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => req<PartyStatement>(`/accounting/statement${qs(p)}`),
     statementCsvUrl: (p: { kind: "customer" | "vendor"; party: string; from: string; to: string }) => `${BASE}/accounting/statement${qs({ ...p, format: "csv" })}`,
+    /** R8.2: imported bank statements — list, import (dry-run / apply), one with its lines and the books-vs-bank answer */
+    bankStatements: (p: ListParams) => req<ListResult<BankStatement>>(`/accounting/statements${qs(p)}`),
+    bankStatement: (id: string) => req<StatementView>(`/accounting/statements/${id}`),
+    importBankStatement: (b: { accountId: string; source?: string; closingBalance?: number; dryRun: boolean; rows: Record<string, unknown>[] }) =>
+      req<StatementPlanAnswer & { id?: string; no?: string }>("/accounting/statements", { method: "POST", body: JSON.stringify(b) }),
+    patchBankLine: (id: string, lineId: string, b: { status: "open" | "charge" | "ignored"; note?: string }) =>
+      req<BankStatementLine>(`/accounting/statements/${id}/lines/${lineId}`, { method: "PATCH", body: JSON.stringify(b) }),
+    receiptFromLine: (id: string, lineId: string, b: Record<string, unknown>) =>
+      req<MoneyDoc>(`/accounting/statements/${id}/lines/${lineId}/receipt`, { method: "POST", body: JSON.stringify(b) }),
     config: () => req<AccountingConfig>("/accounting/config"),
     saveConfig: (b: AccountingConfigInput) => req<AccountingConfig>("/accounting/config", { method: "PUT", body: JSON.stringify(b) }),
   },
@@ -328,6 +364,9 @@ export const api = {
     },
     periods: () => req<TaxPeriod[]>("/vat/periods"),
     compliance: (period?: string) => req<ComplianceSummary>(`/vat/compliance${qs({ period })}`),
+    /** R7.2 — the period's submission set as a zip (registers, 6.10, TR-6, VDS, return, manifest). */
+    compliancePackUrl: (period: string) => `${BASE}/vat/compliance/pack${qs({ period })}`,
+    complianceEfilingUrl: (period: string) => `${BASE}/vat/compliance/efiling${qs({ period })}`,
     settings: () => req<VatSettings>("/vat/settings"),
     saveSettings: (b: VatSettingsInput) => req<VatSettings>("/vat/settings", { method: "PUT", body: JSON.stringify(b) }),
     /** R6 (RMG): export & deemed-export register */
@@ -353,6 +392,21 @@ export const api = {
     create: () => req<BackupRow>("/backups", { method: "POST" }),
     verify: (id: string) => req<BackupVerify>(`/backups/${id}/verify`, { method: "POST" }),
     downloadUrl: (id: string) => `${BASE}/backups/${id}`,
+  },
+  /* ── R8.3: the reminder and delivery schedule ── */
+  schedule: {
+    settings: () => req<ReminderSettings>("/schedule/settings"),
+    putSettings: (b: ReminderSettings) => req<ReminderSettings>("/schedule/settings", { method: "PUT", body: JSON.stringify(b) }),
+    deliveries: () => req<{ rows: DeliverySchedule[] }>("/schedule/deliveries"),
+    createDelivery: (b: Omit<DeliverySchedule, "id" | "lastRun" | "nextRun" | "createdBy" | "createdAt">) =>
+      req<DeliverySchedule>("/schedule/deliveries", { method: "POST", body: JSON.stringify(b) }),
+    putDelivery: (id: string, b: Omit<DeliverySchedule, "id" | "lastRun" | "nextRun" | "createdBy" | "createdAt">) =>
+      req<DeliverySchedule>(`/schedule/deliveries/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+    deleteDelivery: (id: string) => req<{ ok: boolean }>(`/schedule/deliveries/${id}`, { method: "DELETE" }),
+    log: (params: ListParams = {}) => req<Page<DeliveryLogRow>>(`/schedule/log${qs(params)}`),
+    logEntry: (id: string) => req<DeliveryLogRow>(`/schedule/log/${id}`),
+    tick: () => req<{ date: string; fired: FiredReminder[]; pruned: number; delivered: DeliveryLogRow[] }>("/schedule/tick", { method: "POST" }),
+    documentUrl: (id: string, format: "csv" | "html" = "csv") => `${BASE}/schedule/log/${id}/document?format=${format}`,
   },
   import: {
     run: (b: { entity: ImportEntity; dryRun: boolean; rows: Record<string, unknown>[] }) => req<ImportResult>("/import", { method: "POST", body: JSON.stringify(b) }),

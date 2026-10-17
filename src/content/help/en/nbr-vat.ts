@@ -17,6 +17,19 @@ export default {
         "**VDS**: certificates you still have to issue, and certificates awaited from customers.",
       ),
       p("The main button reads **Prepare return**, **Continue return** or **View return**, depending on the period's status."),
+      h("One click, the whole month"),
+      p("**Download pack** (next to the main button) saves `compliance-pack-<period>.zip` — the period's complete submission set, assembled from the same live data the centre shows:"),
+      list(
+        "the **sales (6.2)** and **purchases (6.1)** registers as CSV — every invoice dated in the period, with its status column;",
+        "**Mushak 6.10** — the purchases and sales above the ৳2 lakh limit;",
+        "the period's **TR-6 challans** and **VDS (6.6) certificates**;",
+        "the **9.1 return** as it stands (JSON) — the manifest says `present: false` when none is started;",
+        "the **e-filing document** (JSON) — the 9.1's figures named the way the VAT portal asks for them;",
+        "a **manifest** (the compliance summary and the row count of every file) and a **checklist** — a plain-text hand-over note for the officer's file.",
+      ),
+      p("The pack validates its period exactly like the centre, so it can be downloaded any time — before submitting, for the officer's visit, or after, as the filed month's archive."),
+      h("Filing the return on the portal"),
+      p("**e-Filing JSON** (next to **Download pack**) saves `efiling-9.1-<period>.json` — one document with everything the VAT portal asks you to key: your BIN and tax period, output VAT, input tax credit and the adjustments, payable and deposited figures, the rate-wise turnover of the month's approved invoices, and the TR-6 challans with their economic codes. It ends with a short *what to key where* list, and the same file rides along inside every compliance pack."),
       h("Every Mushak report in one place"),
       table(["Form", "What it is", "Where it lives"],
         ["4.3", "Input–output coefficient (price declaration)", "[Mushak 4.3](/vat/mushak-4-3); declared in [Bill of materials](/production/bom)"],
@@ -182,8 +195,8 @@ export default {
 
   "vat-settings-and-tariff": {
     title: "VAT settings and the tariff",
-    summary: "Set your VAT zone code, see the economic codes and where each 9.1 note comes from, and look up HS-code rates.",
-    keywords: ["vat settings", "zone code", "economic code", "tariff", "hs code", "duty rates", "cd", "rd", "ait", "at", "tti", "note sources"],
+    summary: "Set your VAT zone code, see the economic codes and where each 9.1 note comes from, look up HS-code rates and import each fiscal year's official tariff.",
+    keywords: ["vat settings", "zone code", "economic code", "tariff", "hs code", "duty rates", "cd", "rd", "ait", "at", "tti", "note sources", "import tariff", "fiscal year"],
     body: [
       h("VAT settings"),
       p("[VAT settings](/vat/settings) (administrators) holds:"),
@@ -194,6 +207,7 @@ export default {
       ),
       h("Tariff & HS codes"),
       p("[Tariff & HS codes](/vat/tariff) lists NBR customs and VAT rates by HS code, filterable by VAT rate, chapter and SD."),
+      p("**Importing the new year's tariff** (master-data editors): the budget each June publishes the next fiscal year's schedule. On the tariff page, **Import tariff** loads the official sheet (CSV or .xlsx — the template link shows the columns). A dry run previews the diff — new codes, changed rates, unchanged lines and the rows the file omits — before **Import** replaces that year's rows and makes it the year the app looks at. Item and master-item profiles are never re-pointed; a stored difference from the tariff was already flagged with its reason."),
       table(["Rate", "Meaning"],
         ["CD", "Customs duty"],
         ["SD", "Supplementary duty"],

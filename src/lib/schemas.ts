@@ -603,6 +603,8 @@ export const udInput = z.object({
   v.lines.forEach((l, i) => { if (seen.has(l.itemId)) ctx.addIssue({ code: "custom", path: ["lines", i, "itemId"], message: "duplicate" }); seen.add(l.itemId) })
 })
 export type UdInput = z.input<typeof udInput>
+/** A UD as the rule parsed it — every default filled in. This is what the rules run on. */
+export type UdParsed = z.output<typeof udInput>
 
 /** Export proceeds realised through the bank (PRC). */
 export const realisationInput = z.object({
@@ -617,7 +619,7 @@ export type RealisationInput = z.input<typeof realisationInput>
 
 /** Bulk import: one call validates (dryRun) or creates every row; rows are the already-parsed spreadsheet records. */
 export const bulkImportInput = z.object({
-  entity: z.enum(["items", "customers", "vendors"]),
+  entity: z.enum(["items", "customers", "vendors", "openingStock", "purchases", "sales"]),
   dryRun: z.boolean().default(true),
   rows: z.array(z.record(z.string(), z.unknown())).min(1, "atLeastOneRow").max(2000, "tooManyRows"),
 })
@@ -755,3 +757,69 @@ export const amendActionInput = z.object({
   amount: z.number().positive("positive").optional(),
 })
 export type AmendActionInputT = z.input<typeof amendActionInput>
+
+/** R7.1 — the NBR tariff import: the official sheet for one fiscal year, previewed (dryRun) or applied. */
+export const tariffImportInput = z.object({
+  fiscalYear: z.string().trim().regex(/^\d{4}-\d{2}$/, "fiscalYear"),
+  rows: z.array(z.record(z.string(), z.unknown())).min(1, "rows").max(7500, "rows"),
+  dryRun: z.boolean().default(false),
+})
+export type TariffImportInputT = z.input<typeof tariffImportInput>
+
+/** R8.3 — the reminder settings: the three statutory deadlines, each with its lead times in days. */
+const reminderKindInput = z.object({
+  enabled: z.boolean(),
+  leads: z.array(z.number().int().min(1).max(60)).min(1, "required").max(5, "tooMany"),
+})
+export const reminderSettingsInput = z.object({
+  return91: reminderKindInput, treasury: reminderKindInput, vds: reminderKindInput,
+})
+export type ReminderSettingsInputT = z.output<typeof reminderSettingsInput>
+
+/** R8.3 — a delivery schedule: `day` is the day of the month (1–28) or the weekday (1 = Monday). */
+export const deliveryInput = z.object({
+  kind: z.enum(["vatDigest", "receivablesDigest"]),
+  frequency: z.enum(["monthly", "weekly"]),
+  day: z.number().int().min(1).max(28),
+  recipients: z.array(z.string().trim().min(1)).min(1, "required").max(20),
+  enabled: z.boolean().default(true),
+  note: z.string().trim().max(250).optional().default(""),
+}).superRefine((s, ctx) => {
+  if (s.frequency === "weekly" && s.day > 7) ctx.addIssue({ code: "custom", path: ["day"], message: "weekday" })
+})
+export type DeliveryInputT = z.output<typeof deliveryInput>
+
+/** R9.1 — a transfer between the company's own accounts. */
+export const moneyTransferInput = z.object({
+  date,
+  fromAccountId: z.string().min(1, "required"),
+  toAccountId: z.string().min(1, "required"),
+  amount: money(0.01),
+  charge: z.number().min(0, "min0").max(9_999_999).optional().default(0),
+  reference: z.string().trim().max(60).optional().default(""),
+  note: z.string().trim().max(500).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+})
+export type MoneyTransferInput = z.input<typeof moneyTransferInput>
+
+/** R9.1 — a cheque lifecycle action: presented / cleared / bounced. */
+export const chequeActionInput = z.object({
+  action: z.enum(["presented", "cleared", "bounced"]),
+  date,
+  reason: z.string().trim().max(300).optional().default(""),
+})
+export type ChequeActionInput = z.input<typeof chequeActionInput>
+
+/** R9.2 — a manual journal entry. The balancing itself is a rule of the module (`buildJournal`), not of the
+ * schema: a 422 from the rule can name the lines, a schema error could not. */
+export const journalInput = z.object({
+  date,
+  memo: z.string().trim().min(3, "minLength").max(300, "maxLength"),
+  lines: z.array(z.object({
+    account: z.string().trim().min(1, "required"),
+    debit: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+    credit: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  })).min(2, "minLines").max(60, "maxLines"),
+  process: z.enum(["Created", "Approved"]),
+})
+export type JournalEntryInput = z.input<typeof journalInput>

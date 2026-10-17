@@ -26,7 +26,7 @@ PRINT_STUB = "window.print = () => { window.__prints = (window.__prints || 0) + 
 
 async def settle(pg):
     await pg.wait_for_timeout(60)
-    await pg.evaluate("Promise.all(document.getAnimations().map(a => a.finished.catch(() => null)))")
+    await pg.evaluate("Promise.race([Promise.all(document.getAnimations().map(a => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 1500))])")
     await pg.wait_for_timeout(100)
 
 async def check_credit(loc, text):
