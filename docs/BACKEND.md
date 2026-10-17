@@ -1236,6 +1236,45 @@ promise. Two small additions close both gaps.
   re-seeds the demo (after a backup) so it carries the three seeded transfers and the cheque lifecycle — a
   customer database (DEMO_RESEED=off) starts the feature empty.
 
+## R9.2 — the general ledger: the chart, the derived postings, and the manual entries
+
+The keystone of the accounting module: double-entry books without double entry. Every approved document the
+company keeps already knows its debits and credits, so the ledger is **derived-posting-first** — complete
+from day one, and unable to disagree with the documents for the same reason the money-account balances
+cannot.
+
+- **The posting rules** live in `lib/gl.ts` (pure, shared by both runtimes): one balanced entry per approved
+  document — the sale (Dr receivable / Cr sales + SD + VAT), the purchase (Dr inventory or service cost +
+  input VAT + import SD / Cr payable), the notes, the receipt and the payment with their allocation splits
+  and the bank charge, the transfer with its charge, the TR-6 per head (VAT / VDS / SD liabilities, the
+  surcharge heads as costs), the VDS certificates, the VAT adjustments, the opening stock and balances, and
+  the manual entries themselves. Every entry balances **by construction** — the counter-line is computed,
+  never assumed — so the trial balance (the foot of the chart) agrees to the poisha, always. Nothing derived
+  is ever stored: `journalOf` folds the documents the way `chequeRowsOf` folds the register, and a cancelled
+  or draft document posts nothing.
+- **The chart** (`gl_accounts`, migration `0027`) ships as the RMG template (1100 receivables, 1150
+  inventory, the tax assets and liabilities, 4100/4110 local and export sales, the cost and expense
+  accounts, 5950 VAT/SD adjustments) plus one row per money account (1010 cash / 1020 bank / 1030 wallet,
+  mapped by `money_account_id`). A money account created after the seed gets its row in the chart the
+  moment it exists — nothing needs mapping. The figures beside each row are derived, like everything else in
+  the register.
+- **The manual journal entries (JE-)** are the only journal documents (`journal_entries`, migration `0027`,
+  lines as JSONB): the prepaid, the accrual, the correction no document carries. They ride the ordinary
+  draft → approved → cancelled lifecycle with the closed-books rule on approve *and* cancel; the builder
+  (`_r92.ts`, shared through the compat bundle) refuses what must not post — unbalanced lines, an account
+  the chart does not hold, an inactive account, a line holding both sides, a closed or future date. A
+  deleted draft keeps its stamped row, so the JE- series never repeats.
+- **The screens**: `/accounting/chart` (the chart with the trial-balance foot), `/accounting/journal` (the
+  register — every posting, derived and manual; a derived row's drill goes to its source document, a manual
+  row's opens the JE sheet with the lines and the lifecycle) and `/accounting/ledger` (one account's
+  opening → movements → closing), all under Accounting in the nav, in English and Bangla.
+  `e2e_r9.py` walks them in the browser — its keystone assertion is the trial-balance invariant across
+  derived + manual postings, checked before and after every manual-entry transition; `api_native.py` drills
+  the tables against PostgreSQL incl. the restart and the stamped delete; `contract.py` carries the eight
+  new rows. A database seeded before R9.2 (SEED_VERSION `r9.1`) adopts the chart from the template plus its
+  own money accounts (the same pure builder the seed runs) and starts the manual entries empty — no
+  re-seed, customer data is never touched.
+
 ## Tables
 
 | Table | Purpose |
@@ -1273,6 +1312,10 @@ promise. Two small additions close both gaps.
 | `work_order_lines` | **R5.5:** the finished goods a work order asks for — the quantity ordered and the progress the approved batches have made (issued, received, rejected, still owed), with checks that keep the two lifecycle columns and the quantities in agreement; primary key (work order, position) |
 | `money_accounts` | **R5.6:** the money accounts — bank, mobile wallet or cash box; the kind's own columns (branch and account type, wallet type and operator) guarded by checks; the balance is *derived*, not stored |
 | `money_docs` | **R5.6:** receipts (MR-) and payments (PV-) — `kind` tells them apart; the party as printed, the method, the account, the cheque block, the amount, the charge, what was allocated and what is on account, the process, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired; checks keep the cheque block with its method and the allocation within the amount |
+| `money_transfers` | **R9.1:** transfers (TX-) between the company's own accounts — the pair, the amount and the charge, the process, the cancel reason, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired; the balances are *derived*, not stored |
+| `cheque_events` | **R9.1:** the append-only cheque lifecycle — `received / presented / cleared / bounced` with its date and the ≥10-char reason a bounce requires |
+| `gl_accounts` | **R9.2:** the chart of accounts — the template rows plus one row per money account (`money_account_id` maps it); unique on `code`; the movements the register shows are derived (`lib/gl`), never stored |
+| `journal_entries` | **R9.2:** the manual journal entries (JE-) — number (unique), date, memo, the balanced lines (JSONB), process, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired |
 | `bank_statements` / `bank_statement_lines` | **R8.2:** an imported statement (account, period, keyed closing balance, totals) and its lines in file order, each `open / matched / receipt / charge / ignored` with what it matched and the money document created from it |
 | `reminder_settings` (single row) | **R8.3** the reminder settings as one jsonb object: the three deadlines, each with `enabled` and its lead times |
 | `reminders` | **R8.3** one row per reminder the schedule has fired (`rem:<kind>:<due>:<lead>` — the id is the idempotency) |

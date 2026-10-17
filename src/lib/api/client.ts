@@ -1,5 +1,5 @@
-import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { AccountInput, AccountingConfigInput, AdjustmentInput, ChequeActionInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
+import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, GlAccountRow, GlLedger, JournalRow, ManualJournalEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { AccountInput, AccountingConfigInput, AdjustmentInput, ChequeActionInput, JournalEntryInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
 import type { BackupRow, BackupStatus, BackupVerify, BankStatement, BankStatementLine, ImportEntity, ImportResult, Sale as R62Sale, StatementPlanAnswer, StatementView, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
@@ -249,6 +249,22 @@ export const api = {
     payments: docResource<MoneyDoc, MoneyInput>("/accounting/payments"),
     /** R9.1: transfers between the company's own accounts */
     transfers: docResource<MoneyTransfer, MoneyTransferInput>("/accounting/transfers"),
+    /** R9.2: the chart of accounts, and one account's ledger between two dates */
+    chart: {
+      list: (p?: ListParams) => req<GlAccountRow[]>(`/accounting/chart${qs(p)}`),
+      csvUrl: (p?: ListParams) => `${BASE}/accounting/chart${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
+    ledger: (p: { account: string; from?: string; to?: string }) => req<GlLedger>(`/accounting/ledger${qs(p)}`),
+    /** R9.2: the journal register (every posting, derived and manual) — the write side is the manual JE- series */
+    journal: {
+      list: (p: ListParams) => req<ListResult<JournalRow>>(`/accounting/journal${qs(p)}`),
+      get: (id: string) => req<ManualJournalEntry>(`/accounting/journal/${id}`),
+      create: (b: JournalEntryInput) => req<ManualJournalEntry>("/accounting/journal", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: JournalEntryInput) => req<ManualJournalEntry>(`/accounting/journal/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+      setProcess: (id: string, b: CancelBody) => req<ManualJournalEntry>(`/accounting/journal/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true }>(`/accounting/journal/${id}`, { method: "DELETE" }),
+      csvUrl: (p: ListParams) => `${BASE}/accounting/journal${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
     /** R9.1: the cheque register (read model; lifecycle actions append events) */
     cheques: {
       list: (p: ListParams) => req<ListResult<ChequeRow>>(`/accounting/cheques${qs(p)}`),

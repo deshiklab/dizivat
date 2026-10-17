@@ -9,12 +9,12 @@ import { asc, eq, sql } from "drizzle-orm"
 import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, ChequeEvent, CreditNote, Damage, DebitNote, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
+  AccountingConfig, AuditEvent, Batch, Bom, ChequeEvent, CreditNote, Damage, DebitNote, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
   BondUd, StockDoc, Transfer, TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder
 } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, chequeEvents, compatState, items, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, moneyTransfers, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
+import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, chequeEvents, compatState, glAccounts, items, journalEntries, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, moneyTransfers, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -30,8 +30,8 @@ import { assembleSales, markSales, realisationValues, saleLineValues, saleValues
 import { assembleStockDocs, markStockDocs, stockDocValues, stockLineValues } from "./modules/stock"
 import { assembleWorkOrders, markWorkOrders, refreshWorkOrderRows, workOrderLineValues, workOrderValues } from "./modules/workorders"
 import {
-  accountingConfigValues, applyAccountingDeltas, assembleMoneyDocs, markAccountingConfig, markMoneyAccounts, markMoneyDocs, markMoneyTransfers, moneyAccountValues, moneyAllocationValues, moneyDocValues,
-  chequeEventValues, moneyTransferValues, toAccountingConfig, toChequeEvent, toMoneyAccount, toMoneyTransfer,
+  accountingConfigValues, applyAccountingDeltas, assembleMoneyDocs, markAccountingConfig, markJournalEntries, markMoneyAccounts, markMoneyDocs, markMoneyTransfers, moneyAccountValues, moneyAllocationValues, moneyDocValues,
+  chequeEventValues, glAccountValues, journalEntryValues, moneyTransferValues, toAccountingConfig, toChequeEvent, toGlAccount, toJournalEntry, toMoneyAccount, toMoneyTransfer,
 } from "./modules/accounting"
 import {
   adjustmentValues, applyVatDocDeltas, markAdjustments, markTreasury, markVds, toAdjustment, toTreasury, toVds,
@@ -47,11 +47,12 @@ import { markPrcBatches, prcBatchValues, toPrcBatch } from "./modules/proceeds"
 import { claimValues, markClaims, toClaim } from "./modules/claims"
 import { deliveryLogValues, reminderValues, scheduleValues, toDeliveryLog, toDeliverySchedule, toFiredReminder } from "./modules/schedule"
 import { DEFAULT_REMINDER_SETTINGS, seedDeliverySchedules } from "@/lib/mock/seed-r83"
+import { seedChart } from "@/lib/mock/seed-r92"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
 
-export const SEED_VERSION = "r9.1"
+export const SEED_VERSION = "r9.2"
 
 /**
  * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —
@@ -157,6 +158,9 @@ async function seed(log: (m: string) => void) {
   // R9.1: the transfers between the company's own accounts, and the cheque lifecycle events
   const demoMoneyTransfers: MoneyTransfer[] = m.db.moneyTransfers
   const demoChequeEvents: ChequeEvent[] = m.db.chequeEvents
+  // R9.2: the chart of accounts (the template plus the money accounts' own rows) and the manual journal entries
+  const demoGlAccounts: GlAccount[] = m.db.glAccounts
+  const demoJournal: ManualJournalEntry[] = m.db.journalEntries
   // R5.6: the Mushak 9.1 returns — one row per tax period, the period being its id — and the NBR settings row
   const demoReturns: VatReturn[] = m.db.returns
   const demoVatSettings: VatSettings = m.db.vatSettings
@@ -168,6 +172,7 @@ async function seed(log: (m: string) => void) {
     for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "sales", "sale_lines", "sale_realisations", "purchases", "purchase_lines", "notes", "note_lines", "opening_entries", "batches", "batch_lines", "batch_consumption", "boms", "bom_inputs", "bom_costs", "production_config", "work_orders", "work_order_lines",
       "money_accounts", "money_docs", "money_allocations", "accounting_config", "treasury_deposits", "vds_entries", "vat_adjustments", "tariff_lines",
       "bank_statements", "bank_statement_lines", "money_transfers", "cheque_events",
+      "gl_accounts", "journal_entries",
       "uds", "ud_lines",
       "bond_uds", "bond_ud_inputs", "bond_ud_garments",
       "audit_events", "compat_state", "meta"])
@@ -234,6 +239,9 @@ async function seed(log: (m: string) => void) {
     // R9.1: the transfers and the cheque lifecycle, derived from the seeded accounts and cheque money documents
     for (let i = 0; i < demoMoneyTransfers.length; i += 500) await tx.insert(moneyTransfers).values(demoMoneyTransfers.slice(i, i + 500).map(moneyTransferValues))
     for (let i = 0; i < demoChequeEvents.length; i += 500) await tx.insert(chequeEvents).values(demoChequeEvents.slice(i, i + 500).map(chequeEventValues))
+    // R9.2: the chart and the manual entries — the derived postings are never stored (the register folds them)
+    for (let i = 0; i < demoGlAccounts.length; i += 500) await tx.insert(glAccounts).values(demoGlAccounts.slice(i, i + 500).map(glAccountValues))
+    for (let i = 0; i < demoJournal.length; i += 500) await tx.insert(journalEntries).values(demoJournal.slice(i, i + 500).map(journalEntryValues))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -283,7 +291,7 @@ async function seed(log: (m: string) => void) {
   G.__dzAudit!.seq = events.reduce((mx, e) => Math.max(mx, Number(e.id.slice(1))), 0)
   markPersisted(events)
   await dropCompatState(log) // a fresh database never had snapshot contents — drop the empty table now
-  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${demoOpeningRows.length} opening entries, ${demoBatchRows.length} production batches, ${demoBomRows.length} price declarations, ${demoWorkOrderRows.length} work orders, ${demoMoney.length} receipts and payments, ${demoDeposits.length} treasury deposits, ${demoCertificates.length} VDS entries, ${demoAdjustments.length} VAT adjustments, ${demoReturns.length} tax returns, ${demoUds.length} UDs, ${demoBondUds.length} own UDs, ${demoLateFilings.length} late-filing applications, ${demoReturnAmendments.length} return amendments, ${demoPrcBatches.length} PRC batches, ${demoDrawbackClaims.length} drawback claims, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`seeded demo data: ${m.userStore.users.length} users, ${m.db.units.length} units, ${demoParties.length} parties, ${demoItems.length} items, ${demoMasters.length} master items, ${demoStock.length} stock documents, ${m.db.sales.length} sales invoices, ${m.db.purchases.length} purchases, ${demoNotes.length} credit/debit notes, ${demoOpeningRows.length} opening entries, ${demoBatchRows.length} production batches, ${demoBomRows.length} price declarations, ${demoWorkOrderRows.length} work orders, ${demoMoney.length} receipts and payments, ${demoDeposits.length} treasury deposits, ${demoCertificates.length} VDS entries, ${demoAdjustments.length} VAT adjustments, ${demoReturns.length} tax returns, ${demoUds.length} UDs, ${demoBondUds.length} own UDs, ${demoLateFilings.length} late-filing applications, ${demoReturnAmendments.length} return amendments, ${demoPrcBatches.length} PRC batches, ${demoDrawbackClaims.length} drawback claims, ${demoGlAccounts.length} chart accounts, ${demoJournal.length} manual journal entries, ${m.tariff.length} tariff lines, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 /**
@@ -360,6 +368,11 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   const transferDbRows = await db.select().from(moneyTransfers).orderBy(asc(moneyTransfers.ord))
   const liveTransfers = transferDbRows.filter((r) => !r.deletedAt).map(toMoneyTransfer)
   const liveChequeEvents = (await db.select().from(chequeEvents).orderBy(asc(chequeEvents.at))).map(toChequeEvent)
+  // R9.2: the chart and the manual journal entries; a database seeded before R9.2 has neither — the chart
+  // defaults are adopted below (the template plus its own money accounts' rows), the manual entries start empty
+  let liveGl: GlAccount[] = (await db.select().from(glAccounts).orderBy(asc(glAccounts.ord))).map(toGlAccount)
+  const journalDbRows = await db.select().from(journalEntries).orderBy(asc(journalEntries.ord))
+  const liveJournal: ManualJournalEntry[] = journalDbRows.filter((r) => !r.deletedAt).map(toJournalEntry)
   const [accountingConfigRow] = await db.select().from(accountingConfig).where(eq(accountingConfig.id, 1))
   const accountingCfg: AccountingConfig = accountingConfigRow ? toAccountingConfig(accountingConfigRow) : { allowAdvance: true, autoAllocate: true }
   const liveDeposits: TreasuryDeposit[] = (await db.select().from(treasuryDeposits).orderBy(asc(treasuryDeposits.ord)))
@@ -401,6 +414,17 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     liveSchedules = (await db.select().from(deliverySchedules).orderBy(asc(deliverySchedules.ord))).map(toDeliverySchedule)
     log("adopted the R8.3 schedule defaults (reminder settings + 2 delivery schedules)")
   }
+  // R9.2: a database seeded before R9.2 has no chart — it gets the template plus one row per money account
+  // (the same pure builder the seed runs), and the manual journal entries start empty
+  if (!liveGl.length) {
+    const chart = seedChart({ moneyAccounts: liveAccounts })
+    await db.transaction(async (tx) => {
+      await lockState(tx)
+      for (let i = 0; i < chart.length; i += 500) await tx.insert(glAccounts).values(chart.slice(i, i + 500).map(glAccountValues))
+    })
+    liveGl = chart
+    log("adopted the R9.2 chart of accounts (the template + the money accounts' own rows)")
+  }
   const [vatSettingsDbRow] = await db.select().from(vatSettings).where(eq(vatSettings.id, 1))
   // the settings row is written by the seed and by the adoption below, so this fallback only guards a restore that
   // came from a backup older than both: the company's own zone, the one the NBR codes are filed under
@@ -435,6 +459,9 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   // …and the transfers' the same way (`tf1`, `tf2`…)
   seq.moneyTransfer = Math.max(seq.moneyTransfer ?? 0,
     transferDbRows.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
+  // …and the manual journal entries' too (`je1`, `je2`…)
+  seq.journal = Math.max(seq.journal ?? 0,
+    journalDbRows.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
   // … and the VAT documents' the same way: a deleted draft's row holds its id, so no series ever repeats
   seq.treasury = Math.max(seq.treasury ?? liveDeposits.length,
     (await db.select().from(treasuryDeposits)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
@@ -478,6 +505,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     ["lateFiling", "lateFiling", 2], ["returnAmendment", "amendment", 2], ["prcBatch", "prcBatch", 2],
     ["drawbackClaim", "claim", 2],
     ["moneyTransfer", "moneyTransfer", 2],
+    ["journal", "journal", 2],
   ] as const) {
     const seen = events.reduce((m, e) =>
       e.entity === entity && e.entityId ? Math.max(m, Number(e.entityId.slice(skip).split("-")[0]) || 0) : m, 0)
@@ -495,6 +523,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     reminderSettings: scheduleSettingsRow?.settings ?? DEFAULT_REMINDER_SETTINGS, reminders: liveReminders.map(toFiredReminder),
     deliverySchedules: liveSchedules, deliveryLog: liveDeliveryLog,
     moneyTransfers: liveTransfers, chequeEvents: liveChequeEvents,
+    glAccounts: liveGl, journalEntries: liveJournal,
   })
   loadCompat()
   markParties([...mirror.parties("customer"), ...mirror.parties("vendor")])
@@ -515,6 +544,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   markMoneyAccounts(mirror.moneyAccounts())
   markMoneyDocs(mirror.moneyDocs())
   markMoneyTransfers(mirror.moneyTransfers())
+  markJournalEntries(mirror.journalEntries())
   markAccountingConfig()
   markTreasury(mirror.treasury())
   markVds(mirror.vds())
@@ -529,7 +559,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   markVatSettings()
   markPersisted(events)
   await dropCompatState(log)
-  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${livePrcBatches.length} PRC batches, ${liveDrawbackClaims.length} drawback claims, ${liveTransfers.length} account transfers, ${liveChequeEvents.length} cheque events, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${livePrcBatches.length} PRC batches, ${liveDrawbackClaims.length} drawback claims, ${liveTransfers.length} account transfers, ${liveChequeEvents.length} cheque events, ${liveGl.length} chart accounts, ${liveJournal.length} manual journal entries, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 /** The collections R5.2, R5.3, R5.4 and R5.5 moved out of `compat_state` into their own tables. */

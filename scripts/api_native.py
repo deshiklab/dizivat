@@ -5584,6 +5584,83 @@ def run():
         check(next(r_ for r_ in reg2["data"] if r_["id"] == open_row["id"])["status"] == "cleared",
               "…the cheque's cleared status too — the events are durable rows")
 
+        # ── R9.2: the general ledger ──────────────────────────────────────────────────────────────
+        print("\nR9.2: the chart of accounts, the journal register, the manual entries")
+        # the seeded demo: the chart (the template plus the money accounts' own rows) and the two manual JEs.
+        # Like R9.1's, this drill runs last — every seed assertion is scoped to the seeded numbers.
+        check(int(psql("select count(*) from gl_accounts")) >= 35,
+              "R9.2: the seeded chart is rows in its table (template + the money accounts' own)")
+        chart = admin.get(f"{BASE}/accounting/chart").json()
+        mapped = [a for a in chart if a.get("moneyAccountId")]
+        codes = [a["code"] for a in chart]
+        check(len(mapped) == int(psql("select count(*) from money_accounts")),
+              "…one row per bank / wallet / cash account, mapped to it — the drill's own account included")
+        check(len(codes) == len(set(codes)),
+              "…and every code is unique: an account created after the seed gets its own row, never a used code")
+        check(psql("select count(*) from journal_entries where no in ('JE-08260001','JE-09260001')"
+                   " and process = 'Approved' and deleted_at is null") == "2",
+              "…and the two seeded manual entries are rows, approved")
+        check(json.loads(psql("select lines::text from journal_entries where no = 'JE-08260001'"))[0]["account"] == "1300",
+              "……their lines ride as jsonb — the rent prepaid debits 1300")
+        # the register is a read model over the tables: the keystone is that it balances to the poisha
+        dr_sum = round(sum(a["debit"] for a in chart), 2); cr_sum = round(sum(a["credit"] for a in chart), 2)
+        check(len(chart) >= 35 and abs(dr_sum - cr_sum) < 0.005 and dr_sum > 1e8,
+              f"the chart serves with its derived movement — and the trial balance agrees (৳{dr_sum:,.2f})")
+        jr92 = admin.get(f"{BASE}/accounting/journal", params={"size": 1}).json()
+        check(jr92["total"] >= 400 and jr92["totals"]["debit"] == jr92["totals"]["credit"],
+              "the journal register folds every posting — derived and manual — and each side is the same")
+        check(set(jr92["facets"]["source"].keys()) >= {"sale", "purchase", "receipt", "payment", "treasury", "vdsPurchase",
+                                                       "vdsSales", "adjustment", "opening", "openingBalance", "manual"},
+              "…every source kind the documents made is present")
+        # the write side: the manual JE- documents, with their own lifecycle and their rows stamped
+        r = admin.post(f"{BASE}/accounting/journal", json={"process": "Approved", "date": "2026-09-18",
+                                                           "memo": f"R92 native drill {TAG}: audit fee accrual",
+                                                           "lines": [{"account": "5600", "debit": 150000}, {"account": "2200", "credit": 150000}]})
+        check(r.status_code == 201 and r.json()["no"].startswith("JE-") and r.json()["process"] == "Approved",
+              "a manual entry is created and approved in one step")
+        je_id = r.json()["id"]
+        check(psql(f"select count(*) from journal_entries where id = '{je_id}' and process = 'Approved'") == "1"
+              and json.loads(psql(f"select lines::text from journal_entries where id = '{je_id}'"))[1]["credit"] == 150000,
+              "…its row is in the table with its lines as jsonb")
+        found = admin.get(f"{BASE}/accounting/journal", params={"q": f"R92 native drill {TAG}"}).json()
+        check(found["total"] == 1 and found["data"][0]["debit"] == 150000, "…and the register lists it")
+        chart2 = admin.get(f"{BASE}/accounting/chart").json()
+        check(abs(round(sum(a["debit"] for a in chart2), 2) - dr_sum - 150000) < 0.005,
+              "…the trial balance grew by exactly the entry")
+        r = admin.patch(f"{BASE}/accounting/journal/{je_id}", json={"process": "Cancelled", "reason": "native drill: the auditor billed less"})
+        check(r.status_code == 200 and psql(f"select cancel_reason from journal_entries where id = '{je_id}'") == "native drill: the auditor billed less",
+              "…cancelling stamps the reason on the row")
+        check(admin.get(f"{BASE}/accounting/journal", params={"q": f"R92 native drill {TAG}"}).json()["total"] == 0,
+              "……and the register no longer lists it (the books of the entry are gone with it)")
+        r = admin.post(f"{BASE}/accounting/journal", json={"process": "Created", "date": "2026-09-21",
+                                                           "memo": f"R92 native drill {TAG}: draft to delete",
+                                                           "lines": [{"account": "5500", "debit": 500}, {"account": "2200", "credit": 500}]})
+        d92 = r.json()["id"]
+        check(admin.delete(f"{BASE}/accounting/journal/{d92}").status_code == 200
+              and psql(f"select count(*) from journal_entries where id = '{d92}' and deleted_at is not null") == "1",
+              "a deleted draft keeps its stamped row — the id and number stay retired")
+        # the rules refuse what must not post
+        r = admin.post(f"{BASE}/accounting/journal", json={"process": "Created", "date": "2026-09-21", "memo": "unbalanced",
+                                                           "lines": [{"account": "5500", "debit": 100}, {"account": "2200", "credit": 90}]})
+        check(r.status_code == 422, "an unbalanced body is refused (422) — it never reaches the table")
+        r = admin.post(f"{BASE}/accounting/journal", json={"process": "Created", "date": "2026-09-21", "memo": "unknown account",
+                                                           "lines": [{"account": "9999", "debit": 1}, {"account": "2200", "credit": 1}]})
+        check(r.status_code == 422, "a body naming an account the chart does not hold is refused (422)")
+        # one account's ledger agrees with the chart's row for it — the same fold, read twice
+        led = admin.get(f"{BASE}/accounting/ledger", params={"account": "2110"}).json()
+        ar_row = next(a for a in chart2 if a["code"] == "2110")
+        check(led["rows"] and abs((led["opening"] - sum(r_["debit"] - r_["credit"] for r_ in led["rows"])) - ar_row["balance"]) < 0.005,
+              "the ledger reads the same fold the chart does — a liability's closing is its row's balance")
+        audit92 = admin.get(f"{BASE}/audit", params={"entity": "journal", "size": 5}).json()
+        check({e["action"] for e in audit92["data"]} >= {"created", "approved", "cancelled", "deleted"},
+              "the manual entries' lifecycle lands in the audit trail")
+        # everything above is table state — it survives a restart
+        restart()
+        chart3 = admin.get(f"{BASE}/accounting/chart").json()
+        check(psql(f"select process from journal_entries where id = '{je_id}'") == "Cancelled"
+              and [a["code"] for a in chart3] == [a["code"] for a in chart2],
+              "R9.2: the chart rows and the cancelled entry survive the restart")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
@@ -5609,12 +5686,12 @@ def run():
         # the whole map after every request, so a drill that keeps only the ids it cares about would let
         # notifications the suite read earlier pop back up as unread and fail the round-trip check below
         have = json.loads(psql("select notif_read::text from users where username = 'arif'") or "[]")
-        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 27, "27 migrations have run on this database")
-        # un-apply the last FOUR journal rows: the migrator replays by position, so the boot has to re-run
-        # 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and 0024 (R8.2's bank statements —
-        # all idempotent) to reach 0023 (the notif_read lift) again; 0022 and earlier keep their rows,
-        # because their tables are NOT idempotent and must not be replayed
-        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 4)")
+        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 28, "28 migrations have run on this database")
+        # un-apply the last FIVE journal rows: the migrator replays by position, so the boot has to re-run
+        # 0027 (R9.2's chart and journal), 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and
+        # 0024 (R8.2's bank statements — all idempotent) to reach 0023 (the notif_read lift) again; 0022 and
+        # earlier keep their rows, because their tables are NOT idempotent and must not be replayed
+        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 5)")
         psql("alter table users drop column notif_read")
         ensure_compat_state()
         ids = [*have, "finale:migrated"]

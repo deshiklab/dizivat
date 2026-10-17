@@ -207,6 +207,15 @@ export {
   transferFacetLabels, TRANSFER_DIFF_FIELDS, TRANSFER_CSV_COLUMNS,
   chequeActionRule, chequeSpec, CHEQUE_CSV_COLUMNS,
 } from "@/app/api/v1/_r91"
+// R9.2: the general-ledger rules, shared the same way — what a manual journal entry may hold (the lines must
+// balance and name open chart accounts), the closed-books approve / cancel rules, the identity a new entry
+// takes, the register's spec, source labels, CSV columns and diff, and the fold that turns the documents into
+// the journal rows. The chart and the manual entries live in `gl_accounts` / `journal_entries`; every other
+// posting is derived at read time (`lib/gl`), so approving a document posts nothing at all.
+export {
+  buildJournal, journalApproveRule, journalCancelRule, journalIdentity, claimJournalId, journalRows, journalSpec,
+  JOURNAL_CSV_COLUMNS, JOURNAL_DIFF_FIELDS, CHART_CSV_COLUMNS, SOURCE_KIND_LABELS,
+} from "@/app/api/v1/_r92"
 
 // R5.3: how a purchase body becomes the document it stores — the local, the service and the import (Bill of Entry,
 // duty per line) variants, priced by the same functions the mock and the static demo run.

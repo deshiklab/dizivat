@@ -809,3 +809,17 @@ export const chequeActionInput = z.object({
   reason: z.string().trim().max(300).optional().default(""),
 })
 export type ChequeActionInput = z.input<typeof chequeActionInput>
+
+/** R9.2 — a manual journal entry. The balancing itself is a rule of the module (`buildJournal`), not of the
+ * schema: a 422 from the rule can name the lines, a schema error could not. */
+export const journalInput = z.object({
+  date,
+  memo: z.string().trim().min(3, "minLength").max(300, "maxLength"),
+  lines: z.array(z.object({
+    account: z.string().trim().min(1, "required"),
+    debit: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+    credit: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  })).min(2, "minLines").max(60, "maxLines"),
+  process: z.enum(["Created", "Approved"]),
+})
+export type JournalEntryInput = z.input<typeof journalInput>

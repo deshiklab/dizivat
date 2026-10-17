@@ -3,7 +3,7 @@ import { APP_GUARD } from "@nestjs/core"
 import { sql } from "drizzle-orm"
 import { ACCESS_LOGGER, AuthGuard, SessionService } from "./common/auth"
 import { db } from "./db/client"
-import { AccountingConfigController, AccountingConfigService, AccountTransfersController, BankStatementsController, BankStatementsService, ChequesController, ChequeEventsService, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ReceiptsController, StatementController, TransfersService } from "./modules/accounting"
+import { AccountingConfigController, AccountingConfigService, AccountTransfersController, BankStatementsController, BankStatementsService, ChartController, ChequesController, ChequeEventsService, JournalController, JournalService, LedgerController, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ReceiptsController, StatementController, TransfersService } from "./modules/accounting"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
 import { ScheduleController, ScheduleService } from "./modules/schedule"
@@ -31,7 +31,7 @@ import { ComplianceController, PeriodsController, ReturnSubFormController, Retur
 import { BooksService, DashboardController, ImportController, MushakController, NotificationsController, SaleServicesController, SearchController, ServicesController } from "./modules/books"
 import { SEED_VERSION } from "./boot"
 
-export const VERSION = "0.16.0"
+export const VERSION = "0.17.0"
 const NATIVE_CONTROLLERS = [
   AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController,
   CustomersController, VendorsController, ItemsController, MasterItemsController, TransfersController, DamageController,
@@ -45,6 +45,8 @@ const NATIVE_CONTROLLERS = [
   BankStatementsController,
   // R9.1: the transfers between the company's own accounts, and the cheque register with its lifecycle actions
   AccountTransfersController, ChequesController,
+  // R9.2: the general ledger — the chart, the journal register with the manual JE- documents, the account ledger
+  ChartController, JournalController, LedgerController,
   // R8.3: the reminder and delivery schedule — settings, schedules, log, documents, the tick
   ScheduleController,
   StockController, ItemLedgerController, LotsController, SubcontractController,
@@ -80,7 +82,7 @@ const NATIVE_CONTROLLERS = [
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
     TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService, UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
-    TransfersService, ChequeEventsService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    TransfersService, ChequeEventsService, JournalService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
@@ -88,7 +90,7 @@ const NATIVE_CONTROLLERS = [
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
     TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService,
     UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
-    TransfersService, ChequeEventsService,
+    TransfersService, ChequeEventsService, JournalService,
   ],
 })
 class CoreModule {}

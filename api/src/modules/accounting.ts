@@ -28,16 +28,18 @@ import type { Request, Response } from "express"
 import { can, ROLE_PERMS, type Permission, type User } from "@/lib/auth/roles"
 import { runQuery, toCSV } from "@/lib/mock/query"
 import type {
-  AccountingConfig, Allocation, BankStatement, BankStatementLine, ChequeEvent, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, MoneyTransfer, Party, PartyStatement, Purchase, Sale,
+  AccountingConfig, Allocation, BankStatement, BankStatementLine, ChequeEvent, GlAccount, GlLedger, ManualJournalEntry, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, MoneyTransfer, Party, PartyStatement, Purchase, Sale,
 } from "@/lib/types"
 import { chequeRowsOf } from "@/lib/money-ops"
 import type { AccountingSource } from "@/app/api/v1/_r4"
+import type { GlSource } from "@/lib/gl"
+import { chartOf, journalOf, ledgerOf } from "@/lib/gl"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, uniqueViolation } from "../common/http"
 import { lockState } from "../common/state-guard"
 import { WriteBack, type Delta } from "../common/writeback"
 import { db, type Tx } from "../db/client"
-import { accountingConfig, bankStatementLines, bankStatements, chequeEvents, moneyAccounts, moneyAllocations, moneyDocs, moneyTransfers } from "../db/schema"
+import { accountingConfig, bankStatementLines, bankStatements, chequeEvents, glAccounts, journalEntries, moneyAccounts, moneyAllocations, moneyDocs, moneyTransfers } from "../db/schema"
 import { compat, mirror } from "../state"
 import { AuditService } from "./audit"
 import { applyPurchaseSettlement, revertPurchaseSettlement } from "./purchases"
@@ -1324,5 +1326,313 @@ export class ChequesController {
     await this.audit.record({ at, actor: user, entity: "cheque", entityId: row!.id, ref: row!.no, action: r.action, note: r.reason })
     const fresh = chequeRowsOf({ moneyDocs, chequeEvents: await this.events.all() }, today()).find((x) => x.id === row!.id)
     res.status(201).json(fresh)
+  }
+}
+
+/* ── R9.2: the general ledger ─────────────────────────────────────────── */
+
+type GlAccountDb = typeof glAccounts.$inferSelect
+type JournalDb = typeof journalEntries.$inferSelect
+
+/** Row → contract shape. A NULL column is an absent optional field. */
+export function toGlAccount(r: GlAccountDb): GlAccount {
+  const a: GlAccount = { code: r.code, name: r.name, kind: r.kind, group: r.group, active: r.active }
+  if (r.moneyAccountId != null) a.moneyAccountId = r.moneyAccountId
+  if (r.note != null) a.note = r.note
+  return a
+}
+
+/** Contract shape → row values. The row's id is its code — the codes are unique, and the chart's own identity. */
+export const glAccountValues = (a: GlAccount) =>
+  ({ id: a.code, code: a.code, name: a.name, kind: a.kind, group: a.group, moneyAccountId: a.moneyAccountId ?? null, active: a.active, note: a.note ?? null })
+
+/** Row → contract shape: the entry with its source derived from its own identity (a manual entry is its own source). */
+export function toJournalEntry(r: JournalDb): ManualJournalEntry {
+  const j: ManualJournalEntry = {
+    id: r.id, no: r.no, date: r.date, memo: r.memo, lines: r.lines,
+    source: { kind: "manual", id: r.id, no: r.no },
+    process: r.process, issuedBy: r.issuedBy, createdAt: r.createdAt.toISOString(), history: r.history ?? [],
+  }
+  if (r.updatedAt) j.updatedAt = r.updatedAt.toISOString()
+  if (r.cancelReason != null) j.cancelReason = r.cancelReason
+  return j
+}
+
+/** Contract shape → row values (`ord` and `deletedAt` are the table's own). */
+export const journalEntryValues = (j: ManualJournalEntry) => ({
+  id: j.id, no: j.no, date: j.date, memo: j.memo, lines: j.lines,
+  process: j.process, issuedBy: j.issuedBy,
+  createdAt: new Date(j.createdAt), updatedAt: j.updatedAt ? new Date(j.updatedAt) : null,
+  cancelReason: j.cancelReason ?? null, history: j.history ?? [],
+})
+
+const journalWb = new WriteBack<ManualJournalEntry>("journal_entries", () => mirror.journalEntries(), (j) => j.id)
+export type JournalDelta = Delta<ManualJournalEntry>
+export const markJournalEntries = (list: ManualJournalEntry[]) => journalWb.mark(list)
+export const journalDelta = () => journalWb.delta()
+export const commitJournalDelta = (d: JournalDelta) => journalWb.commit(d)
+
+/** What the ledger derives from, straight out of the mirrors: every collection the posting rules fold. */
+export async function glSource(): Promise<GlSource> {
+  return {
+    customers: mirror.parties("customer"), vendors: mirror.parties("vendor"),
+    sales: mirror.sales(), purchases: mirror.purchases(),
+    creditNotes: mirror.creditNotes(), debitNotes: mirror.debitNotes(), openings: mirror.openings(),
+    moneyAccounts: mirror.moneyAccounts(), moneyDocs: mirror.moneyDocs(),
+    moneyTransfers: mirror.moneyTransfers(), treasury: mirror.treasury(), vds: mirror.vds(),
+    adjustments: mirror.adjustments(), glAccounts: mirror.glAccounts(), journalEntries: mirror.journalEntries(),
+    accountingConfig: mirror.accountingConfig(),
+  }
+}
+
+@Injectable()
+export class JournalService {
+  /** Every live manual entry in insertion order — the order the mock's array had. */
+  async all(): Promise<ManualJournalEntry[]> {
+    return (await db.select().from(journalEntries).where(isNull(journalEntries.deletedAt)).orderBy(asc(journalEntries.ord))).map(toJournalEntry)
+  }
+
+  /** One entry by id or by number: the register's drill and the audit trail both use both. */
+  find(idOrNo: string) {
+    return this.first(sql`(${journalEntries.id} = ${idOrNo} or ${journalEntries.no} = ${idOrNo}) and ${journalEntries.deletedAt} is null`)
+  }
+
+  /** One live entry by id only — what a delete matches on. */
+  byId(id: string) {
+    return this.first(sql`${journalEntries.id} = ${id} and ${journalEntries.deletedAt} is null`)
+  }
+
+  private async first(match: SQL) {
+    const rows = await db.select().from(journalEntries).where(match)
+    return rows.length ? toJournalEntry(rows[0]) : undefined
+  }
+
+  /** Stores a new entry. `make` builds it inside the lock, so two creates in flight cannot share a number. */
+  async create(date: string, make: (ident: { id: string; no: string }) => ManualJournalEntry): Promise<ManualJournalEntry> {
+    let made: ManualJournalEntry | undefined
+    try {
+      const saved = await db.transaction(async (tx) => {
+        await lockState(tx)
+        made = make(compat().journalIdentity(date))
+        const [row] = await tx.insert(journalEntries).values(journalEntryValues(made)).returning()
+        return toJournalEntry(row)
+      })
+      mirror.putJournalEntry(saved)
+      markJournalEntries([saved])
+      return saved
+    } catch (e) {
+      if (made) mirror.removeJournalEntry(made.id)
+      if (uniqueViolation(e) !== null) throw new Problem(409, "That number was just taken — please try again.")
+      throw e as Error
+    }
+  }
+
+  /** Replaces an entry — an edit or a transition. */
+  async update(j: ManualJournalEntry): Promise<ManualJournalEntry> {
+    const [row] = await db.update(journalEntries).set(journalEntryValues(j)).where(eq(journalEntries.id, j.id)).returning()
+    if (!row) throw new Problem(404, "Journal entry not found")
+    const saved = toJournalEntry(row)
+    mirror.putJournalEntry(saved)
+    markJournalEntries([saved])
+    return saved
+  }
+
+  /** Delete a draft: the row is stamped, so its id and its number stay retired. There is no undo. */
+  async remove(j: ManualJournalEntry, at: string) {
+    await db.update(journalEntries).set({ ...journalEntryValues(j), deletedAt: new Date(at) }).where(eq(journalEntries.id, j.id))
+    mirror.removeJournalEntry(j.id)
+  }
+}
+
+/** R9.2 — the chart of accounts: the template plus the money accounts' own rows, each with its derived movement. */
+@Controller("api/v1/accounting/chart")
+export class ChartController {
+  /** The chart, or one CSV row per account. The movements are derived at read time — nothing is stored but the rows' identity. */
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    const rows = chartOf(await glSource())
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(rows, c.CHART_CSV_COLUMNS), `chart-of-accounts-${today()}.csv`)
+      return
+    }
+    res.json(rows)
+  }
+}
+
+/**
+ * R9.2 — the journal register and the manual entries. The register is a read model: every posting, derived and
+ * manual, folded from the documents at read time (`journalRows`); the write side is the JE- series alone, with the
+ * draft → approve → cancel lifecycle every document has. A derived entry's drill goes to its source document.
+ */
+@Controller("api/v1/accounting/journal")
+export class JournalController {
+  constructor(
+    @Inject(JournalService) private readonly svc: JournalService,
+    @Inject(AuditService) private readonly audit: AuditService,
+  ) {}
+
+  /** The register: Page<JournalRow> with facets (source / process), or one CSV row per entry. `?account={code}` narrows to one account's entries. */
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    let rows = c.journalRows(await glSource())
+    const account = sp.get("account")
+    if (account) {
+      sp.delete("account")
+      rows = rows.filter((r) => r.accounts.includes(account))
+    }
+    const r = runQuery(rows, sp, c.journalSpec)
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(r.all, c.JOURNAL_CSV_COLUMNS), `journal-${today()}.csv`)
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { all, ...page } = r
+    res.json({ ...page, facetLabels: { source: c.SOURCE_KIND_LABELS } })
+  }
+
+  /** Create a draft, or create and approve it in one step. The lines must balance and name open chart accounts. */
+  @Post() @Authed("doc.create")
+  async create(@Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const src = await glSource()
+    const built = c.buildJournal(jsonBody(req), undefined, src)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const approving = built.process === "Approved"
+    if (approving) deny(user, "doc.approve")
+    const at = new Date().toISOString()
+    const doc = await this.svc.create(built.date, (ident) => {
+      const j: ManualJournalEntry = {
+        ...built.fields, ...ident, source: { kind: "manual", ...ident },
+        process: "Created", createdAt: at, history: [],
+      }
+      // before the document exists: one that cannot be created must not consume an id
+      c.claimJournalId()
+      c.stampLifeHistory(j, user.name, "created", undefined, at)
+      if (!approving) return j
+      const rule = c.journalApproveRule(j, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      j.process = "Approved"
+      c.stampLifeHistory(j, user.name, "approved", undefined, at)
+      return j
+    })
+    await this.audit.record({ at, actor: user, entity: "journal", entityId: doc.id, ref: doc.no, action: "created" })
+    const approved = doc.history?.find((h) => h.action === "approved")
+    if (approved) await this.audit.record({ at: approved.at, actor: user, entity: "journal", entityId: doc.id, ref: doc.no, action: "approved" })
+    res.status(201).json(doc)
+  }
+
+  @Get(":id") @Authed()
+  async one(@Param("id") id: string, @Res() res: Response) {
+    const d = await this.svc.find(id)
+    if (!d) throw new Problem(404, "Journal entry not found")
+    res.json(d)
+  }
+
+  /** Edit a draft (full replacement). Only drafts edit; an approved entry cancels instead. */
+  @Put(":id") @Authed("doc.edit")
+  async update(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    if (!cur) throw new Problem(404, "Journal entry not found")
+    if (cur.process !== "Created") throw new Problem(409, `Only drafts can be edited — ${cur.no} is ${cur.process}.`)
+    const src = await glSource()
+    const built = c.buildJournal(jsonBody(req), cur, src)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const approving = built.process === "Approved"
+    if (approving) deny(user, "doc.approve")
+    const before = structuredClone(cur)
+    const next: ManualJournalEntry = { ...cur, ...built.fields }
+    const at = new Date().toISOString()
+    c.stampLifeHistory(next, user.name, "edited", undefined, at)
+    const changes = c.diff(before, next, [...c.JOURNAL_DIFF_FIELDS])
+    let approvedAt: string | undefined
+    if (approving) {
+      const rule = c.journalApproveRule(next, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      next.process = "Approved"
+      approvedAt = c.stampLifeHistory(next, user.name, "approved")
+    }
+    const saved = await this.svc.update(next)
+    await this.audit.record({ at, actor: user, entity: "journal", entityId: saved.id, ref: saved.no, action: "edited", changes })
+    if (approvedAt) await this.audit.record({ at: approvedAt, actor: user, entity: "journal", entityId: saved.id, ref: saved.no, action: "approved" })
+    res.json(saved)
+  }
+
+  /** State transitions: approve or cancel with a reason. The books must be open for the entry's date either way. */
+  @Patch(":id") @Authed()
+  async patch(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    if (!cur) throw new Problem(404, "Journal entry not found")
+    const body = jsonBody(req) as { process?: string; reason?: string }
+    const user = req.dz!.user
+    const src = await glSource()
+    if (body.process === "Approved") {
+      deny(user, "doc.approve")
+      if (cur.process !== "Created") throw new Problem(409, `Cannot approve — ${cur.no} is ${cur.process}.`)
+      const rule = c.journalApproveRule(cur, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      const at = new Date().toISOString()
+      const next = structuredClone(cur)
+      next.process = "Approved"
+      c.stampLifeHistory(next, user.name, "approved", undefined, at)
+      const saved = await this.svc.update(next)
+      await this.audit.record({ at, actor: user, entity: "journal", entityId: saved.id, ref: saved.no, action: "approved" })
+      res.json(saved)
+      return
+    }
+    if (body.process === "Cancelled") {
+      deny(user, "doc.cancel")
+      if (cur.process === "Cancelled") throw new Problem(409, `${cur.no} is already cancelled.`)
+      const parsed = c.cancelInput.safeParse({ reason: body.reason ?? "" })
+      if (!parsed.success) throw new Problem(422, "Validation failed", c.zodErrors(parsed.error))
+      const rule = c.journalCancelRule(cur, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      const at = new Date().toISOString()
+      const next = structuredClone(cur)
+      next.process = "Cancelled"
+      next.cancelReason = parsed.data.reason
+      c.stampLifeHistory(next, user.name, "cancelled", parsed.data.reason, at)
+      const saved = await this.svc.update(next)
+      await this.audit.record({ at, actor: user, entity: "journal", entityId: saved.id, ref: saved.no, action: "cancelled", note: parsed.data.reason })
+      res.json(saved)
+      return
+    }
+    throw new Problem(400, "process must be Approved or Cancelled")
+  }
+
+  /** Delete a draft: the row is stamped, so its id and its number stay retired. There is no undo. */
+  @Delete(":id") @Authed("doc.delete")
+  async remove(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.byId(id)
+    if (!cur) throw new Problem(404, "Journal entry not found")
+    if (cur.process !== "Created") throw new Problem(409, `Only drafts can be deleted — cancel ${cur.no} instead.`)
+    const at = new Date().toISOString()
+    const next = structuredClone(cur)
+    c.stampLifeHistory(next, req.dz!.user.name, "deleted", undefined, at)
+    await this.svc.remove(next, at)
+    await this.audit.record({ at, actor: req.dz!.user, entity: "journal", entityId: cur.id, ref: cur.no, action: "deleted" })
+    res.json({ ok: true })
+  }
+}
+
+/** R9.2 — one account's ledger: `?account={code}` (required) with `?from` / `?to`. */
+@Controller("api/v1/accounting/ledger")
+export class LedgerController {
+  @Get() @Authed()
+  async one(@Req() req: Request, @Res() res: Response) {
+    const sp = searchParams(req)
+    const code = sp.get("account")
+    if (!code) throw new Problem(422, "Validation failed", { account: ["required"] })
+    const led: GlLedger | null = ledgerOf(await glSource(), code, sp.get("from") || "1970-01-01", sp.get("to") || today())
+    if (!led) throw new Problem(404, `No account ${code} in the chart`)
+    res.json(led)
   }
 }

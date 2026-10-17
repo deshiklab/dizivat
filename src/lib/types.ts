@@ -273,6 +273,8 @@ export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "custome
   | "prcBatch" | "lateFiling" | "returnAmendment"
   /** R9.1 — transfers between the company's own accounts, and the cheque lifecycle */
   | "moneyTransfer" | "cheque"
+  /** R9.2 — the manual journal entries (the chart is configuration, not documents) */
+  | "journal"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
@@ -731,6 +733,116 @@ export interface ChequeEvent {
   reason?: string
   by: string
   at: string
+}
+
+/**
+ * R9.2 — one account of the chart. The money accounts (R4) are things money lives in; a GL account is a line
+ * of the balance sheet. The chart ships as a seeded RMG template, and every money account has its own GL row
+ * (bank / mobile / cash) so the derived postings always have somewhere to land — one is added automatically for
+ * a money account created later, so the ledger never meets a document it cannot post.
+ */
+export type GlKind = "asset" | "liability" | "equity" | "revenue" | "expense"
+export interface GlAccount {
+  code: string
+  name: string
+  kind: GlKind
+  /** the group heading the account rolls up under (the register's facet) */
+  group: string
+  /** set on the money accounts' own GL rows — the link the derived postings follow */
+  moneyAccountId?: string
+  active: boolean
+  note?: string
+}
+
+/** The chart's row as the register serves it: the account with its derived movement and closing balance. */
+export interface GlAccountRow extends GlAccount {
+  /** opening balance this period (always 0 for now — R9.3's close will stamp one) */
+  opening: number
+  /** sum of the debits minus the credits that have posted, derived from the documents */
+  debit: number
+  credit: number
+  /** debit-credit for assets and expenses, credit-debit for the rest — the balance sheet's reading */
+  balance: number
+  entries: number
+}
+
+/** What posted one journal entry: the document that caused it, or `manual` for the entries a user typed. */
+export type JournalSourceKind =
+  | "sale" | "purchase" | "creditNote" | "debitNote" | "receipt" | "payment" | "transfer"
+  | "treasury" | "vdsPurchase" | "vdsSales" | "adjustment" | "opening" | "openingBalance" | "manual"
+export interface JournalSource { kind: JournalSourceKind; id: string; no: string }
+
+/** One line of a journal entry — exactly one of debit / credit carries the money (the other is 0). */
+export interface JournalLine { account: string; accountName?: string; debit: number; credit: number }
+
+/**
+ * One entry of the general ledger. The derived ones exist only as a read model — the documents they summarise
+ * are the truth — while the manual ones (JE-) are documents of their own with the draft → approve → cancel
+ * lifecycle, stored because there is nothing else to read them from.
+ */
+export interface JournalEntry {
+  id: string
+  /** JE-MMYY#### (manual entries); the source document's id for derived ones */
+  no: string
+  date: string
+  memo: string
+  source: JournalSource
+  lines: JournalLine[]
+  /** manual entries only — derived ones are posted the moment their document is approved */
+  process?: Process
+  issuedBy?: string
+  createdAt?: string
+  history?: HistoryEntry[]
+  updatedAt?: string
+  cancelReason?: string
+}
+
+/** The stored form of a manual journal entry — a full document with a lifecycle, unlike the derived read model. */
+export interface ManualJournalEntry extends JournalEntry {
+  source: { kind: "manual"; id: string; no: string }
+  process: Process
+  issuedBy: string
+  createdAt: string
+  history: HistoryEntry[]
+}
+
+/** The manual journal entry as a body: the lines must balance to the poisha. */
+export interface JournalInput {
+  date: string
+  memo: string
+  lines: { account: string; debit: number; credit: number }[]
+  process: "Created" | "Approved"
+}
+
+/** One account's ledger between two dates: what it opened at, every movement, and what it closed at. */
+export interface GlLedger {
+  account: GlAccount
+  from: string
+  to: string
+  opening: number
+  rows: { date: string; memo: string; no: string; sourceKind: JournalSourceKind; debit: number; credit: number; balance: number; entryId: string }[]
+  totals: { debit: number; credit: number }
+  closing: number
+}
+
+/** One row of the journal register: a whole entry (derived or manual) with its source's identity. */
+export interface JournalRow {
+  id: string
+  no: string
+  date: string
+  memo: string
+  sourceKind: JournalSourceKind
+  sourceNo: string
+  sourceId: string
+  /** the entry's total — each side of every entry is the same */
+  debit: number
+  credit: number
+  lineCount: number
+  /** the accounts the entry touches (facet + drill) */
+  accounts: string[]
+  /** manual entries only — a derived entry is posted the moment its document is approved */
+  process?: Process
+  issuedBy?: string
 }
 
 /** An invoice that can still take a receipt / payment. */

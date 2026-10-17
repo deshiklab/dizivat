@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, BondUd, ChequeEvent, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, Item, LateFiling, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AuditEvent, Batch, Bom, BondUd, ChequeEvent, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -47,6 +47,8 @@ interface Globals {
     deliverySchedules?: DeliverySchedule[]; deliveryLog?: DeliveryLogRow[]
     /** R9.1: the transfers between the company's own accounts, and the cheque lifecycle events (the register derives) */
     moneyTransfers?: MoneyTransfer[]; chequeEvents?: ChequeEvent[]
+    /** R9.2: the chart of accounts and the manual journal entries (every other posting is derived) */
+    glAccounts?: GlAccount[]; journalEntries?: ManualJournalEntry[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -76,6 +78,8 @@ export function restoreGlobals(s: {
   reminderSettings?: ReminderSettings; reminders?: FiredReminder[]; deliverySchedules?: DeliverySchedule[]; deliveryLog?: DeliveryLogRow[]
   /** R9.1: the transfers and the cheque lifecycle events (tables; a pre-R9.1 snapshot carries neither) */
   moneyTransfers?: MoneyTransfer[]; chequeEvents?: ChequeEvent[]
+  /** R9.2: the chart and the manual journal entries (tables; a pre-R9.2 database adopts the chart defaults) */
+  glAccounts?: GlAccount[]; journalEntries?: ManualJournalEntry[]
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
@@ -112,6 +116,7 @@ export function restoreGlobals(s: {
     reminderSettings: s.reminderSettings, reminders: s.reminders ?? [],
     deliverySchedules: s.deliverySchedules ?? [], deliveryLog: s.deliveryLog ?? [],
     moneyTransfers: s.moneyTransfers ?? [], chequeEvents: s.chequeEvents ?? [],
+    glAccounts: s.glAccounts ?? [], journalEntries: s.journalEntries ?? [],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
@@ -371,6 +376,26 @@ export const mirror = {
   appendChequeEvent(e: ChequeEvent) {
     const list = G.__dzDb!.chequeEvents ??= []
     list.push(e)
+  },
+  /** R9.2: the chart of accounts and the manual journal entries (the derived postings are never stored) */
+  glAccounts: (): GlAccount[] => G.__dzDb!.glAccounts ?? [],
+  putGlAccounts(list: GlAccount[]) { const a = mirror.glAccounts(); a.splice(0, a.length, ...list) },
+  findGlAccount: (code: string) => mirror.glAccounts().find((a) => a.code === code),
+  journalEntries: (): ManualJournalEntry[] => G.__dzDb!.journalEntries ?? [],
+  putJournalEntries(list: ManualJournalEntry[]) { const a = mirror.journalEntries(); a.splice(0, a.length, ...list) },
+  findJournalEntry: (idOrNo: string) => mirror.journalEntries().find((j) => j.id === idOrNo || j.no === idOrNo),
+  putJournalEntry(j: ManualJournalEntry) {
+    const list = G.__dzDb!.journalEntries ??= []
+    const cur = list.find((x) => x.id === j.id)
+    if (cur) replaceObject(cur, j)
+    else list.push(j)
+    return cur ?? j
+  },
+  removeJournalEntry(id: string) {
+    const list = G.__dzDb!.journalEntries
+    if (!list) return
+    const i = list.findIndex((x) => x.id === id)
+    if (i >= 0) list.splice(i, 1)
   },
   /** R5.6: the treasury deposits (TR-6) — what Mushak 9.1 counts as tax already paid, and what a VDS quotes */
   treasury: (): TreasuryDeposit[] => G.__dzDb!.treasury,

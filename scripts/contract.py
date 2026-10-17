@@ -177,6 +177,15 @@ ENDPOINTS = [
     E("DELETE", "/accounting/transfers/{moneyTransfer}", "doc.delete", "R9.1: delete a draft (the row keeps its id and number retired)"),
     E("GET", "/accounting/cheques", None, "R9.1: the cheque register — Page<ChequeRow> derived from the approved cheque receipts (received) and payments (issued) folded with the lifecycle events; facets kind / status / party / account; ?postDated=true narrows to the post-dated view; row links to the money document", page=True, csv=True),
     E("POST", "/accounting/cheques/{cheque}/action", "doc.edit", "R9.1: a lifecycle action {action: presented|cleared|bounced, date, reason (≥10 chars, bounced only)} — one append-only event; clear needs a presentation first, cleared/bounced are final, the date must be within [cheque date, today]"),
+    # R9.2 — the general ledger: the chart, the journal register, the manual entries, one account's ledger
+    E("GET", "/accounting/chart", None, "R9.2: the chart of accounts — the RMG template plus one row per money account, each with its derived movement (debit / credit / balance / entries); the two sides always agree, so the foot of the chart is the trial balance", csv=True),
+    E("GET", "/accounting/journal", None, "R9.2: the journal register — Page<JournalRow>, one row per posting, derived and manual side by side (the derived ones link to their source document); facets source / process; ?account={code} narrows to one account's entries", page=True, csv=True),
+    E("POST", "/accounting/journal", "doc.create", "R9.2: create a manual entry (JE-) {date, memo 3-300, lines[{account, debit, credit}] 2-60, process} — the lines must balance to the poisha and name open chart accounts (422 unbalanced / unknownAccount / inactiveAccount / bothSidesOneLine / dateClosed / future)"),
+    E("GET", "/accounting/journal/{journal}", None, "R9.2: one manual entry with its lines and history"),
+    E("PUT", "/accounting/journal/{journal}", "doc.edit", "R9.2: replace a draft (409 if not a draft)"),
+    E("PATCH", "/accounting/journal/{journal}", None, "R9.2: approve (doc.approve) or cancel {reason≥10} (doc.cancel); the books must be open for the entry's date either way"),
+    E("DELETE", "/accounting/journal/{journal}", "doc.delete", "R9.2: delete a draft (the row keeps its id and number retired)"),
+    E("GET", "/accounting/ledger?account={code}", None, "R9.2: one account's ledger — ?account={code} (required) with ?from / ?to: what it opened at, every movement with the running balance, and what it closed at"),
     # R4 — NBR VAT
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
@@ -320,10 +329,12 @@ def fixtures():
     money_transfer = first("/accounting/transfers?process=Approved&size=1")
     cheque_open = s.get(BASE + "/accounting/cheques?status=outstanding&size=1").json()["data"][0]["id"]
     cheque_final = s.get(BASE + "/accounting/cheques?status=cleared&size=1").json()["data"][0]["id"]
+    journal = first("/accounting/journal?source=manual&size=1")
+    gl_account = s.get(BASE + "/accounting/chart").json()[0]["code"]  # R9.2: a chart row the ledger fixture reads
     r4 = {"receipt": first("/accounting/receipts?process=Approved&size=1"), "payment": first("/accounting/payments?process=Approved&size=1"),
           "treasury": first("/vat/treasury?process=Approved&size=1"), "vds": first("/vat/vds?process=Approved&size=1"),
           "adjustment": first("/vat/adjustments?process=Approved&size=1"), "account": "ac1", "period": "2026-08"}
-    return {**r4, "moneyTransfer": money_transfer, "cheque": cheque_open, "chequeFinal": cheque_final,
+    return {**r4, "moneyTransfer": money_transfer, "cheque": cheque_open, "chequeFinal": cheque_final, "journal": journal, "code": gl_account,
             "goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
 
 def run():
@@ -411,6 +422,16 @@ def run():
         ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "cleared", "date": "2026-09-10"}, 409, None),
         ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "bounced", "date": "2026-09-10", "reason": "too short"}, 422, "reason"),
         ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "presented", "date": "2020-01-01"}, 422, "date"),
+        # R9.2 — the general ledger
+        ("arif", "GET", "/accounting/journal/nope", None, 404, None),
+        ("arif", "POST", "/accounting/journal", {}, 422, "date"),
+        ("arif", "POST", "/accounting/journal", {"date": "2026-09-20", "memo": "Not balanced", "lines": [{"account": "5500", "debit": 100}, {"account": "2200", "credit": 90}], "process": "Created"}, 422, "lines"),
+        ("arif", "POST", "/accounting/journal", {"date": "2026-09-20", "memo": "Unknown account", "lines": [{"account": "9999", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"}, 422, "lines"),
+        ("arif", "POST", "/accounting/journal", {"date": "2026-06-15", "memo": "Books are closed", "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"}, 422, "date"),
+        ("arif", "PUT", f"/accounting/journal/{fx['journal']}", {}, 409, None),
+        ("arif", "DELETE", f"/accounting/journal/{fx['journal']}", None, 409, None),
+        ("arif", "GET", "/accounting/ledger", None, 422, "account"),
+        ("arif", "GET", "/accounting/ledger?account=9999", None, 404, None),
         ("arif", "GET", "/purchases/nope", None, 404, None),
         ("arif", "GET", "/items/nope", None, 404, None),
         ("arif", "POST", "/sales", {}, 422, "customerId"),

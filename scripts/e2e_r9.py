@@ -212,6 +212,140 @@ async def main():
             ok("role gating: the viewer can neither create a transfer nor act on a cheque; reading is open")
         except Exception as e: fail(8, e)
 
+        # ── 9. R9.2: the chart of accounts and the trial balance ────
+        je_made = None
+        try:
+            chart = await jget(appr, "/accounting/chart")
+            assert len(chart) >= 35, len(chart)
+            by_code = {a["code"]: a for a in chart}
+            assert by_code["1100"]["name"] == "Accounts receivable" and by_code["1100"]["entries"] > 0
+            assert by_code["2110"]["name"] == "VAT payable" and by_code["5950"]["group"] == "Tax costs"
+            banks = [a for a in chart if a["code"].startswith("1020.")]
+            assert banks and all(a["moneyAccountId"] for a in banks), banks[:2]
+            # the keystone: every entry is balanced by construction, so the two sides of the chart agree
+            dr = round(sum(a["debit"] for a in chart), 2); cr = round(sum(a["credit"] for a in chart), 2)
+            assert abs(dr - cr) < 0.01 and dr > 1e8, (dr, cr)
+            untouched = [a["code"] for a in chart if a["entries"] == 0 and "." not in a["code"]]
+            assert "1210" in untouched and "5400" in untouched, untouched  # SD-on-imports and rent: the demo posts none
+            seeded_manual = [a for a in chart if a["code"] in ("1300", "5500")]
+            assert all(a["entries"] > 0 for a in seeded_manual), seeded_manual  # the seeded JEs post here
+            ok(f"chart: {len(chart)} accounts, trial balance ৳{dr:,.2f} == ৳{cr:,.2f} to the poisha")
+        except Exception as e: fail(9, e)
+
+        # ── 10. R9.2: the journal register — derived + manual, one fold ─
+        try:
+            jr = await jget(appr, "/accounting/journal?size=1")
+            assert jr["total"] >= 400 and jr["totals"]["debit"] == jr["totals"]["credit"], (jr["total"], jr["totals"])
+            assert set(jr["facets"]["source"].keys()) >= {"sale", "purchase", "receipt", "payment", "treasury", "vdsPurchase", "vdsSales", "adjustment", "opening", "openingBalance", "creditNote", "debitNote", "transfer", "manual"}, jr["facets"]["source"].keys()
+            manual = await jget(appr, "/accounting/journal?source=manual")
+            assert manual["total"] == 2 and {r["no"] for r in manual["data"]} == {"JE-08260001", "JE-09260001"}, manual["data"]
+            rent = next(r for r in manual["data"] if r["no"] == "JE-08260001")
+            assert rent["debit"] == 450000 and rent["process"] == "Approved" and "1300" in rent["accounts"]
+            ar = await jget(appr, "/accounting/journal?account=1100&size=500")
+            assert ar["total"] > 100 and all("1100" in r["accounts"] for r in ar["data"]), ar["total"]
+            csv = await (await appr.request.get(API + "/accounting/journal?format=csv&size=5")).text()
+            assert csv.lstrip("\ufeff").splitlines()[0].startswith("Date,Entry,Memo,Source"), csv[:80]
+            ok(f"journal register: {jr['total']} postings, every source kind present, manual JEs, account filter, CSV")
+        except Exception as e: fail(10, e)
+
+        # ── 11. R9.2: the manual JE lifecycle and its rules ───────────
+        try:
+            bad_lines = [{"account": "5500", "debit": 100}, {"account": "2200", "credit": 90}]
+            st, _ = await post(appr, "/accounting/journal", {"date": TODAY, "memo": "Not balanced", "lines": bad_lines, "process": "Created"})
+            assert st == 422, st
+            st, _ = await post(appr, "/accounting/journal", {"date": TODAY, "memo": "Unknown account", "lines": [{"account": "9999", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"})
+            assert st == 422, st
+            st, _ = await post(appr, "/accounting/journal", {"date": TODAY, "memo": "Both sides on one line", "lines": [{"account": "5500", "debit": 1, "credit": 1}, {"account": "2200", "credit": 1}], "process": "Created"})
+            assert st == 422, st
+            st, _ = await post(appr, "/accounting/journal", {"date": "2026-06-15", "memo": "Books are closed", "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"})
+            assert st == 422, st
+            st, _ = await post(appr, "/accounting/journal", {"date": "2026-10-15", "memo": "From the future", "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"})
+            assert st == 422, st
+            # a draft posts nothing; approving posts it; cancelling takes it back out
+            before = (await jget(appr, "/accounting/chart")); dr0 = round(sum(a["debit"] for a in before), 2)
+            st, made = await post(appr, "/accounting/journal", {"date": "2026-09-20", "memo": "Audit fee accrual for the year", "lines": [{"account": "5600", "debit": 150000}, {"account": "2200", "credit": 150000}], "process": "Created"})
+            assert st == 201 and made["process"] == "Created" and made["no"].startswith("JE-09"), (st, made)
+            je_made = made
+            assert (await jget(appr, "/accounting/journal?q=Audit fee accrual"))["total"] == 0  # drafts post nothing
+            st, app_ = await patch(appr, f"/accounting/journal/{made['id']}", {"process": "Approved"})
+            assert st == 200 and app_["process"] == "Approved"
+            posted = (await jget(appr, "/accounting/journal?q=Audit fee accrual"))
+            assert posted["total"] == 1 and posted["data"][0]["debit"] == 150000
+            during = await jget(appr, "/accounting/chart")
+            assert round(sum(a["debit"] for a in during), 2) == round(dr0 + 150000, 2)  # the trial balance grew by exactly the entry
+            # an edit is refused past the draft; cancel with a reason takes it out
+            st, _ = await put(appr, f"/accounting/journal/{made['id']}", {"date": "2026-09-20", "memo": "x", "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"})
+            assert st == 409, st
+            st, canc = await patch(appr, f"/accounting/journal/{made['id']}", {"process": "Cancelled", "reason": "The auditor billed less — a smaller accrual follows."})
+            assert st == 200 and canc["process"] == "Cancelled"
+            assert (await jget(appr, "/accounting/journal?q=Audit fee accrual"))["total"] == 0
+            after = await jget(appr, "/accounting/chart")
+            assert round(sum(a["debit"] for a in after), 2) == dr0
+            # a second draft edits, then deletes — the JE- series never repeats
+            st, two = await post(appr, "/accounting/journal", {"date": "2026-09-21", "memo": "A draft to edit and delete", "lines": [{"account": "5500", "debit": 500}, {"account": "2200", "credit": 500}], "process": "Created"})
+            assert st == 201, st
+            st, edited = await put(appr, f"/accounting/journal/{two['id']}", {"date": "2026-09-21", "memo": "A draft, edited", "lines": [{"account": "5500", "debit": 600}, {"account": "2200", "credit": 600}], "process": "Created"})
+            assert st == 200 and edited["memo"] == "A draft, edited" and edited["lines"][0]["debit"] == 600, edited
+            st, _ = await del_(appr, f"/accounting/journal/{two['id']}")
+            assert st == 200
+            st, _ = await patch(appr, f"/accounting/journal/{made['id']}", {"process": "Cancelled", "reason": "already cancelled, refuse"})
+            assert st == 409, st
+            # the audit trail saw it all
+            aud = await jget(appr, "/audit?entity=journal&size=10")
+            assert aud["total"] >= 4, aud["total"]
+            ok("manual JE: 5 refused bodies, draft→approve (+৳150,000 on the trial balance)→cancel (−৳150,000), edit, delete, audit")
+        except Exception as e: fail(11, e)
+
+        # ── 12. R9.2: one account's ledger ────────────────────────────
+        try:
+            led = await jget(appr, "/accounting/ledger?account=1100")
+            assert led["account"]["code"] == "1100" and led["rows"], led["account"]
+            assert abs(led["closing"] - led["rows"][-1]["balance"]) < 0.01
+            # the receivable is an asset: closing = opening + the movements (the signed running balance)
+            assert abs((led["opening"] + sum(r["debit"] - r["credit"] for r in led["rows"])) - led["closing"]) < 0.01, (led["opening"], led["closing"])
+            # a window: the opening is what moved before `from`, the closing carries it forward
+            w = await jget(appr, "/accounting/ledger?account=1100&from=2026-09-01&to=2026-09-30")
+            assert w["from"] == "2026-09-01" and all("2026-09-01" <= r["date"] <= "2026-09-30" for r in w["rows"])
+            chart = await jget(appr, "/accounting/chart")
+            ar = next(a for a in chart if a["code"] == "1100")
+            assert abs(led["closing"] - ar["balance"]) < 0.01, (led["closing"], ar["balance"])  # the ledger and the chart agree
+            r404 = await appr.request.get(API + "/accounting/ledger?account=9999")
+            assert r404.status == 404
+            r422 = await appr.request.get(API + "/accounting/ledger")
+            assert r422.status == 422
+            ok("ledger: opening → movements → closing, window bounds, agrees with the chart, 404/422")
+        except Exception as e: fail(12, e)
+
+        # ── 13. R9.2: the pages — chart, journal, ledger, Bangla ──────
+        try:
+            await pg.goto(BASE + "/en/accounting/chart", wait_until="networkidle")
+            await expect(pg.get_by_role("heading", name="Chart of accounts")).to_be_visible()
+            await expect(pg.get_by_text("Trial balance")).to_be_visible()
+            await expect(pg.locator("tbody tr").first).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/92_chart.png")
+            await pg.goto(BASE + "/en/accounting/journal", wait_until="networkidle")
+            await expect(pg.get_by_role("heading", name="Journal")).to_be_visible()
+            await expect(pg.locator("tbody tr").first).to_be_visible()
+            # open a seeded manual entry — the sheet shows the lines and the history
+            seeded = await jget(appr, "/accounting/journal?source=manual&size=1")
+            await pg.goto(BASE + f"/en/accounting/journal?view={seeded['data'][0]['id']}", wait_until="networkidle")
+            await expect(pg.get_by_text("Recorded by")).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/92_journal_sheet.png")
+            await pg.goto(BASE + "/en/accounting/ledger?account=2110", wait_until="networkidle")
+            await expect(pg.get_by_text("VAT payable").first).to_be_visible()
+            await expect(pg.locator("tbody tr").first).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/92_ledger.png")
+            bn = await login_ctx(b, "admin", viewport=VP); bp = await bn.new_page(); watch(bp, errs)
+            for path in ("/bn/accounting/chart", "/bn/accounting/journal", "/bn/accounting/ledger?account=1100"):
+                await bp.goto(BASE + path, wait_until="networkidle"); await bp.wait_for_timeout(300)
+            await settle(bp); await bp.screenshot(path=f"{OUT}/92_gl_bn.png")
+            await bn.close()
+            st, _ = await post(view, "/accounting/journal", {"date": TODAY, "memo": "Viewer may not", "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"})
+            assert st == 403, st
+            assert je_made and je_made["no"].startswith("JE-")
+            ok("pages: chart with the trial-balance foot, journal + manual sheet, ledger, Bangla, role gating")
+        except Exception as e: fail(13, e)
+
         bad = [e for e in errs if "MISSING_MESSAGE" in e or "FORMATTING_ERROR" in e or e.startswith("pageerror")]
         print("console/page errors:", len(errs), errs[:6])
         assert not bad, bad; ok("no page errors or missing i18n messages")

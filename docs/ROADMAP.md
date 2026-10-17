@@ -12,7 +12,8 @@ api_native checks, and this documentation — one slice per PR, one CI watch.
 | R7, R7.1–R7.6 | tariff import, penalty calculator, compliance pack, e-filing JSON, onboarding imports, QR verification (R8.1), bank reconciliation (R8.2) | **landed** |
 | **R8.3** | statutory reminders + report delivery (the schedule, the digests, the tick) | done |
 | **R9.1** | treasury operations: own-account transfers (TX-), cheque register with lifecycle | done |
-| R9 | the complete accounting module (R9.2 next: general ledger) | in flight |
+| **R9.2** | the general ledger: chart of accounts, derived posting rules, manual journal entries | done |
+| R9 | the complete accounting module (R9.3 next: statements and the close) | in flight |
 | R10 | POS integration | after R9 |
 
 ## R9 — the complete accounting module
@@ -25,7 +26,7 @@ reminder / delivery schedule. What they still lack, in the order the slices fill
 | Slice | Scope | Notes |
 | --- | --- | --- |
 | **R9.1 — treasury operations** ✅ | transfers between the company's own accounts, cash deposit / withdrawal, and the cheque register with its lifecycle (issued → presented → cleared / bounced, post-dated view) — **shipped v0.16.0** | the most basic gap: money cannot move between own accounts today. A cleared cheque is exactly what the R8.2 bank matcher already explains |
-| **R9.2 — the general ledger** | chart of accounts (a seeded RMG template), posting rules that derive the GL from the documents that already exist (sales, purchases, notes, receipts, payments, TR-6, VDS, adjustments), manual journal entries for everything else | the keystone. Derived-posting-first means the GL is complete from day one without anyone typing double entries for transactions |
+| **R9.2 — the general ledger** ✅ | chart of accounts (a seeded RMG template), posting rules that derive the GL from the documents that already exist (sales, purchases, notes, receipts, payments, transfers, TR-6, VDS, adjustments, openings), manual journal entries (JE-) for everything else, one account's ledger — **shipped v0.17.0** | the keystone. Derived-posting-first means the GL is complete from day one without anyone typing double entries for transactions |
 | **R9.3 — statements and the close** | trial balance, profit & loss, balance sheet, cash flow; the period close that locks posting | reads the R9.2 ledger |
 | **R9.4 — fixed assets** | asset register, classes, straight-line depreciation schedules at the NBR's rates, revaluation and disposal, capital-item input-credit tracking | feeds the ledger, the P&L and the 9.1 |
 | **R9.5 — expenses and TDS** | expense vouchers (rent, professional fees, contractors) and income-tax deducted at source, with AIT challan deposit and the monthly e-TDS return data | the income-tax sibling of the VDS pattern the VAT side already has |

@@ -20,7 +20,7 @@ def watch(pg, errs):
     pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
     pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" else None)
 VP = {"width": 1440, "height": 900}
-N_ARTICLES = 53
+N_ARTICLES = 54
 # window.print is replaced in every frame (the print frame is a srcdoc iframe): count calls on the top window.
 PRINT_STUB = "window.print = () => { try { window.top.__kbPrints = (window.top.__kbPrints || 0) + 1 } catch (e) {} }"
 

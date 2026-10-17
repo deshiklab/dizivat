@@ -1,6 +1,6 @@
 {
   "name": "dizivat-api",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "description": "DiziVAT backend \u2014 NestJS + PostgreSQL (R5). Serves /api/v1 behind the Next.js frontend.",
   "author": "BITSCOL <sales@bitscol.com> (https://www.bitscol.com)",

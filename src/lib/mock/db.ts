@@ -1,4 +1,4 @@
-import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, ChequeEvent, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, ChequeEvent, GlAccount, ManualJournalEntry, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -14,6 +14,7 @@ import { seedBondUds, seedDrawbackClaims } from "./seed-r65"
 import { seedLateFilings, seedPrcBatches, seedReturnAmendments } from "./seed-r66"
 import { DEFAULT_REMINDER_SETTINGS, seedDeliveryLog, seedDeliverySchedules } from "./seed-r83"
 import { seedChequeEvents, seedTransfers } from "./seed-r91"
+import { seedChart, seedJournal } from "./seed-r92"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -24,7 +25,7 @@ export interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number; journal: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -45,6 +46,8 @@ export interface DB {
   deliverySchedules: DeliverySchedule[]; deliveryLog: DeliveryLogRow[]
   /** R9.1: transfers between the company's own accounts, and the cheque lifecycle events (the register itself is derived) */
   moneyTransfers: MoneyTransfer[]; chequeEvents: ChequeEvent[]
+  /** R9.2: the chart of accounts and the manual journal entries (the derived postings are never stored) */
+  glAccounts: GlAccount[]; journalEntries: ManualJournalEntry[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -156,13 +159,14 @@ function init(): DB {
     reminderSettings: DEFAULT_REMINDER_SETTINGS, reminders: [],
     deliverySchedules: seedDeliverySchedules(), deliveryLog: [],
     moneyTransfers: [], chequeEvents: [],
+    glAccounts: [], journalEntries: [],
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
       account: r4.moneyAccounts.length, receipt: r4.moneyDocs.filter((x) => x.kind === "receipt").length, payment: r4.moneyDocs.filter((x) => x.kind === "payment").length,
       treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length, bondUd: bondUds.length, claim: drawbackClaims.length,
       prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length, statement: 0,
-      moneyTransfer: 0, cheque: 0,
+      moneyTransfer: 0, cheque: 0, journal: 0,
     },
   }
   // the seeded log row's figures come from the seeded books themselves, so both runtimes seed the same document
@@ -172,6 +176,10 @@ function init(): DB {
   world.chequeEvents = seedChequeEvents(world)
   world.seq.moneyTransfer = world.moneyTransfers.length
   world.seq.cheque = world.chequeEvents.length
+  // R9.2: the chart (template + the money accounts' own rows) and the manual journal entries
+  world.glAccounts = seedChart(world)
+  world.journalEntries = seedJournal(world)
+  world.seq.journal = world.journalEntries.length
   return world
 }
 
@@ -226,6 +234,11 @@ db.moneyTransfers ??= []
 db.chequeEvents ??= []
 db.seq.moneyTransfer ??= 0
 db.seq.cheque ??= 0
+// R9.2: a snapshot saved before R9.2 has no chart and no manual entries — the chart is rebuilt from the
+// template and the snapshot's own money accounts, and the manual entries start empty
+db.glAccounts ??= seedChart(db)
+db.journalEntries ??= []
+db.seq.journal ??= 0
 db.deliverySchedules ??= seedDeliverySchedules()
 db.deliveryLog ??= seedDeliveryLog(db)
 

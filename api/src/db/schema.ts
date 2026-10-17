@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
+import type { AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, JournalLine, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -2070,4 +2070,58 @@ export const chequeEvents = pgTable("cheque_events", {
   index("cheque_events_cheque_idx").on(t.chequeId),
   index("cheque_events_at_idx").on(t.at),
   check("cheque_events_action_check", sql`${t.action} in ('presented','cleared','bounced')`),
+])
+
+/**
+ * R9.2 — one row of the chart of accounts. The template rows are seeded; the money-account rows
+ * (1010.xx / 1020.xx / 1030.xx) are one per account. The figures the register shows are derived
+ * (`lib/gl` folds every posting), so the row itself is only the identity of an account.
+ */
+export const glAccounts = pgTable("gl_accounts", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** 4-digit code for the template rows, `4.2` digits for a money account's own row */
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  kind: text("kind", { enum: ["asset", "liability", "equity", "revenue", "expense"] }).notNull(),
+  group: text("group").notNull(),
+  /** the money account whose postings this row receives (`money_accounts.id`) — template rows carry none */
+  moneyAccountId: text("money_account_id"),
+  active: boolean("active").notNull().default(true),
+  note: text("note"),
+}, (t) => [
+  uniqueIndex("gl_accounts_code_key").on(t.code),
+  index("gl_accounts_money_idx").on(t.moneyAccountId),
+])
+
+/**
+ * R9.2 — the manual journal entries (JE-): the only journal documents, kept for what no other document
+ * carries (a prepaid, an accrual). Every other posting is derived at read time (`journalOf`), so nothing
+ * derived is ever stored. A deleted draft keeps its row, so its id and number stay retired.
+ */
+export const journalEntries = pgTable("journal_entries", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** JE-MMYY#### */
+  no: text("no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  memo: text("memo").notNull(),
+  /** the entry's lines — balanced by construction (the builder refuses what does not balance) */
+  lines: jsonb("lines").$type<JournalLine[]>().notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** a deleted draft leaves the register but keeps its row, so its id and number stay retired */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("journal_entries_no_key").on(t.no),
+  index("journal_entries_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("journal_entries_date_idx").on(t.date),
+  check("journal_entries_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
 ])

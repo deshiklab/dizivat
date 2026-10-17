@@ -10,17 +10,17 @@ import { CancelDialog } from "@/components/common/cancel-dialog"
 import { useConfirm } from "@/components/common/confirm"
 
 /** R4 document kinds and the i18n namespace holding their approved / saved / deleted / deleteBody messages. */
-export type R4Kind = "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "ownTransfer"
-export const R4_NS: Record<R4Kind, string> = { receipt: "money", payment: "money", treasury: "treasury", vds: "vds", adjustment: "adjust", ownTransfer: "transfers" }
-export const r4ListKey: Record<R4Kind, string> = { receipt: "receipts", payment: "payments", treasury: "treasury", vds: "vds", adjustment: "adjustments", ownTransfer: "ownTransfers" }
+export type R4Kind = "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "ownTransfer" | "journal"
+export const R4_NS: Record<R4Kind, string> = { receipt: "money", payment: "money", treasury: "treasury", vds: "vds", adjustment: "adjust", ownTransfer: "transfers", journal: "journal" }
+export const r4ListKey: Record<R4Kind, string> = { receipt: "receipts", payment: "payments", treasury: "treasury", vds: "vds", adjustment: "adjustments", ownTransfer: "ownTransfers", journal: "journalRegister" }
 type Doc = { id: string; no: string; process: Process }
-const client = (k: R4Kind) => ({ receipt: api.accounting.receipts, payment: api.accounting.payments, treasury: api.vat.treasury, vds: api.vat.vds, adjustment: api.vat.adjustments, ownTransfer: api.accounting.transfers })[k] as unknown as {
+const client = (k: R4Kind) => ({ receipt: api.accounting.receipts, payment: api.accounting.payments, treasury: api.vat.treasury, vds: api.vat.vds, adjustment: api.vat.adjustments, ownTransfer: api.accounting.transfers, journal: api.accounting.journal })[k] as unknown as {
   setProcess: (id: string, b: CancelBody) => Promise<Doc>
   remove: (id: string) => Promise<unknown>
 }
 /** Invoices, balances, statements and the VAT return all depend on these documents. */
 const DEPENDENT = ["sales", "sale", "purchases", "purchase", "dashboard", "audit", "notifications", "receipts", "payments", "accounts", "account", "statement", "openInvoices",
-  "treasury", "vds", "vdsEligible", "adjustments", "returns", "return", "compliance", "periods", "subform", "r4doc", "ownTransfers", "cheques"]
+  "treasury", "vds", "vdsEligible", "adjustments", "returns", "return", "compliance", "periods", "subform", "r4doc", "ownTransfers", "cheques", "journalRegister", "chart", "glLedger"]
 
 export function useR4Refresh() {
   const qc = useQueryClient()
