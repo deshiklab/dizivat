@@ -40,6 +40,9 @@ export interface AccountingSource {
   /** R9.1: transfers between the company's own accounts (approved ones move the balances), and the cheque lifecycle */
   moneyTransfers?: MoneyTransfer[]
   chequeEvents?: ChequeEvent[]
+  /** R9.2: the manual journal entries — the close cannot pass over their drafts
+   * (structural on purpose: both the mock's documents and the derived journal satisfy it) */
+  journalEntries?: { no: string; date: string; process?: Process }[]
 }
 /** `db` is the whole world, which is what the mock handlers pass by default. */
 export const accountingSource = (): AccountingSource => db
@@ -645,10 +648,15 @@ export function buildAccountingConfig(body: unknown, src: AccountingSource = db)
   const c = parsed.data
   if (c.closedUpTo && c.closedUpTo > TODAY) return invalidRule({ closedUpTo: ["future"] })
   if (c.closedUpTo) {
-    const drafts = src.moneyDocs.filter((m) => m.process === "Created" && m.date <= c.closedUpTo)
+    // R9.3: the cut-off guards every book-side document now — money docs, transfers, manual entries, assets
+    const drafts = [
+      ...src.moneyDocs.filter((m) => m.process === "Created" && m.date <= c.closedUpTo).map((m) => m.no),
+      ...(src.moneyTransfers ?? []).filter((m) => m.process === "Created" && m.date <= c.closedUpTo).map((m) => m.no),
+      ...(src.journalEntries ?? []).filter((m) => m.process === "Created" && m.date <= c.closedUpTo).map((m) => m.no),
+    ]
     if (drafts.length) return {
       status: 409,
-      title: `Drafts dated on or before ${c.closedUpTo} are still open (${drafts.map((m) => m.no).join(", ")}) — approve or delete them before closing the books.`,
+      title: `Drafts dated on or before ${c.closedUpTo} are still open (${drafts.join(", ")}) — approve or delete them before closing the books.`,
     }
   }
   return { fields: { closedUpTo: c.closedUpTo || undefined, allowAdvance: c.allowAdvance, autoAllocate: c.autoAllocate } }

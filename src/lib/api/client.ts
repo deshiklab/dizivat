@@ -1,5 +1,5 @@
-import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, GlAccountRow, GlLedger, JournalRow, ManualJournalEntry, AccountingConfig, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { AccountInput, AccountingConfigInput, AdjustmentInput, ChequeActionInput, JournalEntryInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
+import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, GlAccountRow, GlLedger, JournalRow, ManualJournalEntry, AccountingConfig, BalanceSheetReport, CashFlowReport, ProfitLossReport, TrialBalanceReport, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { AccountInput, AccountingConfigInput, AdjustmentInput, ChequeActionInput, CloseInput, JournalEntryInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
 import type { BackupRow, BackupStatus, BackupVerify, BankStatement, BankStatementLine, ImportEntity, ImportResult, Sale as R62Sale, StatementPlanAnswer, StatementView, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
@@ -265,6 +265,18 @@ export const api = {
       remove: (id: string) => req<{ ok: true }>(`/accounting/journal/${id}`, { method: "DELETE" }),
       csvUrl: (p: ListParams) => `${BASE}/accounting/journal${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
     },
+    /** R9.3: the statements (derived reads over the journal) and the close of the books */
+    reports: {
+      trialBalance: (p?: { asOf?: string }) => req<TrialBalanceReport>(`/accounting/reports/trial-balance${qs(p)}`),
+      trialBalanceCsvUrl: (p?: { asOf?: string }) => `${BASE}/accounting/reports/trial-balance${qs({ ...p, format: "csv" })}`,
+      profitLoss: (p?: { from?: string; to?: string }) => req<ProfitLossReport>(`/accounting/reports/profit-loss${qs(p)}`),
+      profitLossCsvUrl: (p?: { from?: string; to?: string }) => `${BASE}/accounting/reports/profit-loss${qs({ ...p, format: "csv" })}`,
+      balanceSheet: (p?: { asOf?: string }) => req<BalanceSheetReport>(`/accounting/reports/balance-sheet${qs(p)}`),
+      balanceSheetCsvUrl: (p?: { asOf?: string }) => `${BASE}/accounting/reports/balance-sheet${qs({ ...p, format: "csv" })}`,
+      cashFlow: (p?: { from?: string; to?: string }) => req<CashFlowReport>(`/accounting/reports/cash-flow${qs(p)}`),
+      cashFlowCsvUrl: (p?: { from?: string; to?: string }) => `${BASE}/accounting/reports/cash-flow${qs({ ...p, format: "csv" })}`,
+    },
+    closeBooks: (b: CloseInput) => req<AccountingConfig>("/accounting/close", { method: "POST", body: JSON.stringify(b) }),
     /** R9.1: the cheque register (read model; lifecycle actions append events) */
     cheques: {
       list: (p: ListParams) => req<ListResult<ChequeRow>>(`/accounting/cheques${qs(p)}`),

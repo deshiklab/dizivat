@@ -1,6 +1,6 @@
 import { BookOpenCheck,
-  ArrowRightLeft, Building2, CheckCheck, PackageX, Ruler, CircleDot, FilePen, FilePlus2, FileX, KeyRound, LogIn, LogOut, Pencil, Power, PowerOff, RotateCcw,
-  Send, ShieldAlert, ShieldCheck, Trash2, UserPlus, XCircle, Eye, Banknote, DatabaseBackup, Download, Upload, FileCheck2, type LucideIcon,
+  ArrowRightLeft, Banknote, Building2, CheckCheck, Lock, PackageX, Ruler, CircleDot, FilePen, FilePlus2, FileX, KeyRound, LogIn, LogOut, Pencil, Power, PowerOff, RotateCcw,
+  Send, ShieldAlert, ShieldCheck, Trash2, UserPlus, XCircle, Eye, DatabaseBackup, Download, Upload, FileCheck2, type LucideIcon,
 } from "lucide-react"
 import type { AuditAction, AuditEntity, AuditEvent } from "@/lib/types"
 import type { Tone } from "@/components/common/status-badge"
@@ -9,6 +9,8 @@ export const AUDIT_ACTIONS: AuditAction[] = [
   "created", "edited", "approved", "cancelled", "deleted", "restored", "updated", "activated", "deactivated",
   "roleChanged", "invited", "passwordReset", "passwordChanged", "signedIn", "signedOut", "signInFailed", "submitted",
   "viewed", "realised", "backedUp", "downloaded", "imported",
+  "presented", "cleared", "bounced",
+  "closed",
 ]
 export const AUDIT_ENTITIES: AuditEntity[] = [
   "sale", "purchase", "creditNote", "debitNote", "opening", "transfer", "damage", "bom", "workOrder", "batch", "productionConfig",
@@ -16,6 +18,7 @@ export const AUDIT_ENTITIES: AuditEntity[] = [
   "customer", "vendor", "item", "masterItem", "unit", "user", "company", "session",
   "ud", "backup", "access", "import", "tariff",
   "moneyTransfer", "cheque", "journal",
+  "accounting",
 ]
 
 export const ACTION_ICON: Record<AuditAction, LucideIcon> = {
@@ -24,18 +27,20 @@ export const ACTION_ICON: Record<AuditAction, LucideIcon> = {
   passwordReset: KeyRound, passwordChanged: KeyRound, signedIn: LogIn, signedOut: LogOut, signInFailed: ShieldAlert, submitted: Send,
   viewed: Eye, realised: Banknote, backedUp: DatabaseBackup, downloaded: Download, imported: Upload,
   presented: Send, cleared: CheckCheck, bounced: FileX,
+  closed: Lock,
 }
 export const ACTION_TONE: Partial<Record<AuditAction, Tone>> = {
   approved: "success", activated: "success", cancelled: "danger", deleted: "danger", deactivated: "danger", signInFailed: "danger",
   passwordReset: "warning", roleChanged: "warning", created: "info", invited: "info", submitted: "success",
   realised: "success", backedUp: "success", imported: "info", downloaded: "warning",
   cleared: "success", bounced: "danger", presented: "info",
+  closed: "warning",
 }
-export const entityIcon = (e: AuditEntity): LucideIcon => (e === "company" ? Building2 : e === "session" ? LogIn : e === "user" ? UserPlus : e === "transfer" ? ArrowRightLeft : e === "moneyTransfer" ? ArrowRightLeft : e === "cheque" ? FileCheck2 : e === "journal" ? BookOpenCheck : e === "damage" ? PackageX : e === "unit" ? Ruler : e === "ud" ? FileCheck2 : e === "backup" ? DatabaseBackup : e === "access" ? Eye : e === "import" ? Upload : e === "tariff" ? BookOpenCheck : CircleDot)
+export const entityIcon = (e: AuditEntity): LucideIcon => (e === "company" ? Building2 : e === "session" ? LogIn : e === "user" ? UserPlus : e === "transfer" ? ArrowRightLeft : e === "moneyTransfer" ? ArrowRightLeft : e === "cheque" ? FileCheck2 : e === "journal" ? BookOpenCheck : e === "damage" ? PackageX : e === "unit" ? Ruler : e === "ud" ? FileCheck2 : e === "backup" ? DatabaseBackup : e === "access" ? Eye : e === "import" ? Upload : e === "tariff" ? BookOpenCheck : e === "accounting" ? BookOpenCheck : CircleDot)
 
 /** Where a record lives in the app (null when there is no page, e.g. sign-ins or deleted records). */
 export function entityHref(e: AuditEvent): string | null {
-  if (!e.entityId && e.entity !== "company" && e.entity !== "productionConfig" && e.entity !== "accountingConfig" && e.entity !== "vatSettings" && e.entity !== "import") return null
+  if (!e.entityId && e.entity !== "company" && e.entity !== "productionConfig" && e.entity !== "accountingConfig" && e.entity !== "vatSettings" && e.entity !== "import" && e.entity !== "accounting") return null
   switch (e.entity) {
     case "sale": return `/sales/${e.entityId}`
     case "purchase": return `/purchases/${e.entityId}`
@@ -69,6 +74,10 @@ export function entityHref(e: AuditEvent): string | null {
     case "import": return "/master/import"
     case "tariff": return "/vat/tariff"
     case "access": return `/master/users?edit=${e.entityId}`
+    case "journal": return `/accounting/journal?view=${e.entityId}`
+    case "moneyTransfer": return `/accounting/transfers?view=${e.entityId}`
+    case "cheque": return `/accounting/cheques?view=${e.entityId}`
+    case "accounting": return "/accounting/config"
     default: return null
   }
 }

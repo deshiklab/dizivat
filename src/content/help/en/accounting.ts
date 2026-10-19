@@ -149,6 +149,32 @@ export default {
       tip("Bookmark the ledgers the close always reads — VAT payable (2110) before a [return](help:vat-return-9-1), accounts receivable (1100) for the ageing, the bank accounts for the [reconcile](help:bank-reconciliation)."),
     ],
   },
+  "statements-and-close": {
+    title: "The statements and the close of the books",
+    summary: "The trial balance, the profit & loss, the balance sheet and the cash flow — each a date range over the same derived journal — and the month-end close that freezes what is behind them.",
+    keywords: ["statements", "reports", "trial balance", "profit and loss", "P&L", "balance sheet", "cash flow", "equity", "profit brought forward", "fiscal year", "July June", "close", "close the books", "closed up to", "month end", "cut-off"],
+    body: [
+      h("Four statements, one journal"),
+      p("The [reports](/accounting/reports) page serves the four statements an RMG accountant reads at a month-end. Nothing on it is typed: every figure is a date range over the same derived journal the [register](/accounting/chart) shows, so a statement can no more disagree with the books than the trial balance foot can."),
+      list(
+        "**Trial balance** — every account with a position as of a date, on the side it balances. The two columns agree to the poisha because every entry does.",
+        "**Profit & loss** — the fiscal year's movement (July through June, the NBR's year): revenue less the direct costs gives the gross profit, the operating expenses and the tax costs take it to the net.",
+        "**Balance sheet** — the assets on one side, the liabilities and equity on the other. Equity carries two computed lines: the **profit brought forward** (everything before the year opened) and the **profit for the period** — together they are exactly what the assets less the liabilities less the stored equity accounts leave over.",
+        "**Cash flow** — every posting that moved a bank, wallet or cash account in the range, grouped by what caused it (a receipt, a purchase, a TR-6 challan…), with the opening and closing money balances and the net movement between them.",
+      ),
+      p("Each statement takes its own dates: the balance sheet and the trial balance read *as of* a day, the profit & loss and the cash flow run *from* a day *to* a day (defaulting to the fiscal year so far). Every view exports to CSV, exactly as shown."),
+      h("The close of the books"),
+      p("The **Close the books** panel moves the books' cut-off forward — the same `closed up to` the [accounting config](/accounting/config) holds, with the same authority (`settings.manage`). Once a month is closed, no document dated inside it moves: receipts, payments, transfers, journal entries and fixed assets all refuse, and the [VAT return](help:vat-return-9-1) for that period is already behind its own lock."),
+      steps(
+        "Open the [reports](/accounting/reports) page and find the **Close the books** panel.",
+        "Pick the **month** to close through — the last day of that month is what the cut-off becomes.",
+        "Write a **note** if the close deserves one (a year-end, an auditor's request).",
+        "Click **Close the books**. The audit trail records who closed, to where, and why.",
+      ),
+      warn("The close refuses to pass over anything open: a draft receipt, transfer, journal entry or fixed asset dated on or before the month-end blocks it, and the refusal names them. Approve or delete the drafts first. The close also refuses a mid-month date, a future date, or a month already closed."),
+      note("Closing is one-way from the reports page: to reopen a month, an administrator moves the cut-off back in the [accounting config](/accounting/config) — the audit trail records that too."),
+    ],
+  },
   "account-transfers-and-cheques": {
     title: "Account transfers and the cheque register",
     summary: "Move money between the company's own accounts — a deposit, a withdrawal, a wallet top-up — and track every cheque received or issued through presentation, clearing or a bounce.",

@@ -823,3 +823,13 @@ export const journalInput = z.object({
   process: z.enum(["Created", "Approved"]),
 })
 export type JournalEntryInput = z.input<typeof journalInput>
+
+/* ── R9.3: the close of the books ──────────────────────────────────────── */
+
+export const closeInput = z.object({
+  /** the month-end the books are closed through */
+  to: date,
+  note: z.string().trim().max(300, "maxLength").optional(),
+})
+export type CloseInput = z.input<typeof closeInput>
+

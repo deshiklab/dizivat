@@ -262,3 +262,10 @@ export {
 export {
   penaltyBasisOf, penaltyExposureOf, penaltyQuoteOf, type PenaltySource,
 } from "@/app/api/v1/_r63"
+// R9.3: the statements' rules, shared the same way — the four reports' CSV columns, and the close's own rule
+// (a month-end in the past, past the cut-off, with no draft money document, transfer, journal entry or asset
+// dated under it). The reports themselves are pure reads over the derived journal, so the native module folds
+// them straight from `lib/statements.ts`; what cannot drift is the close's refusal and the CSV shapes.
+export {
+  BALANCE_SHEET_CSV_COLUMNS, buildClose, CASH_FLOW_CSV_COLUMNS, PROFIT_LOSS_CSV_COLUMNS, TRIAL_BALANCE_CSV_COLUMNS,
+} from "@/app/api/v1/_r93"

@@ -5661,6 +5661,60 @@ def run():
               and [a["code"] for a in chart3] == [a["code"] for a in chart2],
               "R9.2: the chart rows and the cancelled entry survive the restart")
 
+        # ── R9.3: the statements and the close of the books ────────────────────────────────────────
+        print("\nR9.3: the statements and the close")
+        # the four reports are derived reads over the same journal the chart serves — nothing is stored
+        tb = admin.get(f"{BASE}/accounting/reports/trial-balance").json()
+        check(tb["rows"] and abs(tb["totals"]["debit"] - tb["totals"]["credit"]) < 0.005 and tb["totals"]["debit"] > 1e8,
+              f"the trial balance: every account on the side it balances, the two columns agreeing (৳{tb['totals']['debit']:,.0f})")
+        chart93 = admin.get(f"{BASE}/accounting/chart").json()
+        check(abs(tb["totals"]["debit"] - round(sum(max(a["debit"] - a["credit"], 0) for a in chart93), 2)) < 0.01,
+              "…and the trial balance is the chart's net-side foot — the same fold, read twice")
+        pl = admin.get(f"{BASE}/accounting/reports/profit-loss", params={"from": "2026-07-01", "to": "2026-09-25"}).json()
+        check(pl["revenueTotal"] > 0 and abs(pl["netProfit"] - round(pl["revenueTotal"] - pl["directTotal"] - pl["operatingTotal"] - pl["taxTotal"], 2)) < 0.01,
+              "the profit & loss groups the year's movement: revenue − direct − operating − tax = net")
+        bs = admin.get(f"{BASE}/accounting/reports/balance-sheet").json()
+        check(abs(bs["totals"]["assets"] - bs["totals"]["liabilitiesAndEquity"]) < 0.01,
+              "the balance sheet balances by construction — the computed profit lines carry the difference")
+        eq_names = [r["name"] for x in bs["equity"] for r in x["rows"]]
+        check("Profit brought forward" in eq_names and "Profit for the period" in eq_names,
+              "…equity carries the two computed lines: brought forward + for the period")
+        cf = admin.get(f"{BASE}/accounting/reports/cash-flow", params={"from": "2026-07-01", "to": "2026-09-25"}).json()
+        money_rows = [a for a in chart93 if a.get("moneyAccountId")]
+        check(abs(cf["closing"] - round(cf["opening"] + cf["netMovement"], 2)) < 0.01
+              and abs(cf["closing"] - round(sum(a["balance"] for a in money_rows), 2)) < 0.01,
+              "the cash flow ties to the money balances: opening + net movement = closing = the accounts' own sum")
+        csv93 = admin.get(f"{BASE}/accounting/reports/trial-balance", params={"format": "csv"})
+        check(csv93.status_code == 200 and csv93.text.lstrip("\ufeff").splitlines()[0].startswith("Code,Account"),
+              "…and each report exports as CSV, exactly as shown")
+        # the close: the refusal names the September drafts, the success moves the cut-off.
+        # e2e_r9 closes July before this suite in CI — rewind the cut-off to the seed value so the drill
+        # sees the state its numbers were computed against (the restart lifts the row into the mirror)
+        psql("update accounting_config set closed_up_to = '2026-06-30' where id = 1")
+        restart()
+        r = admin.post(f"{BASE}/accounting/close", json={"to": "2026-09-15"})
+        check(r.status_code == 422 and r.json()["errors"]["to"] == ["notMonthEnd"], "a close refuses a mid-month date (422)")
+        r = admin.post(f"{BASE}/accounting/transfers",
+                      json={"process": "Created", "date": "2026-07-15", "fromAccountId": "ac1", "toAccountId": "ac3", "amount": 5000, "note": "native drill: blocks the July close"})
+        blocker = r.json()
+        check(r.status_code == 201 and blocker["no"].startswith("TX-0726"), "a transfer draft dated under the cut-off is created (it will block the close)")
+        r = admin.post(f"{BASE}/accounting/close", json={"to": "2026-07-31"})
+        check(r.status_code == 409 and blocker["no"] in r.json()["title"],
+              "…and a close over an open draft is refused (409), naming it")
+        check(admin.delete(f"{BASE}/accounting/transfers/{blocker['id']}").status_code == 200, "……the draft deleted, the month is clear")
+        r = admin.post(f"{BASE}/accounting/close", json={"to": "2026-07-31", "note": f"native drill {TAG}: July close"})
+        check(r.status_code == 201 and r.json()["closedUpTo"] == "2026-07-31"
+              and psql("select closed_up_to from accounting_config where id = 1") == "2026-07-31",
+              "the July close moves the cut-off — the row the config serves")
+        r = admin.post(f"{BASE}/accounting/journal", json={"process": "Created", "date": "2026-07-15", "memo": "closed month",
+                                                          "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}]})
+        check(r.status_code == 422 and r.json()["errors"]["date"] == ["dateClosed"],
+              "…and a document dated inside the closed month is refused (422 dateClosed)")
+        aud93 = admin.get(f"{BASE}/audit", params={"entity": "accounting", "size": 3}).json()
+        check(aud93["total"] >= 1 and aud93["data"][0]["action"] == "closed",
+              "……the audit trail records the close (entity accounting, action closed)")
+
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
@@ -5689,8 +5743,8 @@ def run():
         check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 28, "28 migrations have run on this database")
         # un-apply the last FIVE journal rows: the migrator replays by position, so the boot has to re-run
         # 0027 (R9.2's chart and journal), 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and
-        # 0024 (R8.2's bank statements — all idempotent) to reach 0023 (the notif_read lift) again; 0022 and
-        # earlier keep their rows, because their tables are NOT idempotent and must not be replayed
+        # 0024 (R8.2's bank statements — all idempotent) to reach 0023 (the notif_read lift) again; 0022
+        # and earlier keep their rows, because their tables are NOT idempotent and must not be replayed
         psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 5)")
         psql("alter table users drop column notif_read")
         ensure_compat_state()

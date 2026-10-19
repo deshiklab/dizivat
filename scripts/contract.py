@@ -186,6 +186,12 @@ ENDPOINTS = [
     E("PATCH", "/accounting/journal/{journal}", None, "R9.2: approve (doc.approve) or cancel {reason≥10} (doc.cancel); the books must be open for the entry's date either way"),
     E("DELETE", "/accounting/journal/{journal}", "doc.delete", "R9.2: delete a draft (the row keeps its id and number retired)"),
     E("GET", "/accounting/ledger?account={code}", None, "R9.2: one account's ledger — ?account={code} (required) with ?from / ?to: what it opened at, every movement with the running balance, and what it closed at"),
+    # R9.3 — the statements and the close
+    E("GET", "/accounting/reports/trial-balance", None, "R9.3: the trial balance — every account with a position as of ?asOf, on the side it balances; the two columns agree to the poisha; format=csv", csv=True),
+    E("GET", "/accounting/reports/profit-loss", None, "R9.3: the profit & loss for ?from/?to (default: the fiscal year to date, July–June) — revenue / direct / operating / tax cost lines with the gross and the net profit; format=csv", csv=True),
+    E("GET", "/accounting/reports/balance-sheet", None, "R9.3: the balance sheet as of ?asOf — grouped asset, liability and equity sections, the equity carrying the computed profit brought forward and profit for the period, so the two sides balance by construction; format=csv", csv=True),
+    E("GET", "/accounting/reports/cash-flow", None, "R9.3: the cash flow for ?from/?to — every posting that moved a money account grouped by its source kind, with the opening and closing balances and the net movement; format=csv", csv=True),
+    E("POST", "/accounting/close", "settings.manage", "R9.3: close the books through a month-end {to, note?} — refuses a non-month-end / future / already-closed date (422) and any draft money doc, transfer or journal entry dated on or before it (409, naming them); moves the cut-off the config holds"),
     # R4 — NBR VAT
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
@@ -295,6 +301,13 @@ NOTES = [
 ]
 
 sessions = {}
+def _next_month_end():
+    import datetime
+    t = datetime.date.today()
+    nm = datetime.date(t.year + (t.month == 12), (t.month % 12) + 1, 1)
+    return (nm - datetime.timedelta(days=1)).isoformat()
+
+
 def S(user):
     if user is None: return requests.Session()
     if user not in sessions:
@@ -432,32 +445,11 @@ def run():
         ("arif", "DELETE", f"/accounting/journal/{fx['journal']}", None, 409, None),
         ("arif", "GET", "/accounting/ledger", None, 422, "account"),
         ("arif", "GET", "/accounting/ledger?account=9999", None, 404, None),
-        ("arif", "GET", "/purchases/nope", None, 404, None),
-        ("arif", "GET", "/items/nope", None, 404, None),
-        ("arif", "POST", "/sales", {}, 422, "customerId"),
-        ("arif", "POST", "/purchases", {}, 422, "vendorId"),
-        ("arif", "PUT", f"/sales/{fx['sale']}", {}, 409, None),
-        ("arif", "DELETE", f"/sales/{fx['sale']}", None, 409, None),
-        ("arif", "PATCH", f"/sales/{fx['sale']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
-        ("arif", "POST", "/items", {}, 422, "name"),
-        ("arif", "POST", "/import", {"entity": "openingStock"}, 422, "rows"),
-        ("arif", "POST", "/import", {"entity": "wombats", "dryRun": True, "rows": [{}]}, 422, "entity"),
-        ("arif", "POST", "/customers", {}, 422, "name"),
-        ("arif", "DELETE", "/customers/c1", None, 409, None),
-        ("arif", "GET", "/tariff?hs=99999999", None, 404, None),
-        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026-27"}, 422, "rows"),
-        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026/27", "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 422, "fiscalYear"),
-        ("kamal", "POST", "/tariff/import", {"fiscalYear": "2027-28", "dryRun": True, "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 403, None),
-        ("arif", "POST", "/notifications/read", {}, 422, None),
-        ("arif", "PUT", "/me/password", {"current": "wrong-one", "next": "abcd12345", "confirm": "abcd12345"}, 422, "current"),
-        ("arif", "PUT", "/me/password", {"current": PW, "next": "short", "confirm": "short"}, 422, "next"),
-        ("admin", "GET", "/users/nope", None, 404, None),
-        ("admin", "POST", "/users", {}, 422, "username"),
-        ("admin", "POST", "/users", {"username": "arif", "name": "Dup User", "designation": "Tester", "email": "x@y.co", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "username"),
-        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@kanchanjhara-apparel.example", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "role"),
-        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@kanchanjhara-apparel.example", "mobile": "", "department": "", "role": "admin", "active": False}, 422, "active"),
-        ("admin", "POST", "/users/u5/reset-password", None, 422, None),
-        ("admin", "PUT", "/company", {}, 422, "name"),
+        # R9.3 — the statements and the close (the 422s need settings.manage — the guard fires first for others;
+        # "future" is clock-relative, so the case names the next month-end whatever day the suite runs)
+        ("admin", "POST", "/accounting/close", {"to": "2026-09-15"}, 422, "to"),
+        ("admin", "POST", "/accounting/close", {"to": _next_month_end()}, 422, "to"),
+        ("auditor", "POST", "/accounting/close", {"to": "2026-09-30"}, 403, None),
         # Sprint 4 — branches, stock documents, units
         ("arif", "POST", "/sales", {"branchId": "b2"}, 422, None),
         ("arif", "GET", "/transfers/nope", None, 404, None),

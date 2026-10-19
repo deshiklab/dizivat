@@ -67,7 +67,8 @@
   "cheques": "Cheque register",
   "chart": "Chart of accounts",
   "journal": "Journal",
-  "ledger": "Account ledger"
+  "ledger": "Account ledger",
+  "reports": "Statements & reports"
  },
  "shell": {
   "mainNav": "Main navigation",
@@ -5278,7 +5279,70 @@
    "issuedBy": "Recorded by",
    "cancelReason": "Cancellation reason"
   }
+ }, "reports": {
+  "title": "Statements & reports",
+  "subtitle": "The trial balance, the profit & loss, the balance sheet and the cash flow — each a date range over the same derived journal the register shows.",
+  "tabs": {
+   "trial-balance": "Trial balance",
+   "profit-loss": "Profit & loss",
+   "balance-sheet": "Balance sheet",
+   "cash-flow": "Cash flow"
+  },
+  "asOf": "As of",
+  "from": "From",
+  "to": "To",
+  "col": {
+   "code": "Code",
+   "account": "Account",
+   "group": "Group",
+   "debit": "Debit",
+   "credit": "Credit",
+   "amount": "Amount",
+   "source": "Source",
+   "movement": "Net movement"
+  },
+  "empty": "Nothing in range.",
+  "tb": {
+   "title": "Trial balance",
+   "foot": "Trial balance as of {asOf}"
+  },
+  "pl": {
+   "title": "Profit & loss",
+   "revenue": "Revenue",
+   "direct": "Direct costs",
+   "operating": "Operating expenses",
+   "taxCosts": "Tax costs",
+   "gross": "Gross profit",
+   "net": "Net profit",
+   "netFor": "Net profit, {from} – {to}"
+  },
+  "bs": {
+   "assets": "Assets",
+   "liabilitiesEquity": "Liabilities & equity",
+   "asOf": "as of {asOf}",
+   "balanced": "The balance sheet balances — assets equal liabilities and equity, by construction.",
+   "off": "The two sides disagree: assets ৳{assets} vs liabilities and equity ৳{other}."
+  },
+  "cf": {
+   "title": "Cash flow",
+   "net": "Net movement, {from} – {to}",
+   "opening": "Opening money balances",
+   "closing": "Closing money balances"
+  },
+  "close": {
+   "title": "Close the books",
+   "current": "The books are closed up to {to}.",
+   "none": "The books have never been closed.",
+   "month": "Close through (month-end)",
+   "note": "Note",
+   "notePlaceholder": "Year-end close, auditor's request…",
+   "hint": "The close refuses a non-month-end, the future, and any draft money document, transfer or journal entry dated on or before it.",
+   "submit": "Close the books",
+   "pickMonth": "Pick the month to close through.",
+   "done": "Books closed up to {to}."
+  }
  },
+
  "ledgerPage": {
   "title": "Account ledger",
   "subtitle": "One account's movements with the running balance.",

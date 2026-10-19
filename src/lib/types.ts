@@ -264,7 +264,7 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement" | "schedule"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement" | "schedule" | "accounting"
   /** R6.2 */
   | "ud" | "backup" | "access" | "import"
   /** R6.5 */
@@ -283,6 +283,8 @@ export type AuditAction =
   | "viewed" | "realised" | "backedUp" | "downloaded" | "imported"
   /** R9.1: the cheque register's lifecycle */
   | "presented" | "cleared" | "bounced"
+  /** R9.3: the close of the books */
+  | "closed"
 export interface AuditChange { field: string; from: string; to: string }
 export interface AuditEvent {
   id: string
@@ -843,6 +845,39 @@ export interface JournalRow {
   /** manual entries only — a derived entry is posted the moment its document is approved */
   process?: Process
   issuedBy?: string
+}
+
+/* ── R9.3: the statements and the close ────────────────────────────────── */
+
+/** One row of the trial balance: an account's position as of a date, presented on the side it balances. */
+export interface TrialBalanceRow { code: string; name: string; group: string; kind: GlAccount["kind"]; debit: number; credit: number }
+export interface TrialBalanceReport { asOf: string; rows: TrialBalanceRow[]; totals: { debit: number; credit: number } }
+
+/** One line of a statement: an account with its period movement, in the statement's natural sign. */
+export interface StatementLine { code: string; name: string; group: string; amount: number }
+
+/** The profit & loss: revenue less the cost groups, each line an account's movement in its natural sign. */
+export interface ProfitLossReport {
+  from: string; to: string
+  revenue: StatementLine[]; direct: StatementLine[]; operating: StatementLine[]; taxCosts: StatementLine[]
+  revenueTotal: number; directTotal: number; operatingTotal: number; taxTotal: number
+  grossProfit: number; netProfit: number
+}
+
+/** One section of the balance sheet: a group of accounts and their subtotal. */
+export interface BalanceSheetSection { group: string; rows: StatementLine[]; subtotal: number }
+export interface BalanceSheetReport {
+  asOf: string
+  assets: BalanceSheetSection[]; liabilities: BalanceSheetSection[]; equity: BalanceSheetSection[]
+  totals: { assets: number; liabilities: number; equityAccounts: number; profitBroughtForward: number; profitForPeriod: number; liabilitiesAndEquity: number }
+}
+
+/** One row of the cash flow: every posting that moved a money account, grouped by what caused it. */
+export interface CashFlowRow { kind: JournalSourceKind; label?: string; amount: number }
+export interface CashFlowReport {
+  from: string; to: string
+  rows: CashFlowRow[]
+  opening: number; netMovement: number; closing: number
 }
 
 /** An invoice that can still take a receipt / payment. */

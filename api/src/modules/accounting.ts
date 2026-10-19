@@ -34,6 +34,8 @@ import { chequeRowsOf } from "@/lib/money-ops"
 import type { AccountingSource } from "@/app/api/v1/_r4"
 import type { GlSource } from "@/lib/gl"
 import { chartOf, journalOf, ledgerOf } from "@/lib/gl"
+// R9.3: the statements are pure, so the native module reads them straight from the lib
+import { balanceSheetOf, cashFlowOf, fiscalYearStart, profitLossOf, trialBalanceOf } from "@/lib/statements"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, uniqueViolation } from "../common/http"
 import { lockState } from "../common/state-guard"
@@ -1634,5 +1636,110 @@ export class LedgerController {
     const led: GlLedger | null = ledgerOf(await glSource(), code, sp.get("from") || "1970-01-01", sp.get("to") || today())
     if (!led) throw new Problem(404, `No account ${code} in the chart`)
     res.json(led)
+  }
+}
+
+/* ═─ R9.3: the statements and the close of the books ═════════════════════ */
+
+/**
+ * R9.3 — the statements: the trial balance, the profit & loss, the balance sheet and the cash flow, each
+ * a date range over the same derived journal the chart and the register serve (see `lib/statements.ts` —
+ * nothing is stored). The close is a control action: it advances the books' cut-off, refusing a
+ * non-month-end, the future, a date already closed through, and any draft money document, transfer,
+ * journal entry or asset dated on or before it.
+ */
+@Controller("api/v1/accounting/reports/trial-balance")
+export class TrialBalanceController {
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    const r = trialBalanceOf(await glSource(), sp.get("asOf") || today())
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(r.rows, c.TRIAL_BALANCE_CSV_COLUMNS), `trial-balance-${r.asOf}.csv`)
+      return
+    }
+    res.json(r)
+  }
+}
+
+@Controller("api/v1/accounting/reports/profit-loss")
+export class ProfitLossController {
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    const from = sp.get("from") || fiscalYearStart(today())
+    const to = sp.get("to") || today()
+    const r = profitLossOf(await glSource(), from, to)
+    if (sp.get("format") === "csv") {
+      const flat = (section: string, rows: { code: string; name: string; amount: number }[]) =>
+        rows.map((l) => ({ section, code: l.code, name: l.name, amount: l.amount }))
+      sendCsv(res, toCSV([
+        ...flat("Revenue", r.revenue), ...flat("Direct costs", r.direct), ...flat("Operating expenses", r.operating), ...flat("Tax costs", r.taxCosts),
+      ], c.PROFIT_LOSS_CSV_COLUMNS), `profit-and-loss-${from}-to-${to}.csv`)
+      return
+    }
+    res.json(r)
+  }
+}
+
+@Controller("api/v1/accounting/reports/balance-sheet")
+export class BalanceSheetController {
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    const r = balanceSheetOf(await glSource(), sp.get("asOf") || today())
+    if (sp.get("format") === "csv") {
+      const flat = (side: string, sections: { rows: { code: string; name: string; group: string; amount: number }[] }[]) =>
+        sections.flatMap((x) => x.rows.map((l) => ({ side, group: l.group, code: l.code, name: l.name, amount: l.amount })))
+      sendCsv(res, toCSV([...flat("Assets", r.assets), ...flat("Liabilities", r.liabilities), ...flat("Equity", r.equity)], c.BALANCE_SHEET_CSV_COLUMNS), `balance-sheet-${r.asOf}.csv`)
+      return
+    }
+    res.json(r)
+  }
+}
+
+@Controller("api/v1/accounting/reports/cash-flow")
+export class CashFlowController {
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    const from = sp.get("from") || fiscalYearStart(today())
+    const to = sp.get("to") || today()
+    const r = cashFlowOf(await glSource(), from, to)
+    const rows = r.rows.map((x) => ({ ...x, label: c.SOURCE_KIND_LABELS[x.kind] ?? x.kind }))
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(rows.map((x) => ({ source: x.label, amount: x.amount })), c.CASH_FLOW_CSV_COLUMNS), `cash-flow-${from}-to-${to}.csv`)
+      return
+    }
+    res.json({ ...r, rows })
+  }
+}
+
+/** The close of the books: the cut-off moves, the audit trail records who moved it and why. */
+@Controller("api/v1/accounting/close")
+export class CloseController {
+  constructor(
+    @Inject(AccountingConfigService) private readonly config: AccountingConfigService,
+    @Inject(AuditService) private readonly audit: AuditService,
+  ) {}
+
+  @Post() @Authed("settings.manage")
+  async close(@Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const built = c.buildClose(jsonBody(req), await glSource())
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const before = mirror.accountingConfig().closedUpTo
+    const at = new Date().toISOString()
+    const saved = await this.config.put({ ...mirror.accountingConfig(), closedUpTo: built.fields.to, updatedAt: at, updatedBy: user.name })
+    await this.audit.record({
+      at, actor: user, entity: "accounting", ref: "Close of the books", action: "closed",
+      note: `books closed up to ${built.fields.to}${before ? ` (was ${before})` : ""}${built.fields.note ? ` — ${built.fields.note}` : ""}`,
+    })
+    res.json(saved)
   }
 }

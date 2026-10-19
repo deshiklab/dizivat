@@ -1275,6 +1275,34 @@ cannot.
   own money accounts (the same pure builder the seed runs) and starts the manual entries empty — no
   re-seed, customer data is never touched.
 
+## R9.3 — the statements and the close
+
+The ledger's read side, and the lock that ends a month. Everything R9.2 derives folds into the four
+statements a manufacturer files and reads — and the close is the one control that makes the books final.
+
+- **The statements** live in `lib/statements.ts` (pure, shared by both runtimes), each a date window over
+  the same `journalOf` fold the chart serves: the **trial balance** (every account with a position as of a
+  date, on the side it balances — the two columns agree to the poisha because every entry does), the
+  **profit & loss** (the NBR fiscal year July–June by default: revenue less direct, operating and tax cost
+  lines, each line an account's movement in its natural sign), the **balance sheet** (assets on one side,
+  liabilities and equity on the other — equity carries two computed lines, the profit brought forward and
+  the profit for the period, which is exactly what the stored equity accounts leave over, so the sheet
+  balances by construction), and the **cash flow** (every posting that moved a money account, grouped by its
+  source kind, opening + net movement = closing = the money accounts' own balances). Each exports as CSV,
+  exactly as shown.
+- **The close** (`POST /accounting/close`, `settings.manage`) moves the cut-off the config holds
+  (`accounting_config.closed_up_to`): it refuses a non-month-end, a future, or an already-closed date
+  (422), and any draft money document, transfer or journal entry dated on or before it (409, naming
+  them). After it, every dated document builder answers `dateClosed` — the same rule the money documents
+  have had since R5.6, now spoken by the whole journal. The audit trail records who closed, to where, and
+  why.
+- **The screen** is `/accounting/reports` (Statements & reports under Accounting in the nav, English and
+  Bangla): the four statements as tabs with their windows, CSV next to each. `e2e_r9.py` §14–§15 walks the
+  numbers in the browser — its keystone assertions are the trial balance agreeing with the chart's net-side
+  foot, the balance sheet balancing, the cash flow tying to the money balances, and the close's refusal and
+  success paths; `api_native.py` drills the same against PostgreSQL incl. the restart; `contract.py` carries
+  the five new rows.
+
 ## Tables
 
 | Table | Purpose |

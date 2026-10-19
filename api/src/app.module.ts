@@ -3,7 +3,7 @@ import { APP_GUARD } from "@nestjs/core"
 import { sql } from "drizzle-orm"
 import { ACCESS_LOGGER, AuthGuard, SessionService } from "./common/auth"
 import { db } from "./db/client"
-import { AccountingConfigController, AccountingConfigService, AccountTransfersController, BankStatementsController, BankStatementsService, ChartController, ChequesController, ChequeEventsService, JournalController, JournalService, LedgerController, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ReceiptsController, StatementController, TransfersService } from "./modules/accounting"
+import { AccountingConfigController, AccountingConfigService, AccountTransfersController, BalanceSheetController, BankStatementsController, BankStatementsService, CashFlowController, ChartController, ChequesController, ChequeEventsService, CloseController, JournalController, JournalService, LedgerController, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ProfitLossController, ReceiptsController, StatementController, TransfersService, TrialBalanceController } from "./modules/accounting"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
 import { ScheduleController, ScheduleService } from "./modules/schedule"
@@ -47,6 +47,8 @@ const NATIVE_CONTROLLERS = [
   AccountTransfersController, ChequesController,
   // R9.2: the general ledger — the chart, the journal register with the manual JE- documents, the account ledger
   ChartController, JournalController, LedgerController,
+  // R9.3: the statements and the close
+  TrialBalanceController, ProfitLossController, BalanceSheetController, CashFlowController, CloseController,
   // R8.3: the reminder and delivery schedule — settings, schedules, log, documents, the tick
   ScheduleController,
   StockController, ItemLedgerController, LotsController, SubcontractController,

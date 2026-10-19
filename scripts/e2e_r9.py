@@ -3,7 +3,8 @@ approve → cancel lifecycle, the balances every page derives moving with it (an
 the closed-books rule — and the cheque register: the derived rows (received / issued), the post-dated view, the
 present → clear and bounce lifecycle with its rules, the notification a bounce rings, the audit trail, CSV
 exports, role gating and Bangla. Run on a fresh server (it creates documents)."""
-import asyncio, os, re, sys
+import asyncio
+import datetime, os, re, sys
 from playwright.async_api import async_playwright, expect
 from _auth import BASE, login_ctx
 
@@ -21,6 +22,10 @@ def watch(pg, errs):
     pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
     pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" else None)
 VP = {"width": 1440, "height": 900}
+# the demo data set is authored around September 2026; the API's "today" is the runner's real clock.
+# Every derived read below pins its window to the demo's month-end; the default-date checks use the clock.
+ASOF = "2026-09-30"
+REAL_TODAY = datetime.date.today().isoformat()
 
 async def settle(pg):
     await pg.wait_for_timeout(60)
@@ -345,6 +350,94 @@ async def main():
             assert je_made and je_made["no"].startswith("JE-")
             ok("pages: chart with the trial-balance foot, journal + manual sheet, ledger, Bangla, role gating")
         except Exception as e: fail(13, e)
+
+        # ── 14. R9.3: the statements and the close ────────────────────
+        try:
+            # pinned past the seeded 09-30 accrual (dated after the demo's clock) — the chart folds the whole
+            # journal, so the tie needs an asOf that sees every entry; the default-date reads are checked below
+            tb = await jget(appr, f"/accounting/reports/trial-balance?asOf={ASOF}")
+            assert tb["rows"] and abs(tb["totals"]["debit"] - tb["totals"]["credit"]) < 0.005, tb["totals"]
+            chart = await jget(appr, "/accounting/chart")
+            foot = round(sum(max(a["debit"] - a["credit"], 0) for a in chart), 2)
+            assert abs(tb["totals"]["debit"] - foot) < 0.01, (tb["totals"], foot)  # the trial balance is the chart's net-side foot
+            tb2 = await jget(appr, "/accounting/reports/trial-balance?asOf=2025-12-31")
+            assert tb2["totals"]["debit"] < tb["totals"]["debit"] and tb2["asOf"] == "2025-12-31"
+            pl = await jget(appr, "/accounting/reports/profit-loss?from=2026-07-01&to=2026-09-25")
+            assert pl["revenueTotal"] > 0 and pl["revenue"] and pl["direct"]
+            assert abs(pl["grossProfit"] - round(pl["revenueTotal"] - pl["directTotal"], 2)) < 0.01
+            assert abs(pl["netProfit"] - round(pl["revenueTotal"] - pl["directTotal"] - pl["operatingTotal"] - pl["taxTotal"], 2)) < 0.01
+            pl_default = await jget(appr, "/accounting/reports/profit-loss")
+            # the fiscal year to date (July–June) — the mock anchors the demo to its authored day, the native
+            # serves the runner's clock, and the suite must read the same either way
+            assert pl_default["from"] == "2026-07-01" and pl_default["to"] in (TODAY, REAL_TODAY), pl_default
+            bs = await jget(appr, "/accounting/reports/balance-sheet")
+            assert abs(bs["totals"]["assets"] - bs["totals"]["liabilitiesAndEquity"]) < 0.01, bs["totals"]
+            pl30 = await jget(appr, f"/accounting/reports/profit-loss?from=2026-07-01&to={ASOF}")
+            bs30 = await jget(appr, f"/accounting/reports/balance-sheet?asOf={ASOF}")
+            assert abs(bs30["totals"]["profitForPeriod"] - pl30["netProfit"]) < 0.01, (bs30["totals"], pl30["netProfit"])
+            eq_names = [r["name"] for x in bs["equity"] for r in x["rows"]]
+            assert "Profit brought forward" in eq_names and "Profit for the period" in eq_names, eq_names
+            cf = await jget(appr, "/accounting/reports/cash-flow?from=2026-07-01&to=2026-09-25")
+            assert cf["rows"] and all("label" in r and "amount" in r for r in cf["rows"])
+            assert abs(cf["closing"] - round(cf["opening"] + cf["netMovement"], 2)) < 0.01
+            money_rows = [a for a in chart if a.get("moneyAccountId")]
+            money_total = round(sum(a["balance"] for a in money_rows), 2)
+            assert abs(cf["closing"] - money_total) < 0.01, (cf["closing"], money_total)  # ties to the money balances
+            for path in ("trial-balance", "profit-loss", "balance-sheet", "cash-flow"):
+                csv = await (await appr.request.get(API + f"/accounting/reports/{path}?format=csv")).text()
+                assert csv.lstrip("\ufeff").splitlines()[0].split(",")[0] in ("Code", "Section", "Side", "Source"), path
+            ok(f"statements: TB foot = chart foot, P&L groups, BS balances ({bs['totals']['assets']:,.0f}), CF ties to money balances, 4 CSVs")
+        except Exception as e: fail(14, e)
+
+        # ── 15. R9.3: the close of the books ──────────────────────────
+        try:
+            st, d = await post(admin, "/accounting/close", {"to": "2026-09-15"})
+            assert st == 422 and d["errors"]["to"] == ["notMonthEnd"], (st, d)
+            y, m = (datetime.date.today().year, datetime.date.today().month)
+            next_me = (datetime.date(y + (m == 12), (m % 12) + 1, 1) - datetime.timedelta(days=1)).isoformat()
+            st, d = await post(admin, "/accounting/close", {"to": next_me})
+            assert st == 422 and d["errors"]["to"] == ["future"], (st, d)
+            st, d = await post(admin, "/accounting/close", {"to": "2026-06-30"})
+            assert st == 422 and d["errors"]["to"] == ["alreadyClosed"], (st, d)
+            st, d = await post(view, "/accounting/close", {"to": "2026-07-31"})
+            assert st == 403, st
+            # a draft dated under the cut-off blocks the close, named — the drill's own July transfer
+            st, blocker = await post(appr, "/accounting/transfers", {"process": "Created", "date": "2026-07-15", "fromAccountId": "ac1", "toAccountId": "ac3", "amount": 5000, "note": "e2e: blocks the July close"})
+            assert st == 201, (st, blocker)
+            st, d = await post(admin, "/accounting/close", {"to": "2026-07-31", "note": "should not pass"})
+            assert st == 409 and blocker["no"] in d["title"], (st, d)
+            st, _ = await del_(appr, f"/accounting/transfers/{blocker['id']}")
+            assert st == 200, st
+            # July is clear now — the close passes and the audit trail records it
+            st, d = await post(admin, "/accounting/close", {"to": "2026-07-31", "note": "e2e: July close after the mid-year review"})
+            assert st == 201 and d["closedUpTo"] == "2026-07-31" and d["updatedBy"], (st, d)
+            cfg = await jget(appr, "/accounting/config")
+            assert cfg["closedUpTo"] == "2026-07-31"
+            # a closed month refuses a new document dated inside it
+            st, d = await post(appr, "/accounting/journal", {"date": "2026-07-15", "memo": "Inside a closed month", "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"})
+            assert st == 422 and d["errors"]["date"] == ["dateClosed"], (st, d)
+            aud = await jget(appr, "/audit?entity=accounting&size=5")
+            assert aud["total"] >= 1 and aud["data"][0]["action"] == "closed", aud
+            ok("close: 4 refused bodies, 409 naming the blocking drafts, July close (201) moves the cut-off, audit records it")
+        except Exception as e: fail(15, e)
+
+        # ── 16. R9.3: the reports pages and Bangla ─────────────
+        try:
+            await pg.goto(BASE + "/en/accounting/reports", wait_until="networkidle")
+            await expect(pg.get_by_role("heading", name="Statements & reports")).to_be_visible()
+            await expect(pg.get_by_text("Trial balance as of")).to_be_visible()
+            await expect(pg.locator("tbody tr").first).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/93_reports_tb.png")
+            await pg.get_by_role("button", name="Balance sheet").click()
+            await expect(pg.get_by_role("cell", name="Liabilities & equity")).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/93_reports_bs.png")
+            bn = await login_ctx(b, "admin", viewport=VP); bp = await bn.new_page(); watch(bp, errs)
+            for path in ("/bn/accounting/reports",):
+                await bp.goto(BASE + path, wait_until="networkidle"); await bp.wait_for_timeout(300)
+            await settle(bp); await bp.screenshot(path=f"{OUT}/93_bn.png")
+            await bn.close()
+            ok("pages: the reports page (TB + balance sheet tabs) in English and Bangla")
+        except Exception as e: fail(16, e)
 
         bad = [e for e in errs if "MISSING_MESSAGE" in e or "FORMATTING_ERROR" in e or e.startswith("pageerror")]
         print("console/page errors:", len(errs), errs[:6])
