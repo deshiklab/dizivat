@@ -68,33 +68,33 @@ jobs:
           npx --yes wait-on -t 60000 http-get://localhost:3000/en/login
       - name: Capture (fails on any console/page error)
         working-directory: scripts
-        run: python capture.py
+        run: bash .ci-run.sh capture.py
       - name: Visual regression (report-only on CI)
         working-directory: scripts
         continue-on-error: true
-        run: python visual.py
-      - { name: E2E — Sprint 1, working-directory: scripts, run: python e2e.py }
-      - { name: E2E — Sprint 2, working-directory: scripts, run: python e2e_s2.py }
-      - { name: API contract (279 endpoints), working-directory: scripts, run: python contract.py }
-      - { name: E2E — Sprint 3, working-directory: scripts, run: python e2e_s3.py }
-      - { name: E2E — Sprint 4, working-directory: scripts, run: python e2e_s4.py }
-      - { name: E2E — R2, working-directory: scripts, run: python e2e_r2.py }
-      - { name: E2E — R3, working-directory: scripts, run: python e2e_r3.py }
-      - { name: E2E — R4, working-directory: scripts, run: python e2e_r4.py }
-      - { name: E2E — R9, working-directory: scripts, run: python e2e_r9.py }
-      - { name: E2E — Knowledge base, working-directory: scripts, run: python e2e_kb.py }
-      - { name: E2E — Mushak 4.3 + credit line, working-directory: scripts, run: python e2e_m43.py }
-      - { name: E2E — PDF download, working-directory: scripts, run: python e2e_pdf.py }
-      - { name: E2E — R6 enlistment + RMG, working-directory: scripts, run: python e2e_r6.py }
-      - { name: E2E — R6.2 UD register + proceeds + subcontracting + backups + import + VAT officer, working-directory: scripts, run: python e2e_r62.py }
-      - { name: E2E — R6.3 RMG demo company + SD on exported inputs + UD amendments + penalty + restore drill, working-directory: scripts, run: python e2e_r63.py }
-      - { name: E2E — R6.4 bond consumption register + duty drawback, working-directory: scripts, run: python e2e_r64.py }
-      - { name: E2E — R6.5 own UD settlement + drawback claims, working-directory: scripts, run: python e2e_r65.py }
-      - { name: E2E — R6.6 export proceeds PRC file + Mushak 9.3 and 9.4, working-directory: scripts, run: python e2e_r66.py }
-      - { name: Accessibility (axe), working-directory: scripts, run: python a11y.py }
+        run: bash .ci-run.sh visual.py
+      - { name: E2E — Sprint 1, working-directory: scripts, run: bash .ci-run.sh e2e.py }
+      - { name: E2E — Sprint 2, working-directory: scripts, run: bash .ci-run.sh e2e_s2.py }
+      - { name: API contract (279 endpoints), working-directory: scripts, run: bash .ci-run.sh contract.py }
+      - { name: E2E — Sprint 3, working-directory: scripts, run: bash .ci-run.sh e2e_s3.py }
+      - { name: E2E — Sprint 4, working-directory: scripts, run: bash .ci-run.sh e2e_s4.py }
+      - { name: E2E — R2, working-directory: scripts, run: bash .ci-run.sh e2e_r2.py }
+      - { name: E2E — R3, working-directory: scripts, run: bash .ci-run.sh e2e_r3.py }
+      - { name: E2E — R4, working-directory: scripts, run: bash .ci-run.sh e2e_r4.py }
+      - { name: E2E — R9, working-directory: scripts, run: bash .ci-run.sh e2e_r9.py }
+      - { name: E2E — Knowledge base, working-directory: scripts, run: bash .ci-run.sh e2e_kb.py }
+      - { name: E2E — Mushak 4.3 + credit line, working-directory: scripts, run: bash .ci-run.sh e2e_m43.py }
+      - { name: E2E — PDF download, working-directory: scripts, run: bash .ci-run.sh e2e_pdf.py }
+      - { name: E2E — R6 enlistment + RMG, working-directory: scripts, run: bash .ci-run.sh e2e_r6.py }
+      - { name: E2E — R6.2 UD register + proceeds + subcontracting + backups + import + VAT officer, working-directory: scripts, run: bash .ci-run.sh e2e_r62.py }
+      - { name: E2E — R6.3 RMG demo company + SD on exported inputs + UD amendments + penalty + restore drill, working-directory: scripts, run: bash .ci-run.sh e2e_r63.py }
+      - { name: E2E — R6.4 bond consumption register + duty drawback, working-directory: scripts, run: bash .ci-run.sh e2e_r64.py }
+      - { name: E2E — R6.5 own UD settlement + drawback claims, working-directory: scripts, run: bash .ci-run.sh e2e_r65.py }
+      - { name: E2E — R6.6 export proceeds PRC file + Mushak 9.3 and 9.4, working-directory: scripts, run: bash .ci-run.sh e2e_r66.py }
+      - { name: Accessibility (axe), working-directory: scripts, run: bash .ci-run.sh a11y.py }
       - name: Backend — sessions + revocation + lockout + persistence across restarts + hash-chained audit + restore drill into a fresh database
         working-directory: scripts
-        run: python api_native.py
+        run: bash .ci-run.sh api_native.py
       - name: Surface the failed step's log tail in the run summary
         if: failure()
         env:

@@ -66,74 +66,74 @@ jobs:
       # Order matters: capture/visual need the untouched seed; e2e scripts mutate the mock DB.
       - name: Capture (fails on any console/page error)
         working-directory: scripts
-        run: python capture.py
+        run: bash .ci-run.sh capture.py
       # Baselines are captured in the dev container; font rasterisation on the GitHub runner differs by ~2–4 % on
       # every screen (even static ones), so here the comparison is report-only — diffs are in the test-results
       # artifact. Functional regressions are caught by the suites below. Re-baseline: `python visual.py --update`.
       - name: Visual regression (report-only on CI)
         working-directory: scripts
         continue-on-error: true
-        run: python visual.py
+        run: bash .ci-run.sh visual.py
       - name: E2E — Sprint 1
         working-directory: scripts
-        run: python e2e.py
+        run: bash .ci-run.sh e2e.py
       - name: E2E — Sprint 2 (auth, roles, edit/cancel, parties, ledger, views)
         working-directory: scripts
-        run: python e2e_s2.py
+        run: bash .ci-run.sh e2e_s2.py
       - name: API contract (auth, Page shape, problem+json, 404/409/422) — non-destructive
         working-directory: scripts
-        run: python contract.py --doc
+        run: bash .ci-run.sh contract.py --doc
       - name: E2E — Sprint 3 (users, forced password, company, tariff, audit, notifications)
         working-directory: scripts
-        run: python e2e_s3.py
+        run: bash .ci-run.sh e2e_s3.py
       - name: E2E — Sprint 4 (units, branches, transfers, damage, finished goods, record history, deferred charts)
         working-directory: scripts
-        run: python e2e_s4.py
+        run: bash .ci-run.sh e2e_s4.py
       - name: E2E — R2 (imports with duty stack, service purchases, debit notes, opening stock, master items, Mushak 6.1/6.2)
         working-directory: scripts
-        run: python e2e_r2.py
+        run: bash .ci-run.sh e2e_r2.py
       - name: E2E — R3 (exports, service sales, lots, credit notes 6.7, BOM 4.3, work orders, batches 6.4, production config)
         working-directory: scripts
-        run: python e2e_r3.py
+        run: bash .ci-run.sh e2e_r3.py
       - name: E2E — R4 (bank & wallet accounts, receipts/payments with allocation, party statements, TR-6, VDS 6.6, adjustments, 9.1 builder, period lock, compliance, 6.10)
         working-directory: scripts
-        run: python e2e_r4.py
+        run: bash .ci-run.sh e2e_r4.py
       - name: E2E — R9 (account transfers TX- with derived balances, cheque register with present/clear/bounce lifecycle)
         working-directory: scripts
-        run: python e2e_r9.py
+        run: bash .ci-run.sh e2e_r9.py
       - name: E2E — Knowledge base (help centre, search, articles en/bn, print, HTML/Markdown downloads, help menu)
         working-directory: scripts
-        run: python e2e_kb.py
+        run: bash .ci-run.sh e2e_kb.py
       - name: E2E — Mushak 4.3 register and copyright line
         working-directory: scripts
-        run: python e2e_m43.py
+        run: bash .ci-run.sh e2e_m43.py
       - name: E2E — PDF download of the statutory forms (6.3, 6.7, 6.8, 6.6, TR-6, 6.4, 4.3, 6.10, 9.1, 6.1 …)
         working-directory: scripts
-        run: python e2e_pdf.py
+        run: bash .ci-run.sh e2e_pdf.py
       - name: E2E — R6 NBR enlistment readiness + RMG (rules engine, business profile, export register, audit chain)
         working-directory: scripts
-        run: python e2e_r6.py
+        run: bash .ci-run.sh e2e_r6.py
       - name: E2E — R6.2 (UD register, export proceeds, subcontracting, Mushak 6.2.1, backups, bulk import, VAT officer)
         working-directory: scripts
-        run: python e2e_r62.py
+        run: bash .ci-run.sh e2e_r62.py
       - name: E2E — R6.3 (RMG demo company + SD on exported inputs note 40 + UD amendments and BB-LC + interest and penalty + restore drill)
         working-directory: scripts
-        run: python e2e_r63.py
+        run: bash .ci-run.sh e2e_r63.py
       - name: E2E — R6.4 (bond consumption register + BoE ageing + duty drawback + bonded imports)
         working-directory: scripts
-        run: python e2e_r64.py
+        run: bash .ci-run.sh e2e_r64.py
       - name: E2E — R6.5 (own UD settlement + duty-drawback claims)
         working-directory: scripts
-        run: python e2e_r65.py
+        run: bash .ci-run.sh e2e_r65.py
       - name: E2E — R6.6 export proceeds PRC file + Mushak 9.3 and 9.4
         working-directory: scripts
-        run: python e2e_r66.py
+        run: bash .ci-run.sh e2e_r66.py
       - name: Accessibility (axe)
         working-directory: scripts
-        run: python a11y.py
+        run: bash .ci-run.sh a11y.py
       - name: Performance budgets (LCP, CLS, JS; 4x CPU throttle)
         working-directory: scripts
-        run: python perf.py
+        run: bash .ci-run.sh perf.py
       - name: API reference is up to date
         run: git diff --exit-code docs/API.md
       - name: Surface the failed step's log tail in the run summary
