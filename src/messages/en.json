@@ -1343,7 +1343,10 @@
    "imported": "Imported",
    "presented": "Presented",
    "cleared": "Cleared",
-   "bounced": "Bounced"
+   "bounced": "Bounced",
+   "closed": "Closed the books",
+   "dispose": "Disposed of",
+   "revalue": "Revalued"
   },
   "entity": {
    "sale": "Sales invoice",
@@ -1388,7 +1391,10 @@
    "schedule": "Schedule",
    "moneyTransfer": "Account transfer",
    "cheque": "Cheque",
-   "journal": "Journal entry"
+   "journal": "Journal entry",
+   "asset": "Fixed asset",
+   "assetClass": "Asset class",
+   "accounting": "Accounting"
   },
   "facet": {
    "entity": "Record type",
