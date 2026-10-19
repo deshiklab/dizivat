@@ -36,7 +36,9 @@ const SOURCE_ROUTE: Record<JournalSourceKind, string | null> = {
   transfer: "/accounting/transfers", treasury: "/vat/tr-6",
   vdsPurchase: "/vat/vds", vdsSales: "/vat/vds",
   adjustment: "/vat/adjustments", opening: "/purchases/opening",
-  openingBalance: "/accounting/bank-accounts", manual: null,
+  openingBalance: "/accounting/bank-accounts",
+  asset: "/accounting/assets", depreciation: "/accounting/assets", revaluation: "/accounting/assets", disposal: "/accounting/assets",
+  manual: null,
 }
 
 /**
@@ -71,7 +73,9 @@ export function JournalList() {
     if (r.sourceKind === "manual") setViewId(r.id)
     else {
       const base = SOURCE_ROUTE[r.sourceKind]
-      if (base) router.push(`${base}?view=${encodeURIComponent(r.sourceId)}`)
+      // the asset postings carry the month in their source id (fa3:2026-07) — the sheet wants the asset
+      const id = r.sourceId.split(":")[0]
+      if (base) router.push(`${base}?view=${encodeURIComponent(id)}`)
     }
   }
 

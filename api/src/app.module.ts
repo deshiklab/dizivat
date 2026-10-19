@@ -3,7 +3,7 @@ import { APP_GUARD } from "@nestjs/core"
 import { sql } from "drizzle-orm"
 import { ACCESS_LOGGER, AuthGuard, SessionService } from "./common/auth"
 import { db } from "./db/client"
-import { AccountingConfigController, AccountingConfigService, AccountTransfersController, BalanceSheetController, BankStatementsController, BankStatementsService, CashFlowController, ChartController, ChequesController, ChequeEventsService, CloseController, JournalController, JournalService, LedgerController, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ProfitLossController, ReceiptsController, StatementController, TransfersService, TrialBalanceController } from "./modules/accounting"
+import { AccountingConfigController, AccountingConfigService, AccountTransfersController, AssetClassService, AssetClassesController, AssetService, AssetsController, BalanceSheetController, BankStatementsController, BankStatementsService, CashFlowController, ChartController, ChequesController, ChequeEventsService, CloseController, JournalController, JournalService, LedgerController, MoneyAccountsController, MoneyAccountsService, MoneyDocsService, OpenInvoicesController, PaymentsController, ProfitLossController, ReceiptsController, StatementController, TransfersService, TrialBalanceController } from "./modules/accounting"
 import { AuditController, AuditService } from "./modules/audit"
 import { BackupsController, BackupsService } from "./modules/backups"
 import { ScheduleController, ScheduleService } from "./modules/schedule"
@@ -47,8 +47,9 @@ const NATIVE_CONTROLLERS = [
   AccountTransfersController, ChequesController,
   // R9.2: the general ledger — the chart, the journal register with the manual JE- documents, the account ledger
   ChartController, JournalController, LedgerController,
-  // R9.3: the statements and the close
+  // R9.3/R9.4: the statements, the close, and the fixed assets
   TrialBalanceController, ProfitLossController, BalanceSheetController, CashFlowController, CloseController,
+  AssetsController, AssetClassesController,
   // R8.3: the reminder and delivery schedule — settings, schedules, log, documents, the tick
   ScheduleController,
   StockController, ItemLedgerController, LotsController, SubcontractController,
@@ -84,7 +85,7 @@ const NATIVE_CONTROLLERS = [
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
     TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService, UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
-    TransfersService, ChequeEventsService, JournalService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    TransfersService, ChequeEventsService, JournalService, AssetService, AssetClassService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
@@ -92,7 +93,7 @@ const NATIVE_CONTROLLERS = [
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
     TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService,
     UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
-    TransfersService, ChequeEventsService, JournalService,
+    TransfersService, ChequeEventsService, JournalService, AssetService, AssetClassService,
   ],
 })
 class CoreModule {}

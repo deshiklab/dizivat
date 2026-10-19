@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, BondUd, ChequeEvent, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AssetClass, AssetDisposal, AssetRevaluation, AuditEvent, Batch, Bom, BondUd, ChequeEvent, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, FixedAsset, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -49,6 +49,8 @@ interface Globals {
     moneyTransfers?: MoneyTransfer[]; chequeEvents?: ChequeEvent[]
     /** R9.2: the chart of accounts and the manual journal entries (every other posting is derived) */
     glAccounts?: GlAccount[]; journalEntries?: ManualJournalEntry[]
+    /** R9.4: the fixed assets and their classes (the depreciation is derived, never stored) */
+    assetClasses?: AssetClass[]; assets?: FixedAsset[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -80,6 +82,8 @@ export function restoreGlobals(s: {
   moneyTransfers?: MoneyTransfer[]; chequeEvents?: ChequeEvent[]
   /** R9.2: the chart and the manual journal entries (tables; a pre-R9.2 database adopts the chart defaults) */
   glAccounts?: GlAccount[]; journalEntries?: ManualJournalEntry[]
+  /** R9.4: the fixed assets and their classes (tables; a pre-R9.4 database adopts the class seed) */
+  assetClasses?: AssetClass[]; assets?: FixedAsset[]
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
@@ -117,6 +121,7 @@ export function restoreGlobals(s: {
     deliverySchedules: s.deliverySchedules ?? [], deliveryLog: s.deliveryLog ?? [],
     moneyTransfers: s.moneyTransfers ?? [], chequeEvents: s.chequeEvents ?? [],
     glAccounts: s.glAccounts ?? [], journalEntries: s.journalEntries ?? [],
+    assetClasses: s.assetClasses ?? [], assets: s.assets ?? [],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
@@ -393,6 +398,26 @@ export const mirror = {
   },
   removeJournalEntry(id: string) {
     const list = G.__dzDb!.journalEntries
+    if (!list) return
+    const i = list.findIndex((x) => x.id === id)
+    if (i >= 0) list.splice(i, 1)
+  },
+  /** R9.4: the fixed assets and their classes — the depreciation / revaluation / disposal postings fold from them */
+  assetClasses: (): AssetClass[] => G.__dzDb!.assetClasses ?? [],
+  putAssetClasses(list: AssetClass[]) { const a = mirror.assetClasses(); a.splice(0, a.length, ...list) },
+  findAssetClass: (id: string) => mirror.assetClasses().find((c) => c.id === id),
+  assets: (): FixedAsset[] => G.__dzDb!.assets ?? [],
+  putAssets(list: FixedAsset[]) { const a = mirror.assets(); a.splice(0, a.length, ...list) },
+  findAsset: (idOrNo: string) => mirror.assets().find((x) => x.id === idOrNo || x.no === idOrNo),
+  putAsset(a: FixedAsset) {
+    const list = G.__dzDb!.assets ??= []
+    const cur = list.find((x) => x.id === a.id)
+    if (cur) replaceObject(cur, a)
+    else list.push(a)
+    return cur ?? a
+  },
+  removeAsset(id: string) {
+    const list = G.__dzDb!.assets
     if (!list) return
     const i = list.findIndex((x) => x.id === id)
     if (i >= 0) list.splice(i, 1)

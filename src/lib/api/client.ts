@@ -1,5 +1,5 @@
-import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, GlAccountRow, GlLedger, JournalRow, ManualJournalEntry, AccountingConfig, BalanceSheetReport, CashFlowReport, ProfitLossReport, TrialBalanceReport, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
-import type { AccountInput, AccountingConfigInput, AdjustmentInput, ChequeActionInput, CloseInput, JournalEntryInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
+import type { TariffImportResult, BondRegister, AuditIntegrity, ExportRegister, ComplianceSummary, MoneyAccountRow, MoneyDoc, MoneyTransfer, ChequeRow, Mushak610, OpenInvoice, PartyStatement, ReturnView, SubForm, TaxPeriod, TreasuryDeposit, VatAdjustment, VatReturnRow, VatSettings, VdsEligible, VdsEntry, GlAccountRow, GlLedger, JournalRow, ManualJournalEntry, AccountingConfig, AssetClass, AssetRegisterRow, AssetSchedule, BalanceSheetReport, CashFlowReport, FixedAsset, ProfitLossReport, TrialBalanceReport, Batch, BomRow, CreditNote, Lot, ProductionConfig, SaleService, WorkOrder, AppNotification, AuditEvent, Branch, Company, Damage, DebitNote, MasterItemRow, MushakBook, OpeningEntry, ServiceType, StockRow, Transfer, UnitRow, DashboardData, Item, ItemLedger, ItemWithStock, ListParams, Page, Party, PartyRow, Purchase, Sale, SearchHit, TariffLine } from "../types"
+import type { AccountInput, AccountingConfigInput, AdjustmentInput, AssetActionInput, AssetClassInput, AssetInput, ChequeActionInput, CloseInput, JournalEntryInput, MoneyInput, MoneyTransferInput, ReturnInput, TreasuryInput, VatSettingsInput, VdsInput, BatchInput, BatchReceiveInput, BomFormInput, CreditNoteInput, ProductionConfigInput, WorkOrderInput, CompanyInput, DamageInput, DebitNoteInput, ImportInput, MasterItemInput, OpeningInput, ItemInput, PartyInput, PasswordChange, PurchaseInput, SaleInput, TransferInput, UnitInput, UserInput } from "../schemas"
 import type { Me, Preferences, SavedView, User } from "../auth/roles"
 import type { PenaltyExposure, PenaltyQuote, SdEligible } from "../types"
 import type { BackupRow, BackupStatus, BackupVerify, BankStatement, BankStatementLine, ImportEntity, ImportResult, Sale as R62Sale, StatementPlanAnswer, StatementView, SubconRegister, UdRecord, UdRegister, UdRow } from "../types"
@@ -277,6 +277,24 @@ export const api = {
       cashFlowCsvUrl: (p?: { from?: string; to?: string }) => `${BASE}/accounting/reports/cash-flow${qs({ ...p, format: "csv" })}`,
     },
     closeBooks: (b: CloseInput) => req<AccountingConfig>("/accounting/close", { method: "POST", body: JSON.stringify(b) }),
+    /** R9.4: the fixed-asset register, its schedule and its final actions */
+    assets: {
+      list: (p: ListParams) => req<ListResult<AssetRegisterRow>>(`/accounting/assets${qs(p)}`),
+      get: (id: string) => req<FixedAsset>(`/accounting/assets/${id}`),
+      create: (b: AssetInput) => req<FixedAsset>("/accounting/assets", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: AssetInput) => req<FixedAsset>(`/accounting/assets/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+      setProcess: (id: string, b: CancelBody) => req<FixedAsset>(`/accounting/assets/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+      remove: (id: string) => req<{ ok: true }>(`/accounting/assets/${id}`, { method: "DELETE" }),
+      schedule: (id: string, to?: string) => req<AssetSchedule>(`/accounting/assets/${id}/schedule${qs({ to })}`),
+      action: (id: string, b: AssetActionInput) => req<FixedAsset>(`/accounting/assets/${id}/action`, { method: "POST", body: JSON.stringify(b) }),
+      csvUrl: (p: ListParams) => `${BASE}/accounting/assets${qs({ ...p, page: undefined, size: undefined, format: "csv" })}`,
+    },
+    /** R9.4: the asset classes (settings-managed; the rates the schedules run on) */
+    assetClasses: {
+      list: () => req<AssetClass[]>(`/accounting/asset-classes`),
+      create: (b: AssetClassInput) => req<AssetClass>("/accounting/asset-classes", { method: "POST", body: JSON.stringify(b) }),
+      update: (id: string, b: AssetClassInput) => req<AssetClass>(`/accounting/asset-classes/${id}`, { method: "PUT", body: JSON.stringify(b) }),
+    },
     /** R9.1: the cheque register (read model; lifecycle actions append events) */
     cheques: {
       list: (p: ListParams) => req<ListResult<ChequeRow>>(`/accounting/cheques${qs(p)}`),

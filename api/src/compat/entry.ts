@@ -269,3 +269,12 @@ export {
 export {
   BALANCE_SHEET_CSV_COLUMNS, buildClose, CASH_FLOW_CSV_COLUMNS, PROFIT_LOSS_CSV_COLUMNS, TRIAL_BALANCE_CSV_COLUMNS,
 } from "@/app/api/v1/_r93"
+// R9.4: the fixed-asset rules, shared the same way — what an asset body may hold (a live class, a cost above its
+// salvage, an open month), the books-must-be-open approve and cancel rules, the number a new asset takes, the
+// dispose / revalue action rule (final, no undo), the class rules (a fresh name, a rate inside the schedule's
+// bounds), and the register's spec, CSV columns and diff. The assets live in `fixed_assets` and their classes in
+// `asset_classes`; the depreciation, the revaluation reserve and the disposal gain or loss fold from the rows.
+export {
+  ASSET_CSV_COLUMNS, ASSET_DIFF_FIELDS, assetActionRule, assetApproveRule, assetCancelRule, assetIdentity,
+  assetSpec, buildAsset, buildAssetClass, claimAssetId, nextClassId,
+} from "@/app/api/v1/_r94"

@@ -9,12 +9,12 @@ import { asc, eq, sql } from "drizzle-orm"
 import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AuditEvent, Batch, Bom, ChequeEvent, CreditNote, Damage, DebitNote, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
+  AccountingConfig, AssetClass, AuditEvent, Batch, Bom, ChequeEvent, CreditNote, Damage, DebitNote, FixedAsset, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
   BondUd, StockDoc, Transfer, TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder
 } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, chequeEvents, compatState, glAccounts, items, journalEntries, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, moneyTransfers, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
+import { assetClasses, auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, chequeEvents, compatState, fixedAssets, glAccounts, items, journalEntries, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, moneyTransfers, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -30,8 +30,8 @@ import { assembleSales, markSales, realisationValues, saleLineValues, saleValues
 import { assembleStockDocs, markStockDocs, stockDocValues, stockLineValues } from "./modules/stock"
 import { assembleWorkOrders, markWorkOrders, refreshWorkOrderRows, workOrderLineValues, workOrderValues } from "./modules/workorders"
 import {
-  accountingConfigValues, applyAccountingDeltas, assembleMoneyDocs, markAccountingConfig, markJournalEntries, markMoneyAccounts, markMoneyDocs, markMoneyTransfers, moneyAccountValues, moneyAllocationValues, moneyDocValues,
-  chequeEventValues, glAccountValues, journalEntryValues, moneyTransferValues, toAccountingConfig, toChequeEvent, toGlAccount, toJournalEntry, toMoneyAccount, toMoneyTransfer,
+  accountingConfigValues, applyAccountingDeltas, assetClassValues, assembleMoneyDocs, fixedAssetValues, markAccountingConfig, markFixedAssets, markJournalEntries, markMoneyAccounts, markMoneyDocs, markMoneyTransfers, moneyAccountValues, moneyAllocationValues, moneyDocValues,
+  chequeEventValues, glAccountValues, journalEntryValues, moneyTransferValues, toAccountingConfig, toAssetClass, toChequeEvent, toFixedAsset, toGlAccount, toJournalEntry, toMoneyAccount, toMoneyTransfer,
 } from "./modules/accounting"
 import {
   adjustmentValues, applyVatDocDeltas, markAdjustments, markTreasury, markVds, toAdjustment, toTreasury, toVds,
@@ -48,11 +48,13 @@ import { claimValues, markClaims, toClaim } from "./modules/claims"
 import { deliveryLogValues, reminderValues, scheduleValues, toDeliveryLog, toDeliverySchedule, toFiredReminder } from "./modules/schedule"
 import { DEFAULT_REMINDER_SETTINGS, seedDeliverySchedules } from "@/lib/mock/seed-r83"
 import { seedChart } from "@/lib/mock/seed-r92"
+import { seedAssetClasses, seedAssets } from "@/lib/mock/seed-r94"
+import { CHART_TEMPLATE } from "@/lib/gl"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
 
-export const SEED_VERSION = "r9.2"
+export const SEED_VERSION = "r9.4"
 
 /**
  * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —
@@ -161,6 +163,9 @@ async function seed(log: (m: string) => void) {
   // R9.2: the chart of accounts (the template plus the money accounts' own rows) and the manual journal entries
   const demoGlAccounts: GlAccount[] = m.db.glAccounts
   const demoJournal: ManualJournalEntry[] = m.db.journalEntries
+  // R9.4: the fixed assets and their classes — the depreciation is derived, never seeded
+  const demoAssetClasses: AssetClass[] = m.db.assetClasses
+  const demoAssets: FixedAsset[] = m.db.assets
   // R5.6: the Mushak 9.1 returns — one row per tax period, the period being its id — and the NBR settings row
   const demoReturns: VatReturn[] = m.db.returns
   const demoVatSettings: VatSettings = m.db.vatSettings
@@ -242,6 +247,9 @@ async function seed(log: (m: string) => void) {
     // R9.2: the chart and the manual entries — the derived postings are never stored (the register folds them)
     for (let i = 0; i < demoGlAccounts.length; i += 500) await tx.insert(glAccounts).values(demoGlAccounts.slice(i, i + 500).map(glAccountValues))
     for (let i = 0; i < demoJournal.length; i += 500) await tx.insert(journalEntries).values(demoJournal.slice(i, i + 500).map(journalEntryValues))
+    // R9.4: the classes and the assets — the schedules and the postings fold from these rows
+    await tx.insert(assetClasses).values(demoAssetClasses.map(assetClassValues))
+    for (let i = 0; i < demoAssets.length; i += 500) await tx.insert(fixedAssets).values(demoAssets.slice(i, i + 500).map(fixedAssetValues))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -373,6 +381,10 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   let liveGl: GlAccount[] = (await db.select().from(glAccounts).orderBy(asc(glAccounts.ord))).map(toGlAccount)
   const journalDbRows = await db.select().from(journalEntries).orderBy(asc(journalEntries.ord))
   const liveJournal: ManualJournalEntry[] = journalDbRows.filter((r) => !r.deletedAt).map(toJournalEntry)
+  // R9.4: the fixed assets and their classes; a database seeded before R9.4 has neither — the class seed and
+  // the demo's own assets are adopted below (the same pure builders the seed runs)
+  let liveAssetClasses: AssetClass[] = (await db.select().from(assetClasses).orderBy(asc(assetClasses.ord))).map(toAssetClass)
+  let liveAssets: FixedAsset[] = (await db.select().from(fixedAssets).orderBy(asc(fixedAssets.ord))).filter((r) => !r.deletedAt).map(toFixedAsset)
   const [accountingConfigRow] = await db.select().from(accountingConfig).where(eq(accountingConfig.id, 1))
   const accountingCfg: AccountingConfig = accountingConfigRow ? toAccountingConfig(accountingConfigRow) : { allowAdvance: true, autoAllocate: true }
   const liveDeposits: TreasuryDeposit[] = (await db.select().from(treasuryDeposits).orderBy(asc(treasuryDeposits.ord)))
@@ -425,6 +437,30 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     liveGl = chart
     log("adopted the R9.2 chart of accounts (the template + the money accounts' own rows)")
   }
+  // R9.4: a database seeded between R9.2 and R9.4 is missing the six rows the fixed-asset postings name —
+  // the codes are unique, so only the missing ones are inserted (idempotent)
+  const missingChartRows = CHART_TEMPLATE.filter((t) => !liveGl.some((a) => a.code === t.code))
+  if (missingChartRows.length) {
+    await db.transaction(async (tx) => {
+      await lockState(tx)
+      for (let i = 0; i < missingChartRows.length; i += 500) await tx.insert(glAccounts).values(missingChartRows.slice(i, i + 500).map(glAccountValues))
+    })
+    liveGl = [...liveGl, ...missingChartRows]
+    log(`adopted ${missingChartRows.length} R9.4 chart rows (fixed assets, depreciation, revaluation, disposals)`)
+  }
+  // R9.4: the classes and the assets — the same seed the fresh database gets
+  if (!liveAssetClasses.length) {
+    const classes = seedAssetClasses()
+    const assets = seedAssets()
+    await db.transaction(async (tx) => {
+      await lockState(tx)
+      await tx.insert(assetClasses).values(classes.map(assetClassValues))
+      for (let i = 0; i < assets.length; i += 500) await tx.insert(fixedAssets).values(assets.slice(i, i + 500).map(fixedAssetValues))
+    })
+    liveAssetClasses = classes
+    liveAssets = assets
+    log(`adopted the R9.4 fixed assets (${classes.length} NBR classes + ${assets.length} assets)`)
+  }
   const [vatSettingsDbRow] = await db.select().from(vatSettings).where(eq(vatSettings.id, 1))
   // the settings row is written by the seed and by the adoption below, so this fallback only guards a restore that
   // came from a backup older than both: the company's own zone, the one the NBR codes are filed under
@@ -462,6 +498,9 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   // …and the manual journal entries' too (`je1`, `je2`…)
   seq.journal = Math.max(seq.journal ?? 0,
     journalDbRows.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
+  // …and the fixed assets' the same way (`fa1`, `fa2`…): a disposed asset's row keeps its id forever
+  seq.asset = Math.max(seq.asset ?? liveAssets.length,
+    (await db.select().from(fixedAssets)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
   // … and the VAT documents' the same way: a deleted draft's row holds its id, so no series ever repeats
   seq.treasury = Math.max(seq.treasury ?? liveDeposits.length,
     (await db.select().from(treasuryDeposits)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
@@ -524,6 +563,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     deliverySchedules: liveSchedules, deliveryLog: liveDeliveryLog,
     moneyTransfers: liveTransfers, chequeEvents: liveChequeEvents,
     glAccounts: liveGl, journalEntries: liveJournal,
+    assetClasses: liveAssetClasses, assets: liveAssets,
   })
   loadCompat()
   markParties([...mirror.parties("customer"), ...mirror.parties("vendor")])
@@ -545,6 +585,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   markMoneyDocs(mirror.moneyDocs())
   markMoneyTransfers(mirror.moneyTransfers())
   markJournalEntries(mirror.journalEntries())
+  markFixedAssets(mirror.assets())
   markAccountingConfig()
   markTreasury(mirror.treasury())
   markVds(mirror.vds())
@@ -559,7 +600,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   markVatSettings()
   markPersisted(events)
   await dropCompatState(log)
-  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${livePrcBatches.length} PRC batches, ${liveDrawbackClaims.length} drawback claims, ${liveTransfers.length} account transfers, ${liveChequeEvents.length} cheque events, ${liveGl.length} chart accounts, ${liveJournal.length} manual journal entries, ${events.length} audit events (${Date.now() - t0} ms)`)
+  log(`restored from PostgreSQL: ${list.length} users, ${customers.length + vendors.length} parties, ${itemRows.length} items, ${masterRows.length} master items, ${stockRows.length} stock documents, ${liveSales.length} sales invoices, ${livePurchases.length} purchases, ${allNotes.length} credit/debit notes, ${liveOpenings.length} opening entries, ${liveBatches.length} production batches, ${liveBoms.length} price declarations, ${liveWorkOrders.length} work orders, ${liveMoney.length} receipts and payments, ${liveDeposits.length} treasury deposits, ${liveCertificates.length} VDS entries, ${liveAdjustments.length} VAT adjustments, ${liveReturns.length} tax returns, ${liveUds.length} UDs, ${liveBondUds.length} own UDs, ${liveLateFilings.length} late-filing applications, ${liveReturnAmendments.length} return amendments, ${livePrcBatches.length} PRC batches, ${liveDrawbackClaims.length} drawback claims, ${liveTransfers.length} account transfers, ${liveChequeEvents.length} cheque events, ${liveGl.length} chart accounts, ${liveJournal.length} manual journal entries, ${liveAssets.length} fixed assets, ${events.length} audit events (${Date.now() - t0} ms)`)
 }
 
 /** The collections R5.2, R5.3, R5.4 and R5.5 moved out of `compat_state` into their own tables. */

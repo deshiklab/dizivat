@@ -7,12 +7,12 @@ import { api } from "@/lib/api/client"
 import { PurchaseForm } from "./purchase-form"
 import { ImportForm } from "./import-form"
 
-/** /purchases/new (goods) · ?type=import (Bill of Entry) — /purchases/services/new renders the service variant. */
-export function PurchaseNew({ category }: { category?: "service" } = {}) {
+/** /purchases/new (goods) · ?type=import (Bill of Entry) — /purchases/services/new and /purchases/capital/new render the variants. */
+export function PurchaseNew({ category }: { category?: "service" | "capital" } = {}) {
   const sp = useSearchParams()
   const isImport = !category && sp.get("type") === "import"
   return (
-    <RequirePerm perm="doc.create" back={category ? "/purchases/services" : "/purchases"}>
+    <RequirePerm perm="doc.create" back={category === "service" ? "/purchases/services" : "/purchases"}>
       {isImport ? <ImportForm /> : <PurchaseForm category={category} key={category ?? "goods"} />}
     </RequirePerm>
   )

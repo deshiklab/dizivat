@@ -1,4 +1,4 @@
-import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, ChequeEvent, GlAccount, ManualJournalEntry, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, AssetClass, ChequeEvent, FixedAsset, GlAccount, ManualJournalEntry, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -15,6 +15,7 @@ import { seedLateFilings, seedPrcBatches, seedReturnAmendments } from "./seed-r6
 import { DEFAULT_REMINDER_SETTINGS, seedDeliveryLog, seedDeliverySchedules } from "./seed-r83"
 import { seedChequeEvents, seedTransfers } from "./seed-r91"
 import { seedChart, seedJournal } from "./seed-r92"
+import { seedAssetClasses, seedAssets } from "./seed-r94"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -25,7 +26,7 @@ export interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number; journal: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number; journal: number; asset: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -48,6 +49,8 @@ export interface DB {
   moneyTransfers: MoneyTransfer[]; chequeEvents: ChequeEvent[]
   /** R9.2: the chart of accounts and the manual journal entries (the derived postings are never stored) */
   glAccounts: GlAccount[]; journalEntries: ManualJournalEntry[]
+  /** R9.4: the fixed assets and their classes — the depreciation / revaluation / disposal postings fold from them */
+  assetClasses: AssetClass[]; assets: FixedAsset[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -160,13 +163,14 @@ function init(): DB {
     deliverySchedules: seedDeliverySchedules(), deliveryLog: [],
     moneyTransfers: [], chequeEvents: [],
     glAccounts: [], journalEntries: [],
+    assetClasses: seedAssetClasses(), assets: seedAssets(),
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
       account: r4.moneyAccounts.length, receipt: r4.moneyDocs.filter((x) => x.kind === "receipt").length, payment: r4.moneyDocs.filter((x) => x.kind === "payment").length,
       treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length, bondUd: bondUds.length, claim: drawbackClaims.length,
       prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length, statement: 0,
-      moneyTransfer: 0, cheque: 0, journal: 0,
+      moneyTransfer: 0, cheque: 0, journal: 0, asset: 8,
     },
   }
   // the seeded log row's figures come from the seeded books themselves, so both runtimes seed the same document
@@ -180,6 +184,8 @@ function init(): DB {
   world.glAccounts = seedChart(world)
   world.journalEntries = seedJournal(world)
   world.seq.journal = world.journalEntries.length
+  // R9.4: the fixed assets (the classes are constants; the depreciation is derived, never seeded)
+  world.seq.asset = world.assets.length
   return world
 }
 

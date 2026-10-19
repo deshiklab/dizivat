@@ -68,6 +68,7 @@ export const SOURCE_KIND_LABELS: Record<string, string> = {
   receipt: "Receipt", payment: "Payment", transfer: "Transfer", treasury: "TR-6 challan",
   vdsPurchase: "VDS purchase (6.3)", vdsSales: "VDS sales (6.6)", adjustment: "VAT adjustment",
   opening: "Opening entry", openingBalance: "Opening balance", manual: "Manual entry",
+  asset: "Asset acquisition", depreciation: "Depreciation", revaluation: "Revaluation", disposal: "Asset disposal",
 }
 
 /** The register rows: every posting (derived and manual) as one row per entry, with the accounts it touches. */

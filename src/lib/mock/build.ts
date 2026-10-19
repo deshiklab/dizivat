@@ -93,7 +93,7 @@ export function buildPurchaseFields(d: PurchaseData | ImportData, v: Party) {
     tti: round2(lines.reduce((a, l) => a + (l.tti ?? 0), 0)),
     rebate: round2(lines.filter((l) => l.rebateable).reduce((a, l) => a + l.vat + (l.duty?.at ?? 0), 0)),
     paid, due: round2(t.netTotal - paid), issuedBy: d.issuedBy, designation: d.designation, narration: d.narration,
-    ...(service ? { category: "service" as const } : {}),
+    ...(service ? { category: "service" as const } : d.category === "capital" ? { category: "capital" as const } : {}),
     ...(imp ? { boe: { no: d.challanNo, date: d.challanDate, ...imp.boe, cnfFirm: imp.boe.cnfFirm || undefined, receiveAddress: imp.boe.receiveAddress || undefined, bonded: imp.boe.bonded || undefined, udNo: (imp.boe.bonded && imp.boe.udNo?.trim().toUpperCase()) || undefined } } : {}),
     ...branchFields(d.branchId),
   } satisfies Partial<Purchase>

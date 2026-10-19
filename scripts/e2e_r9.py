@@ -375,6 +375,8 @@ async def main():
             pl30 = await jget(appr, f"/accounting/reports/profit-loss?from=2026-07-01&to={ASOF}")
             bs30 = await jget(appr, f"/accounting/reports/balance-sheet?asOf={ASOF}")
             assert abs(bs30["totals"]["profitForPeriod"] - pl30["netProfit"]) < 0.01, (bs30["totals"], pl30["netProfit"])
+            fixed = next(x for x in bs["assets"] if x["group"] == "Fixed assets")
+            assert any(r["code"] == "1500" for r in fixed["rows"]) and any(r["code"] == "1510" for r in fixed["rows"])
             eq_names = [r["name"] for x in bs["equity"] for r in x["rows"]]
             assert "Profit brought forward" in eq_names and "Profit for the period" in eq_names, eq_names
             cf = await jget(appr, "/accounting/reports/cash-flow?from=2026-07-01&to=2026-09-25")
@@ -421,7 +423,131 @@ async def main():
             ok("close: 4 refused bodies, 409 naming the blocking drafts, July close (201) moves the cut-off, audit records it")
         except Exception as e: fail(15, e)
 
-        # ── 16. R9.3: the reports pages and Bangla ─────────────
+        # ── 16. R9.4: the register and the seeded assets ──────────────
+        try:
+            reg = await jget(appr, f"/accounting/assets?size=50&asOf={ASOF}")
+            assert reg["total"] >= 8, reg["total"]
+            rows = {r["no"]: r for r in reg["data"]}
+            bld = rows["AS-07250001"]  # the factory building: 12 × 350,000, revalued to 45,000,000, then 3 × 375,000
+            assert bld["className"] == "Factory building" and bld["rate"] == 10 and bld["cost"] == 42_000_000
+            assert bld["accumDep"] == 5_325_000 and bld["nbv"] == 43_875_000 and bld["monthly"] == 375_000, bld
+            sew = rows["AS-07250002"]
+            assert sew["accumDep"] == 3_468_750 and sew["inputVat"] == 2_775_000 and sew["creditable"] is True
+            draft = rows["AS-09260002"]
+            assert draft["status"] == "Draft" and draft["accumDep"] == 0 and draft["nbv"] == draft["cost"] and draft["monthly"] == 0, draft
+            disp = rows["AS-07250003"]
+            assert disp["status"] == "Disposed" and disp["disposalProceeds"] == 3_550_000 and disp["gainLoss"] == 32_500 and disp["monthly"] == 0, disp
+            sedan = rows["AS-11250001"]
+            assert sedan["creditable"] is False  # VAT Act 2012 s.46(2)(a): no input credit on a passenger vehicle
+            assert reg["totals"]["cost"] == sum(r["cost"] for r in reg["data"]) and "class" in reg["facets"]
+            csv = await (await appr.request.get(API + "/accounting/assets?format=csv&size=5")).text()
+            assert csv.lstrip("\ufeff").splitlines()[0].startswith("Commissioned,Asset,Name"), csv[:60]
+            ok("register: the seeded assets with derived accum / NBV (building 43,875,000, disposal gain 32,500), facets, CSV")
+        except Exception as e: fail(16, e)
+
+        # ── 17. R9.4: the schedule, and the derived postings ──────────
+        try:
+            bld = (await jget(appr, f"/accounting/assets?q=Gazuria&asOf={ASOF}"))["data"][0]
+            sched = await jget(appr, f"/accounting/assets/{bld['id']}/schedule?to={ASOF}")
+            assert sched["rows"][0]["month"] == "2025-07" and sched["rows"][0]["depreciation"] == 350_000
+            reval = next(r for r in sched["rows"] if r.get("event") == "revalued")
+            assert reval["month"] == "2026-07" and reval["nbv"] == 45_000_000, reval
+            assert sched["totals"]["depreciation"] == 5_325_000 and sched["rows"][-1]["month"] == "2026-09"
+            half = await jget(appr, f"/accounting/assets/{bld['id']}/schedule?to=2026-06-30")
+            assert half["totals"]["depreciation"] == 4_200_000 and not any(r.get("event") for r in half["rows"])
+            # the derived postings: 1510 (a credit-balance contra) carries the active fleet's accumulation —
+            # the disposed machine's was reversed by its own sale entry
+            reg = await jget(appr, f"/accounting/assets?size=100&asOf={ASOF}")
+            accum_total = round(sum(r["accumDep"] for r in reg["data"] if r["status"] == "Active"), 2)
+            led = await jget(appr, f"/accounting/ledger?account=1510&to={ASOF}")
+            assert abs(led["closing"] + accum_total) < 0.01, (led["closing"], accum_total)
+            reserve = await jget(appr, f"/accounting/ledger?account=3950&to={ASOF}")
+            assert abs(reserve["closing"] - 7_200_000) < 0.01, reserve["closing"]  # the building's revaluation surplus
+            gain = await jget(appr, f"/accounting/ledger?account=4310&to={ASOF}")
+            assert abs(gain["closing"] - 32_500) < 0.01, gain["closing"]  # the embroidery machine's disposal
+            dep = await jget(appr, f"/accounting/journal?source=depreciation&size=500&to={ASOF}")
+            assert dep["total"] >= 80 and all(r["sourceNo"].startswith("AS-") for r in dep["data"]), dep["total"]
+            r404 = await appr.request.get(API + "/accounting/assets/nope/schedule")
+            assert r404.status == 404
+            ok("schedule: month walk with the revaluation month, ?to window, 1510 = register accum, 3950 = 7,200,000, 4310 = 32,500")
+        except Exception as e: fail(17, e)
+
+        # ── 18. R9.4: the lifecycle — draft, approve, dispose, revalue ─
+        try:
+            st, made = await post(appr, "/accounting/assets", {"name": "E2E boiler house pump", "classId": "plant", "date": "2026-09-22", "cost": 500_000, "salvage": 50_000, "memo": "e2e", "process": "Created"})
+            assert st == 201 and made["process"] == "Created" and made["no"].startswith("AS-09"), (st, made)
+            assert (await jget(appr, f"/accounting/journal?q=E2E boiler house pump&to={ASOF}"))["total"] == 0  # a draft posts nothing
+            st, d = await post(appr, "/accounting/assets", {"name": "Salvage above cost", "classId": "plant", "date": "2026-09-22", "cost": 100, "salvage": 200, "process": "Created"})
+            assert st == 422 and d["errors"]["salvage"] == ["belowCost"], (st, d)
+            st, d = await post(appr, "/accounting/assets", {"name": "No such class", "classId": "nope", "date": "2026-09-22", "cost": 100, "process": "Created"})
+            assert st == 422 and d["errors"]["classId"] == ["unknownClass"], (st, d)
+            st, d = await post(appr, "/accounting/assets", {"name": "From the future", "classId": "plant", "date": "2026-10-05", "cost": 100, "process": "Created"})
+            assert st == 422 and d["errors"]["date"] == ["future"], (st, d)
+            st, d = await post(appr, "/accounting/assets", {"name": "Inside a closed month", "classId": "plant", "date": "2026-07-15", "cost": 100, "process": "Created"})
+            assert st == 422 and d["errors"]["date"] == ["dateClosed"], (st, d)
+            st, d = await put(appr, f"/accounting/assets/{made['id']}", {"name": "E2E boiler house pump", "classId": "plant", "date": "2026-09-22", "cost": 520_000, "salvage": 50_000, "process": "Created"})
+            assert st == 200 and d["cost"] == 520_000, (st, d)
+            st, d = await patch(appr, f"/accounting/assets/{made['id']}", {"process": "Approved"})
+            assert st == 200 and d["process"] == "Approved"
+            posted = await jget(appr, f"/accounting/journal?q=E2E boiler house pump&to={ASOF}")
+            assert posted["total"] == 2, posted["total"]  # the acquisition + the first month's depreciation
+            acq = next(r for r in posted["data"] if r["sourceKind"] == "asset")
+            assert acq["debit"] == 520_000 and "1500" in acq["accounts"] and "3910" in acq["accounts"]
+            st, _ = await put(appr, f"/accounting/assets/{made['id']}", {"name": "x", "classId": "plant", "date": "2026-09-22", "cost": 1, "process": "Created"})
+            assert st == 409, st  # only drafts edit
+            st, _ = await post(appr, f"/accounting/assets/{made['id']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1000, "reason": "Not commissioned yet"})
+            assert st == 422, st  # before its commissioning date
+            st, d = await patch(appr, f"/accounting/assets/{made['id']}", {"process": "Cancelled", "reason": "e2e: wrong pump, redoing"})
+            assert st == 200 and d["process"] == "Cancelled"
+            assert (await jget(appr, f"/accounting/journal?q=E2E boiler house pump&to={ASOF}"))["total"] == 0  # cancelled posts nothing
+            # a second life: dispose one, revalue another
+            st, two = await post(appr, "/accounting/assets", {"name": "E2E panel van", "classId": "vehicle", "date": "2026-08-01", "cost": 240_000, "process": "Approved"})
+            assert st == 201 and two["process"] == "Approved", (st, two)
+            st, three = await post(appr, "/accounting/assets", {"name": "E2E design studio fitout", "classId": "equipment", "date": "2026-08-05", "cost": 1_200_000, "process": "Approved"})
+            assert st == 201, st
+            st, d = await post(appr, f"/accounting/assets/{two['id']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 250_000, "reason": "e2e: upgraded to a larger van"})
+            assert st == 201 and d["disposal"]["proceeds"] == 250_000, (st, d)
+            row = next(r for r in (await jget(appr, f"/accounting/assets?q=panel van&asOf={ASOF}"))["data"])
+            assert row["status"] == "Disposed" and row["gainLoss"] == 12_000, row  # 250,000 − (240,000 − 1 × 2,000 dep; the sale month charges nothing) = 12,000
+            st, _ = await post(appr, f"/accounting/assets/{two['id']}/action", {"action": "dispose", "date": "2026-09-21", "proceeds": 1, "reason": "Twice is once too often"})
+            assert st == 409, st
+            st, _ = await patch(appr, f"/accounting/assets/{two['id']}", {"process": "Cancelled", "reason": "A disposed asset stays as history"})
+            assert st == 409, st
+            st, d = await post(appr, f"/accounting/assets/{three['id']}/action", {"action": "revalue", "date": "2026-09-24", "toValue": 1_300_000, "reason": "e2e: valuer's report — fitout rates moved up"})
+            assert st == 201 and d["revaluations"] and d["revaluations"][0]["toValue"] == 1_300_000, (st, d)
+            row = next(r for r in (await jget(appr, f"/accounting/assets?q=fitout&asOf={ASOF}"))["data"])
+            assert abs(row["nbv"] - 1_289_166.67) < 0.01 and abs(row["accumDep"] - 20_833.33) < 0.01, row
+            # 10,000 for August, then 1,300,000 × 10% / 12 in the revaluation's month — the accum keeps counting
+            st, _ = await post(appr, f"/accounting/assets/{three['id']}/action", {"action": "revalue", "date": "2026-09-25", "toValue": 1_100_000, "reason": "One revaluation a month is plenty"})
+            assert st == 409, st
+            aud = await jget(appr, "/audit?entity=asset&size=10")
+            assert aud["total"] >= 5, aud["total"]
+            ok("lifecycle: draft→approve (acquisition + first depreciation), cancel, disposal gain 12,000, revaluation re-base, rules, audit")
+        except Exception as e: fail(18, e)
+
+        # ── 19. R9.4: capital purchases and the classes ───────────────
+        try:
+            item = (await jget(appr, "/items?size=1"))["data"][0]
+            st, cap = await post(appr, "/purchases", {"vendorId": "v6", "issueDate": "2026-09-24", "challanNo": "E2E-CAP-1", "challanDate": "2026-09-24", "method": "Bank", "category": "capital", "discount": 0, "paid": 0, "issuedBy": "E2E", "designation": "E2E", "narration": "e2e capital purchase", "process": "Approved",
+                                                      "lines": [{"itemId": item["id"], "qty": 1, "price": 800_000, "sdRate": 0, "vatRate": 15}]})
+            assert st == 201 and cap["process"] == "Approved" and cap["category"] == "capital", (st, cap)
+            st_before = await jget(appr, f"/items/{item['id']}/ledger")  # the item's stock ledger
+            jr = await jget(appr, f"/accounting/journal?q={cap['invoiceNo']}&to={ASOF}")
+            assert jr["total"] == 1 and "1500" in jr["data"][0]["accounts"], jr["data"][0]["accounts"]  # the cost posted to fixed assets
+            st_after = await jget(appr, f"/items/{item['id']}/ledger")
+            assert st_before["closing"] == st_after["closing"], (st_before["closing"], st_after["closing"])  # a capital purchase moves no stock
+            st, d = await post(admin, "/accounting/asset-classes", {"name": "Plant and machinery (factory)", "rate": 20})
+            assert st == 409, st  # a duplicate name (settings.manage — the approver never gets there)
+            st, cls = await post(admin, "/accounting/asset-classes", {"name": "Laboratory equipment", "rate": 20, "note": "e2e"})
+            assert st == 201 and cls["id"].startswith("acl"), (st, cls)
+            st, cls2 = await put(admin, f"/accounting/asset-classes/{cls['id']}", {"name": "Laboratory equipment", "rate": 15, "note": "e2e"})
+            assert st == 200 and cls2["rate"] == 15, (st, cls2)
+            classes = await jget(appr, "/accounting/asset-classes")
+            assert len(classes) >= 9 and any(c["rate"] == 25 for c in classes)  # the NBR classes + ours
+            ok("capital purchase: cost → 1500, no stock movement, input VAT as usual; classes: duplicate 409, create, edit")
+        except Exception as e: fail(19, e)
+
+        # ── 20. R9.3/R9.4: the pages, Bangla, role gating ─────────────
         try:
             await pg.goto(BASE + "/en/accounting/reports", wait_until="networkidle")
             await expect(pg.get_by_role("heading", name="Statements & reports")).to_be_visible()
@@ -431,13 +557,24 @@ async def main():
             await pg.get_by_role("button", name="Balance sheet").click()
             await expect(pg.get_by_role("cell", name="Liabilities & equity")).to_be_visible()
             await settle(pg); await pg.screenshot(path=f"{OUT}/93_reports_bs.png")
+            await pg.goto(BASE + "/en/accounting/assets", wait_until="networkidle")
+            await expect(pg.get_by_role("heading", name="Fixed assets")).to_be_visible()
+            await expect(pg.get_by_text("AS-07250001").first).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/94_assets.png")
+            one = (await jget(appr, "/accounting/assets?q=Gazuria"))["data"][0]
+            await pg.goto(BASE + f"/en/accounting/assets?view={one['id']}", wait_until="networkidle")
+            await expect(pg.get_by_text("Depreciation schedule")).to_be_visible()
+            await expect(pg.locator("tbody tr").first).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/94_asset_sheet.png")
             bn = await login_ctx(b, "admin", viewport=VP); bp = await bn.new_page(); watch(bp, errs)
-            for path in ("/bn/accounting/reports",):
+            for path in ("/bn/accounting/reports", "/bn/accounting/assets"):
                 await bp.goto(BASE + path, wait_until="networkidle"); await bp.wait_for_timeout(300)
-            await settle(bp); await bp.screenshot(path=f"{OUT}/93_bn.png")
+            await settle(bp); await bp.screenshot(path=f"{OUT}/94_bn.png")
             await bn.close()
-            ok("pages: the reports page (TB + balance sheet tabs) in English and Bangla")
-        except Exception as e: fail(16, e)
+            st, _ = await post(view, "/accounting/assets", {"name": "Viewer may not", "classId": "plant", "date": TODAY, "cost": 100, "process": "Created"})
+            assert st == 403, st
+            ok("pages: reports (TB + balance sheet tabs), assets register + schedule sheet, Bangla, role gating")
+        except Exception as e: fail(20, e)
 
         bad = [e for e in errs if "MISSING_MESSAGE" in e or "FORMATTING_ERROR" in e or e.startswith("pageerror")]
         print("console/page errors:", len(errs), errs[:6])

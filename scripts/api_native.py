@@ -5714,6 +5714,116 @@ def run():
         check(aud93["total"] >= 1 and aud93["data"][0]["action"] == "closed",
               "……the audit trail records the close (entity accounting, action closed)")
 
+        # ── R9.4: the fixed assets ────────────────────────────────────────────────────────────────
+        print("\nR9.4: the fixed assets, their classes, their derived postings")
+        # e2e_r9 runs before this suite in CI and adds its own — the seeded eight are the floor (the register
+        # checks below pin the seeded rows themselves, by number)
+        check(int(psql("select count(*) from asset_classes")) >= 8 and int(psql("select count(*) from fixed_assets where deleted_at is null")) >= 8,
+              "the seeded classes (8 NBR rates) and assets (8 rows) are in their tables")
+        reg = admin.get(f"{BASE}/accounting/assets", params={"size": 50, "asOf": "2026-09-30"}).json()
+        rows94 = {r_["no"]: r_ for r_ in reg["data"]}
+        check(rows94["AS-07250001"]["accumDep"] == 5325000 and rows94["AS-07250001"]["nbv"] == 43875000,
+              "the register serves the derived schedule: the building 4,387,500 NBV after its revaluation")
+        check(rows94["AS-07250003"]["status"] == "Disposed" and rows94["AS-07250003"]["gainLoss"] == 32500,
+              "…the disposed machine carries its 32,500 gain — derived, never stored")
+        check(rows94["AS-09260002"]["status"] == "Draft" and rows94["AS-09260002"]["accumDep"] == 0,
+              "…and the draft posts nothing")
+        bld_id = rows94["AS-07250001"]["id"]
+        sched = admin.get(f"{BASE}/accounting/assets/{bld_id}/schedule", params={"to": "2026-09-30"}).json()
+        reval_row = next(r_ for r_ in sched["rows"] if r_.get("event") == "revalued")
+        check(reval_row["month"] == "2026-07" and reval_row["nbv"] == 45000000 and sched["totals"]["depreciation"] == 5325000,
+              "the schedule walks month by month with the revaluation month marked")
+        sched_h = admin.get(f"{BASE}/accounting/assets/{bld_id}/schedule", params={"to": "2026-06-30"}).json()
+        check(sched_h["totals"]["depreciation"] == 4200000, "…and ?to= reads the walk as it stood then (4,200,000 by June)")
+        # the derived postings: 1510 (a credit-balance contra) carries the ACTIVE fleet's accumulation — the
+        # disposed machine's was reversed by its own sale entry; 3950 the revaluation surplus; 4310 the disposal gain
+        accum_total = round(sum(r_["accumDep"] for r_ in reg["data"] if r_["status"] == "Active"), 2)
+        gains_total = round(sum(r_["gainLoss"] for r_ in reg["data"] if r_.get("gainLoss", 0) > 0), 2)
+        reserve_before = admin.get(f"{BASE}/accounting/ledger", params={"account": "3950", "to": "2026-09-30"}).json()["closing"]
+        for code, want in (("1510", -accum_total), ("4310", gains_total)):
+            led = admin.get(f"{BASE}/accounting/ledger", params={"account": code, "to": "2026-09-30"}).json()
+            check(abs(led["closing"] - want) < 0.01, f"account {code}'s ledger closes at {abs(want):,.0f} — the postings fold from the rows")
+        check(reserve_before >= 7200000 - 0.01,
+              "…and the revaluation reserve carries at least the building's seeded 7,200,000 surplus")
+        # the write side: an asset document with its own lifecycle
+        r = admin.post(f"{BASE}/accounting/assets", json={"name": f"R94 native drill {TAG}: compressor",
+                                                          "classId": "plant", "date": "2026-09-22", "cost": 500000, "salvage": 50000,
+                                                          "memo": "native drill", "process": "Approved"})
+        check(r.status_code == 201 and r.json()["no"].startswith("AS-") and r.json()["process"] == "Approved",
+              "an asset is created and approved in one step")
+        fa_id = r.json()["id"]
+        check(psql(f"select count(*) from fixed_assets where id = '{fa_id}' and process = 'Approved'") == "1",
+              "…its row is in the table")
+        found = admin.get(f"{BASE}/accounting/journal", params={"q": f"R94 native drill {TAG}", "to": "2026-09-30"}).json()
+        check(found["total"] == 2 and any(r_["sourceKind"] == "asset" for r_ in found["data"]),
+              "……the acquisition (Dr 1500 / Cr 3910) and the first month's depreciation post on approval")
+        r = admin.post(f"{BASE}/accounting/assets/{fa_id}/action",
+                       json={"action": "dispose", "date": "2026-09-24", "proceeds": 480000, "reason": f"native drill {TAG}: upgraded"})
+        check(r.status_code == 201 and r.json()["disposal"]["proceeds"] == 480000
+              and psql(f"select disposal is not null from fixed_assets where id = '{fa_id}'") == "t",
+              "a disposal is final — the reason and proceeds ride as jsonb on the row")
+        row94 = next(r_ for r_ in admin.get(f"{BASE}/accounting/assets", params={"q": f"R94 native drill {TAG}", "asOf": "2026-09-30"}).json()["data"])
+        check(row94["status"] == "Disposed" and row94["gainLoss"] == -20000,
+              "…sold in its commissioning month, so no depreciation: 480,000 proceeds − 500,000 cost = a 20,000 loss")
+        r = admin.post(f"{BASE}/accounting/assets/{fa_id}/action",
+                       json={"action": "dispose", "date": "2026-09-25", "proceeds": 1, "reason": "twice is once too often"})
+        check(r.status_code == 409, "…a disposed asset is never disposed again (409)")
+        r = admin.post(f"{BASE}/accounting/assets", json={"name": "salvage above cost", "classId": "plant",
+                                                          "date": "2026-09-22", "cost": 100, "salvage": 200, "process": "Created"})
+        check(r.status_code == 422, "…and a salvage above the cost is refused (422)")
+        # revaluation re-bases the walk; the reserve carries the difference
+        r = admin.post(f"{BASE}/accounting/assets", json={"name": f"R94 native drill {TAG}: weir pump",
+                                                          "classId": "equipment", "date": "2026-08-01", "cost": 900000, "process": "Approved"})
+        wp_id = r.json()["id"]
+        r = admin.post(f"{BASE}/accounting/assets/{wp_id}/action",
+                       json={"action": "revalue", "date": "2026-09-24", "toValue": 1000000, "reason": f"native drill {TAG}: valuer's report"})
+        check(r.status_code == 201 and json.loads(psql(f"select revaluations::text from fixed_assets where id = '{wp_id}'"))[0]["toValue"] == 1000000,
+              "a revaluation appends to the row's revaluations jsonb")
+        row94 = next(r_ for r_ in admin.get(f"{BASE}/accounting/assets", params={"q": "weir pump", "asOf": "2026-09-30"}).json()["data"])
+        check(abs(row94["nbv"] - 991666.67) < 0.01 and abs(row94["accumDep"] - 15833.33) < 0.01,
+              "…7,500 (Aug) then 8,333.33 on the re-valued 1,000,000 — the accum keeps counting, the NBV re-bases")
+        led = admin.get(f"{BASE}/accounting/ledger", params={"account": "3950", "to": "2026-09-30"}).json()
+        check(abs(led["closing"] - (reserve_before + 107500)) < 0.01,
+              "……and the revaluation reserve grew by exactly the pump's 107,500 surplus")
+        # capital purchases post their cost to fixed assets and move no stock
+        item_id = admin.get(f"{BASE}/items", params={"size": 1}).json()["data"][0]["id"]
+        r = admin.post(f"{BASE}/purchases", json={"vendorId": "v6", "issueDate": "2026-09-24", "challanNo": f"R94-{TAG}", "challanDate": "2026-09-24",
+                                                  "method": "Bank", "category": "capital", "discount": 0, "paid": 0, "issuedBy": "drill", "designation": "drill",
+                                                  "narration": "native drill capital", "process": "Approved",
+                                                  "lines": [{"itemId": item_id, "qty": 1, "price": 700000, "sdRate": 0, "vatRate": 15}]})
+        check(r.status_code == 201 and psql(f"select category from purchases where id = '{r.json()['id']}'") == "capital",
+              "a capital purchase stores its category on the row (the widened check constraint holds)")
+        jr_cap = admin.get(f"{BASE}/accounting/journal", params={"q": r.json()["invoiceNo"], "to": "2026-09-30"}).json()
+        check(jr_cap["total"] == 1 and "1500" in jr_cap["data"][0]["accounts"],
+              "……its cost posts to Fixed assets at cost (1500), not inventory")
+        # the classes: settings-managed, unique by name, a rate change re-runs every schedule that names it
+        r = admin.post(f"{BASE}/accounting/asset-classes", json={"name": "Plant and machinery (factory)", "rate": 20})
+        check(r.status_code == 409, "a class refuses a duplicate name (409)")
+        r = admin.post(f"{BASE}/accounting/asset-classes", json={"name": f"R94 drill class {TAG}", "rate": 20})
+        cls_id = r.json()["id"]
+        check(r.status_code == 201 and cls_id.startswith("acl") and psql(f"select rate from asset_classes where id = '{cls_id}'") == "20.00",
+              "a new class is a row with its NBR rate")
+        r = admin.put(f"{BASE}/accounting/asset-classes/{cls_id}", json={"name": f"R94 drill class {TAG}", "rate": 15})
+        check(r.status_code == 200 and psql(f"select rate from asset_classes where id = '{cls_id}'") == "15.00",
+              "…editing the rate is a row update — the schedules re-derive on the next read")
+        aud94 = admin.get(f"{BASE}/audit", params={"entity": "asset", "size": 10}).json()
+        check({e["action"] for e in aud94["data"]} >= {"created", "dispose", "revalue"},
+              "……the assets' lifecycle lands in the audit trail (created / dispose / revalue)")
+        # everything above is table state — it survives a restart
+        restart()
+        check(psql(f"select disposal is not null from fixed_assets where id = '{fa_id}'") == "t"
+              and psql("select closed_up_to from accounting_config where id = 1") == "2026-07-31",
+              "R9.4: the disposal and the close survive the restart")
+        # adoption: a database written before R9.4 is missing the six chart rows and holds no assets — the
+        # boot re-adopts both (the same pure builders the seed runs), idempotently
+        psql("delete from gl_accounts where code in ('1500','1510','3950','4310','5700','5710')")
+        psql("delete from fixed_assets"); psql("delete from asset_classes")
+        restart()
+        chart94 = admin.get(f"{BASE}/accounting/chart").json()
+        reg94 = admin.get(f"{BASE}/accounting/assets", params={"size": 50}).json()
+        check(all(c in [a["code"] for a in chart94] for c in ("1500", "1510", "3950", "4310", "5700", "5710"))
+              and reg94["total"] >= 8,
+              "the boot adopts the R9.4 chart rows and re-seeds the assets for a pre-R9.4 database — idempotently")
 
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
@@ -5740,12 +5850,13 @@ def run():
         # the whole map after every request, so a drill that keeps only the ids it cares about would let
         # notifications the suite read earlier pop back up as unread and fail the round-trip check below
         have = json.loads(psql("select notif_read::text from users where username = 'arif'") or "[]")
-        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 28, "28 migrations have run on this database")
-        # un-apply the last FIVE journal rows: the migrator replays by position, so the boot has to re-run
-        # 0027 (R9.2's chart and journal), 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and
-        # 0024 (R8.2's bank statements — all idempotent) to reach 0023 (the notif_read lift) again; 0022
-        # and earlier keep their rows, because their tables are NOT idempotent and must not be replayed
-        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 5)")
+        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 29, "29 migrations have run on this database")
+        # un-apply the last SIX journal rows: the migrator replays by position, so the boot has to re-run
+        # 0028 (R9.4's fixed assets + the widened purchases category check), 0027 (R9.2's chart and journal),
+        # 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and 0024 (R8.2's bank statements — all
+        # idempotent) to reach 0023 (the notif_read lift) again; 0022 and earlier keep their rows, because
+        # their tables are NOT idempotent and must not be replayed
+        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 6)")
         psql("alter table users drop column notif_read")
         ensure_compat_state()
         ids = [*have, "finale:migrated"]

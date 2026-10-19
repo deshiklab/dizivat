@@ -63,7 +63,7 @@ export const saleInput = z.object({
   branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
   /** R3: "service" = service sale (lines reference the sale-service list, no stock) */
-  category: z.enum(["goods", "service"]).optional().default("goods"),
+  category: z.enum(["goods", "service", "capital"]).optional().default("goods"),
   /** R3: export / deemed-export documents — required for a foreign customer */
   export: exportInput.optional(),
 })
@@ -85,7 +85,7 @@ export const purchaseInput = z.object({
   branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
   /** R2: "service" = service purchase (lines reference the service-code list, no stock) */
-  category: z.enum(["goods", "service"]).optional().default("goods"),
+  category: z.enum(["goods", "service", "capital"]).optional().default("goods"),
 })
 export type PurchaseInput = z.input<typeof purchaseInput>
 
@@ -833,3 +833,40 @@ export const closeInput = z.object({
 })
 export type CloseInput = z.input<typeof closeInput>
 
+/* ── R9.4: the fixed assets and their classes ──────────────────────────── */
+
+export const assetClassInput = z.object({
+  name: z.string().trim().min(2, "minLength").max(80, "maxLength"),
+  /** the straight-line rate (% a year) — the NBR Third Schedule's default for the class */
+  rate: z.number().min(0, "min0").max(100, "max100"),
+  note: z.string().trim().max(300, "maxLength").optional(),
+  active: z.boolean().optional().default(true),
+})
+
+export const assetInput = z.object({
+  name: z.string().trim().min(3, "minLength").max(120, "maxLength"),
+  classId: z.string().trim().min(1, "required"),
+  date,
+  cost: z.number().min(1, "min0").max(9_999_999_999),
+  salvage: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  branchId: z.string().trim().max(20, "maxLength").optional(),
+  purchaseId: z.string().trim().max(20, "maxLength").optional(),
+  inputVat: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  creditable: z.boolean().optional().default(true),
+  memo: z.string().trim().max(300, "maxLength").optional(),
+  process: z.enum(["Created", "Approved"]),
+})
+
+export const assetActionInput = z.object({
+  action: z.enum(["dispose", "revalue"]),
+  date,
+  /** dispose: what the sale realised, and where it landed (a money account; omitted → on account) */
+  proceeds: z.number().min(0, "min0").max(9_999_999_999).optional(),
+  accountId: z.string().trim().max(20, "maxLength").optional(),
+  /** revalue: the carrying amount the asset is reset to */
+  toValue: z.number().min(0, "min0").max(9_999_999_999).optional(),
+  reason: z.string().trim().min(10, "minLength").max(300, "maxLength"),
+})
+export type AssetInput = z.input<typeof assetInput>
+export type AssetClassInput = z.input<typeof assetClassInput>
+export type AssetActionInput = z.input<typeof assetActionInput>

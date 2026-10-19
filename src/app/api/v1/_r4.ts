@@ -40,9 +40,10 @@ export interface AccountingSource {
   /** R9.1: transfers between the company's own accounts (approved ones move the balances), and the cheque lifecycle */
   moneyTransfers?: MoneyTransfer[]
   chequeEvents?: ChequeEvent[]
-  /** R9.2: the manual journal entries — the close cannot pass over their drafts
+  /** R9.2/R9.4: the manual journal entries and the fixed assets — the close cannot pass over their drafts
    * (structural on purpose: both the mock's documents and the derived journal satisfy it) */
   journalEntries?: { no: string; date: string; process?: Process }[]
+  assets?: { no: string; date: string; process: Process }[]
 }
 /** `db` is the whole world, which is what the mock handlers pass by default. */
 export const accountingSource = (): AccountingSource => db
@@ -653,6 +654,7 @@ export function buildAccountingConfig(body: unknown, src: AccountingSource = db)
       ...src.moneyDocs.filter((m) => m.process === "Created" && m.date <= c.closedUpTo).map((m) => m.no),
       ...(src.moneyTransfers ?? []).filter((m) => m.process === "Created" && m.date <= c.closedUpTo).map((m) => m.no),
       ...(src.journalEntries ?? []).filter((m) => m.process === "Created" && m.date <= c.closedUpTo).map((m) => m.no),
+      ...(src.assets ?? []).filter((m) => m.process === "Created" && m.date <= c.closedUpTo).map((m) => m.no),
     ]
     if (drafts.length) return {
       status: 409,

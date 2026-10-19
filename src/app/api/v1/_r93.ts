@@ -3,7 +3,7 @@
  * cash flow, each a date range over the same derived journal the chart and the register serve (see
  * `lib/statements.ts` — nothing is stored), plus the close that advances the books' cut-off. The close is
  * a control action, not a document: it refuses a non-month-end, the future, a date already closed
- * through, and any draft money document, transfer or journal entry dated on or before it — the
+ * through, and any draft money document, transfer, journal entry or asset dated on or before it — the
  * books cannot be closed over an open document.
  */
 import { invalidRule, json, ruleResponse, withAuth, zodErrors, type RuleProblem } from "./_lib"
@@ -99,6 +99,7 @@ export function buildClose(body: unknown, src: GlSource): RuleProblem | { fields
     ...src.moneyDocs.filter((d) => d.process === "Created" && d.date <= to).map((d) => d.no),
     ...src.moneyTransfers.filter((d) => d.process === "Created" && d.date <= to).map((d) => d.no),
     ...src.journalEntries.filter((d) => d.process === "Created" && d.date <= to).map((d) => d.no),
+    ...src.assets.filter((d) => d.process === "Created" && d.date <= to).map((d) => d.no),
   ]
   if (drafts.length)
     return { status: 409, title: `Drafts dated on or before ${to} are still open (${drafts.join(", ")}) — approve or delete them before closing the books.` }

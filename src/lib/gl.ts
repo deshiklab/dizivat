@@ -14,11 +14,13 @@
  * balance (R9.3) can no more drift from the documents than the derived balances of the money accounts can.
  */
 import type {
-  AccountingConfig, CreditNote, DebitNote, GlAccount, GlAccountRow, GlLedger, JournalEntry, JournalLine,
-  JournalSourceKind, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, Purchase, Sale, TreasuryDeposit,
-  VatAdjustment, VdsEntry,
+  AccountingConfig, AssetClass, CreditNote, DebitNote, FixedAsset, GlAccount, GlAccountRow, GlLedger, JournalEntry,
+  JournalLine, JournalSourceKind, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, Purchase, Sale,
+  TreasuryDeposit, VatAdjustment, VdsEntry,
 } from "./types"
 import { round2 } from "./vat"
+import { TODAY } from "./company"
+import { monthOf, scheduleOf } from "./assets"
 
 /** The world the ledger derives from: the accounting source plus the notes, the adjustments and the manual entries. */
 export interface GlSource {
@@ -37,6 +39,9 @@ export interface GlSource {
   adjustments: VatAdjustment[]
   glAccounts: GlAccount[]
   journalEntries: JournalEntry[]
+  /** R9.4: the fixed assets and their classes — the depreciation / revaluation / disposal postings fold from them */
+  assets: FixedAsset[]
+  assetClasses: AssetClass[]
   accountingConfig: AccountingConfig
 }
 
@@ -59,12 +64,16 @@ export const CHART_TEMPLATE: GlAccount[] = [
   { code: "2140", name: "Treasury payments outside the book accounts", kind: "liability", group: "Current liabilities", active: true,
     note: "TR-6 deposits that name no company account — clear it by naming the account the challan left." },
   { code: "2200", name: "Accrued expenses", kind: "liability", group: "Current liabilities", active: true },
+  { code: "1500", name: "Fixed assets at cost", kind: "asset", group: "Fixed assets", active: true },
+  { code: "1510", name: "Less: accumulated depreciation", kind: "asset", group: "Fixed assets", active: true },
   { code: "3100", name: "Owner capital", kind: "equity", group: "Equity", active: true },
+  { code: "3950", name: "Revaluation reserve", kind: "equity", group: "Equity", active: true },
   { code: "3910", name: "Opening balances brought forward", kind: "equity", group: "Equity", active: true },
   { code: "4100", name: "Sales — local", kind: "revenue", group: "Revenue", active: true },
   { code: "4110", name: "Sales — export and deemed export", kind: "revenue", group: "Revenue", active: true },
   { code: "4200", name: "Sales returns", kind: "revenue", group: "Revenue", active: true },
   { code: "4300", name: "Other income", kind: "revenue", group: "Revenue", active: true },
+  { code: "4310", name: "Gain on asset disposals", kind: "revenue", group: "Revenue", active: true },
   { code: "4910", name: "SD export refund", kind: "revenue", group: "Revenue", active: true },
   { code: "5100", name: "Cost of purchases — goods", kind: "expense", group: "Direct costs", active: true },
   { code: "5110", name: "Service purchases", kind: "expense", group: "Direct costs", active: true },
@@ -72,6 +81,8 @@ export const CHART_TEMPLATE: GlAccount[] = [
   { code: "5400", name: "Rent", kind: "expense", group: "Operating expenses", active: true },
   { code: "5500", name: "Utilities", kind: "expense", group: "Operating expenses", active: true },
   { code: "5600", name: "Professional fees", kind: "expense", group: "Operating expenses", active: true },
+  { code: "5700", name: "Depreciation", kind: "expense", group: "Operating expenses", active: true },
+  { code: "5710", name: "Loss on asset disposals", kind: "expense", group: "Operating expenses", active: true },
   { code: "5900", name: "Penalties, interest and surcharges", kind: "expense", group: "Tax costs", active: true },
   { code: "5950", name: "VAT and SD adjustments", kind: "expense", group: "Tax costs", active: true },
 ]
@@ -192,8 +203,8 @@ export function journalOf(src: GlSource): JournalEntry[] {
   // purchases: goods build inventory, services are their own cost; the input VAT is an asset whatever the
   // purchase, the SD paid at import likewise. Bonded imports simply carry no VAT or SD
   for (const p of src.purchases.filter((x) => x.process === "Approved")) {
-    const e = new Entry({ kind: "purchase", id: p.id, no: p.invoiceNo }, p.issueDate, `${p.mode === "Foreign" ? "Import" : "Local"} purchase — ${p.vendorName}`)
-    e.dr(p.category === "service" ? "5110" : "1150", round2(p.subtotal - p.discount))
+    const e = new Entry({ kind: "purchase", id: p.id, no: p.invoiceNo }, p.issueDate, `${p.mode === "Foreign" ? "Import" : "Local"}${p.category === "capital" ? " capital" : ""} purchase — ${p.vendorName}`)
+    e.dr(p.category === "service" ? "5110" : p.category === "capital" ? "1500" : "1150", round2(p.subtotal - p.discount))
     e.dr("1200", p.vat)
     e.dr("1210", p.sd)
     e.cr("2100", p.netTotal)
@@ -286,6 +297,54 @@ export function journalOf(src: GlSource): JournalEntry[] {
     const cr = round2(lines.reduce((s, l) => s + l.credit, 0))
     if (lines.length >= 2 && Math.abs(dr - cr) < 0.005)
       out.push({ ...j, source: { kind: "manual", id: j.id, no: j.no }, lines })
+  }
+  // R9.4 — the fixed assets. A record typed directly (no purchase) is wealth brought forward: its cost
+  // comes in against opening equity, because a capital purchase carries its own acquisition posting. The
+  // depreciation runs a month at a time at the class's NBR rate (a full month from commissioning, none in
+  // the month of the sale); a revaluation re-bases the carrying amount against the reserve; a disposal
+  // sells whatever the asset is still worth — the gain or the loss is the statement's, not the taxman's yet
+  for (const a of src.assets.filter((x) => x.process === "Approved")) {
+    const cls = src.assetClasses.find((c) => c.id === a.classId)
+    if (!a.purchaseId) {
+      const e = new Entry({ kind: "asset", id: a.id, no: a.no }, a.date, `Fixed asset recorded — ${a.name}`)
+      e.dr("1500", a.cost)
+      e.cr("3910", a.cost)
+      push(e.balanced(`${a.id}:acq`))
+    }
+    const sched = scheduleOf(a, cls, TODAY)
+    let prevNbv = round2(a.cost)
+    for (const r of sched.rows) {
+      if (r.event === "revalued") {
+        const delta = round2(r.nbv - prevNbv)
+        if (Math.abs(delta) > 0.005) {
+          const rev = (a.revaluations ?? []).find((x) => monthOf(x.date) === r.month)
+          const e = new Entry({ kind: "revaluation", id: `${a.id}:${r.month}:rev`, no: `${a.no}/${r.month}` }, r.month === monthOf(TODAY) ? TODAY : `${r.month}-28`, `Revaluation — ${a.name} (${a.no})${rev ? ` — ${rev.reason}` : ""}`)
+          if (delta > 0) { e.dr("1500", delta); e.cr("3950", delta) }
+          else { e.dr("3950", -delta); e.cr("1500", -delta) }
+          push(e.balanced(`${a.id}:${r.month}:rev`))
+        }
+      }
+      prevNbv = r.nbv
+      if (r.depreciation > 0) {
+        const monthEnd = `${r.month}-${new Date(Date.UTC(Number(r.month.slice(0, 4)), Number(r.month.slice(5, 7)), 0)).getUTCDate()}`
+        const e = new Entry({ kind: "depreciation", id: `${a.id}:${r.month}`, no: `${a.no}/${r.month}` }, monthEnd > TODAY ? TODAY : monthEnd, `Depreciation — ${a.name} (${a.no}) · ${r.month}`)
+        e.dr("5700", r.depreciation)
+        e.cr("1510", r.depreciation)
+        push(e.balanced(`${a.id}:${r.month}`))
+      }
+    }
+    if (a.disposal) {
+      const d = a.disposal
+      const nbv = sched.disposal?.nbvAtDisposal ?? round2(a.cost - sched.totals.depreciation)
+      const gl = round2(d.proceeds - nbv)
+      const e = new Entry({ kind: "disposal", id: `${a.id}:disp`, no: `${a.no}/disposal` }, d.date, `Disposal — ${a.name} (${a.no}) — ${d.reason}`)
+      e.dr(d.accountId ? moneyGlCode(src, d.accountId) : "1100", d.proceeds)
+      e.cr("1500", a.cost)
+      e.dr("1510", sched.totals.depreciation)
+      if (gl >= 0) e.cr("4310", gl)
+      else e.dr("5710", -gl)
+      push(e.balanced(`${a.id}:disp`))
+    }
   }
   return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.source.no.localeCompare(b.source.no)))
 }

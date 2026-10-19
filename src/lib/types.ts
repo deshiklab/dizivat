@@ -182,7 +182,7 @@ export interface Purchase extends DocBase {
   /** R2: import purchases (mode Foreign) — Bill of Entry header */
   boe?: BillOfEntry
 }
-export type PurchaseCategory = "goods" | "service"
+export type PurchaseCategory = "goods" | "service" | "capital"
 export interface BillOfEntry { no: string; date: string; lcNo: string; lcDate: string; customsHouse: string; origin: string; cnfFirm?: string; receiveAddress?: string; /** R6.4: warehoused under the customs bond (IM-7) — no duty / VAT paid, no input credit; tracked in the bond register */ bonded?: boolean; /** R6.5: own UD / UP the bonded inputs were imported against (settled per UD after export) */ udNo?: string }
 
 export interface Page<T, Totals = Record<string, number>> {
@@ -264,7 +264,7 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement" | "schedule" | "accounting"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement" | "schedule" | "asset" | "assetClass" | "accounting"
   /** R6.2 */
   | "ud" | "backup" | "access" | "import"
   /** R6.5 */
@@ -283,8 +283,8 @@ export type AuditAction =
   | "viewed" | "realised" | "backedUp" | "downloaded" | "imported"
   /** R9.1: the cheque register's lifecycle */
   | "presented" | "cleared" | "bounced"
-  /** R9.3: the close of the books */
-  | "closed"
+  /** R9.3/R9.4: the close of the books, and the fixed assets' final actions */
+  | "closed" | "dispose" | "revalue"
 export interface AuditChange { field: string; from: string; to: string }
 export interface AuditEvent {
   id: string
@@ -772,6 +772,7 @@ export interface GlAccountRow extends GlAccount {
 export type JournalSourceKind =
   | "sale" | "purchase" | "creditNote" | "debitNote" | "receipt" | "payment" | "transfer"
   | "treasury" | "vdsPurchase" | "vdsSales" | "adjustment" | "opening" | "openingBalance" | "manual"
+  | "asset" | "depreciation" | "revaluation" | "disposal"
 export interface JournalSource { kind: JournalSourceKind; id: string; no: string }
 
 /** One line of a journal entry — exactly one of debit / credit carries the money (the other is 0). */
@@ -878,6 +879,75 @@ export interface CashFlowReport {
   from: string; to: string
   rows: CashFlowRow[]
   opening: number; netMovement: number; closing: number
+}
+
+/* ── R9.4: the fixed assets ────────────────────────────────────────────── */
+
+/** An asset class of the register: the NBR Third Schedule's straight-line rate it depreciates at. */
+export interface AssetClass { id: string; name: string; rate: number; active: boolean; note?: string }
+
+/** A disposal — final by design; the correction is a new revaluation or a journal entry, never an undo. */
+export interface AssetDisposal { date: string; proceeds: number; accountId?: string; reason: string; at: string; by: string }
+
+/** A revaluation — the carrying amount is reset to `toValue` against the revaluation reserve (3950). */
+export interface AssetRevaluation { date: string; toValue: number; reason: string; at: string; by: string }
+
+/**
+ * One fixed asset (AS-): a document of its own with the draft → approved → cancelled lifecycle. Approving
+ * starts the depreciation — straight line at the class's NBR rate, one derived posting per month, never
+ * stored. A record typed directly (no `purchaseId`) is wealth brought forward: its cost comes in against
+ * the opening-balance equity; a capital purchase carries its own acquisition posting.
+ */
+export interface FixedAsset {
+  id: string
+  /** AS-MMYY#### */
+  no: string
+  name: string
+  classId: string
+  /** the date it was commissioned — depreciation runs from this month */
+  date: string
+  cost: number
+  salvage: number
+  branchId?: string
+  /** the capital purchase (category `capital`) that acquired it, when there was one */
+  purchaseId?: string
+  /** capital-item input-credit tracking: the input VAT the acquisition carried, and whether the 9.1 may claim it */
+  inputVat: number
+  creditable: boolean
+  /** free text — what the thing is, where it sits */
+  memo?: string
+  process: Process
+  updatedAt?: string
+  disposal?: AssetDisposal
+  revaluations: AssetRevaluation[]
+  issuedBy: string
+  createdAt: string
+  history: HistoryEntry[]
+  cancelReason?: string
+  deletedAt?: string
+}
+
+/** One row of the asset register: the asset with its derived position as of the register's date. */
+export interface AssetRegisterRow {
+  id: string; no: string; name: string; classId: string; className: string; rate: number
+  date: string; cost: number; accumDep: number; nbv: number; monthly: number
+  status: "Active" | "Disposed" | "Draft" | "Cancelled"
+  inputVat: number; creditable: boolean
+  disposalDate?: string; disposalProceeds?: number; gainLoss?: number
+  branchId?: string; purchaseId?: string; process: Process
+}
+
+/** One month of the depreciation schedule. */
+export interface AssetScheduleRow {
+  month: string; base: number; depreciation: number; accum: number; nbv: number
+  event?: "revalued" | "disposed"
+}
+export interface AssetSchedule {
+  asset: { id: string; no: string; name: string; className: string; rate: number; date: string; cost: number; salvage: number; disposedOn?: string }
+  to: string
+  rows: AssetScheduleRow[]
+  totals: { depreciation: number }
+  disposal?: { date: string; proceeds: number; nbvAtDisposal: number; gainLoss: number }
 }
 
 /** An invoice that can still take a receipt / payment. */

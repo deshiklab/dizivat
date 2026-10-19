@@ -273,7 +273,9 @@ function approve(k: Kind, d: Doc, by: string) {
   const err = approveRule(k, d)
   if (err) return ruleResponse(err)
   d.process = "Approved"
-  postStock(k, d.lines, 1)
+  if (k === "purchase" && (d as Purchase).category === "capital") {
+    // R9.4: a capital purchase buys a fixed asset, not stock — the posting rules take its cost to 1500
+  } else postStock(k, d.lines, 1)
   addHistory(d, by, "approved")
   return null
 }
@@ -399,7 +401,7 @@ export function docRoutes(k: Kind) {
       const no = deny(user, "doc.cancel"); if (no) return no
       const rule = cancelRule(k, d, body.reason ?? "")
       if (rule) return ruleResponse(rule)
-      if (d.process === "Approved") postStock(k, d.lines, -1)
+      if (d.process === "Approved" && !(k === "purchase" && (d as Purchase).category === "capital")) postStock(k, d.lines, -1)
       const reason = cancelInput.parse({ reason: body.reason ?? "" }).reason
       d.process = "Cancelled"
       d.cancelReason = reason

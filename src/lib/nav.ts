@@ -77,6 +77,7 @@ export const NAV: NavGroup[] = [
       { key: "journal", href: "/accounting/journal", release: "R9", ready: true },
       { key: "ledger", href: "/accounting/ledger", release: "R9", ready: true },
       { key: "reports", href: "/accounting/reports", release: "R9", ready: true },
+      { key: "assets", href: "/accounting/assets", release: "R9", ready: true },
       { key: "statements", href: "/accounting/statements", release: "R4", ready: true },
       { key: "reconcile", href: "/accounting/reconcile", release: "R8", ready: true },
       { key: "accountingConfig", href: "/accounting/config", release: "R4", ready: true, perm: "settings.manage" },

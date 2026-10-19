@@ -191,7 +191,19 @@ ENDPOINTS = [
     E("GET", "/accounting/reports/profit-loss", None, "R9.3: the profit & loss for ?from/?to (default: the fiscal year to date, July–June) — revenue / direct / operating / tax cost lines with the gross and the net profit; format=csv", csv=True),
     E("GET", "/accounting/reports/balance-sheet", None, "R9.3: the balance sheet as of ?asOf — grouped asset, liability and equity sections, the equity carrying the computed profit brought forward and profit for the period, so the two sides balance by construction; format=csv", csv=True),
     E("GET", "/accounting/reports/cash-flow", None, "R9.3: the cash flow for ?from/?to — every posting that moved a money account grouped by its source kind, with the opening and closing balances and the net movement; format=csv", csv=True),
-    E("POST", "/accounting/close", "settings.manage", "R9.3: close the books through a month-end {to, note?} — refuses a non-month-end / future / already-closed date (422) and any draft money doc, transfer or journal entry dated on or before it (409, naming them); moves the cut-off the config holds"),
+    E("POST", "/accounting/close", "settings.manage", "R9.3: close the books through a month-end {to, note?} — refuses a non-month-end / future / already-closed date (422) and any draft money doc, transfer, journal entry or asset dated on or before it (409, naming them); moves the cut-off the config holds"),
+    # R9.4 — the fixed assets and their classes
+    E("GET", "/accounting/assets", None, "R9.4: the fixed-asset register — Page<AssetRegisterRow>, each asset with its class, cost, derived accumulated depreciation, net book value and monthly charge; facets status / class / process; format=csv", page=True, csv=True),
+    E("POST", "/accounting/assets", "doc.create", "R9.4: create an asset (AS-) {name 3-120, classId, date, cost ≥ 1, salvage < cost, inputVat, creditable, memo?, process} — the class must be active, the month open (422 unknownClass / inactiveClass / belowCost / unknownPurchase / dateClosed / future)"),
+    E("GET", "/accounting/assets/{asset}", None, "R9.4: one asset with its revaluations, disposal and history"),
+    E("PUT", "/accounting/assets/{asset}", "doc.edit", "R9.4: replace a draft (409 if not a draft)"),
+    E("PATCH", "/accounting/assets/{asset}", None, "R9.4: approve (doc.approve) or cancel {reason≥10} (doc.cancel); the books must be open for the commissioning month either way — and a disposed asset is never cancelled"),
+    E("DELETE", "/accounting/assets/{asset}", "doc.delete", "R9.4: delete a draft (the row keeps its id and number retired)"),
+    E("GET", "/accounting/assets/{asset}/schedule", None, "R9.4: the asset's depreciation schedule — month by month from commissioning to ?to (default today): the carrying amount, the month's charge, the accumulated total and the closing net book value, revaluation and disposal months marked"),
+    E("POST", "/accounting/assets/{asset}/action", "doc.edit", "R9.4: dispose or revalue {action, date, reason ≥ 10, proceeds+accountId? | toValue?} — final, no undo; refuses a draft asset, a disposed asset (409), a closed month (409) and a bad date (422 beforeCommissioned / future)"),
+    E("GET", "/accounting/asset-classes", None, "R9.4: the asset classes with their NBR Third Schedule rates"),
+    E("POST", "/accounting/asset-classes", "settings.manage", "R9.4: create a class {name 2-80 unique, rate 0-100, note?, active} — 409 on a duplicate name"),
+    E("PUT", "/accounting/asset-classes/{assetClass}", "settings.manage", "R9.4: edit a class — a rate change re-runs every schedule that names it (they are derived)"),
     # R4 — NBR VAT
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
@@ -344,10 +356,15 @@ def fixtures():
     cheque_final = s.get(BASE + "/accounting/cheques?status=cleared&size=1").json()["data"][0]["id"]
     journal = first("/accounting/journal?source=manual&size=1")
     gl_account = s.get(BASE + "/accounting/chart").json()[0]["code"]  # R9.2: a chart row the ledger fixture reads
+    # R9.4: an approved live asset, the draft and the disposed one the error contracts need
+    asset = first("/accounting/assets?status=Active&size=1")
+    asset_draft = first("/accounting/assets?status=Draft&size=1")
+    asset_disposed = first("/accounting/assets?status=Disposed&size=1")
     r4 = {"receipt": first("/accounting/receipts?process=Approved&size=1"), "payment": first("/accounting/payments?process=Approved&size=1"),
           "treasury": first("/vat/treasury?process=Approved&size=1"), "vds": first("/vat/vds?process=Approved&size=1"),
           "adjustment": first("/vat/adjustments?process=Approved&size=1"), "account": "ac1", "period": "2026-08"}
     return {**r4, "moneyTransfer": money_transfer, "cheque": cheque_open, "chequeFinal": cheque_final, "journal": journal, "code": gl_account,
+            "asset": asset, "assetDraft": asset_draft, "assetDisposed": asset_disposed, "assetClass": "plant",
             "goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
 
 def run():
@@ -450,6 +467,48 @@ def run():
         ("admin", "POST", "/accounting/close", {"to": "2026-09-15"}, 422, "to"),
         ("admin", "POST", "/accounting/close", {"to": _next_month_end()}, 422, "to"),
         ("auditor", "POST", "/accounting/close", {"to": "2026-09-30"}, 403, None),
+        # R9.4 — the fixed assets
+        ("arif", "GET", "/accounting/assets/nope", None, 404, None),
+        ("arif", "GET", "/accounting/assets/nope/schedule", None, 404, None),
+        ("arif", "POST", "/accounting/assets", {}, 422, "name"),
+        ("arif", "POST", "/accounting/assets", {"name": "Contract test machine", "classId": "nope", "date": "2026-09-20", "cost": 100, "process": "Created"}, 422, "classId"),
+        ("arif", "POST", "/accounting/assets", {"name": "Contract test machine", "classId": "plant", "date": "2026-09-20", "cost": 100, "salvage": 200, "process": "Created"}, 422, "salvage"),
+        ("arif", "PUT", f"/accounting/assets/{fx['asset']}", {}, 409, None),
+        ("arif", "DELETE", f"/accounting/assets/{fx['asset']}", None, 409, None),
+        ("arif", "POST", f"/accounting/assets/{fx['assetDraft']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1, "reason": "Still a draft, refuse"}, 409, None),
+        ("arif", "POST", f"/accounting/assets/{fx['assetDisposed']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1, "reason": "Already sold, refuse"}, 409, None),
+        ("arif", "POST", f"/accounting/assets/{fx['asset']}/action", {"action": "dispose", "date": "2026-09-20", "reason": "No proceeds given here"}, 422, "proceeds"),
+        ("arif", "POST", f"/accounting/assets/{fx['asset']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1000, "reason": "short"}, 422, "reason"),
+        ("auditor", "POST", f"/accounting/assets/{fx['asset']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1000, "reason": "Viewer may not act"}, 403, None),
+        ("auditor", "POST", "/accounting/asset-classes", {"name": "Contract class", "rate": 10}, 403, None),
+        ("admin", "POST", "/accounting/asset-classes", {"name": "Plant and machinery (factory)", "rate": 10}, 409, None),
+        ("admin", "PUT", "/accounting/asset-classes/nope", {"name": "Nope", "rate": 10}, 404, None),
+        ("arif", "GET", "/purchases/nope", None, 404, None),
+        ("arif", "GET", "/items/nope", None, 404, None),
+        ("arif", "POST", "/sales", {}, 422, "customerId"),
+        ("arif", "POST", "/purchases", {}, 422, "vendorId"),
+        ("arif", "PUT", f"/sales/{fx['sale']}", {}, 409, None),
+        ("arif", "DELETE", f"/sales/{fx['sale']}", None, 409, None),
+        ("arif", "PATCH", f"/sales/{fx['sale']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
+        ("arif", "POST", "/items", {}, 422, "name"),
+        ("arif", "POST", "/import", {"entity": "openingStock"}, 422, "rows"),
+        ("arif", "POST", "/import", {"entity": "wombats", "dryRun": True, "rows": [{}]}, 422, "entity"),
+        ("arif", "POST", "/customers", {}, 422, "name"),
+        ("arif", "DELETE", "/customers/c1", None, 409, None),
+        ("arif", "GET", "/tariff?hs=99999999", None, 404, None),
+        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026-27"}, 422, "rows"),
+        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026/27", "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 422, "fiscalYear"),
+        ("kamal", "POST", "/tariff/import", {"fiscalYear": "2027-28", "dryRun": True, "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 403, None),
+        ("arif", "POST", "/notifications/read", {}, 422, None),
+        ("arif", "PUT", "/me/password", {"current": "wrong-one", "next": "abcd12345", "confirm": "abcd12345"}, 422, "current"),
+        ("arif", "PUT", "/me/password", {"current": PW, "next": "short", "confirm": "short"}, 422, "next"),
+        ("admin", "GET", "/users/nope", None, 404, None),
+        ("admin", "POST", "/users", {}, 422, "username"),
+        ("admin", "POST", "/users", {"username": "arif", "name": "Dup User", "designation": "Tester", "email": "x@y.co", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "username"),
+        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@kanchanjhara-apparel.example", "mobile": "", "department": "", "role": "viewer", "active": True}, 422, "role"),
+        ("admin", "PUT", "/users/u5", {"name": "System Administrator", "designation": "IT", "email": "it@kanchanjhara-apparel.example", "mobile": "", "department": "", "role": "admin", "active": False}, 422, "active"),
+        ("admin", "POST", "/users/u5/reset-password", None, 422, None),
+        ("admin", "PUT", "/company", {}, 422, "name"),
         # Sprint 4 — branches, stock documents, units
         ("arif", "POST", "/sales", {"branchId": "b2"}, 422, None),
         ("arif", "GET", "/transfers/nope", None, 404, None),

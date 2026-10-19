@@ -13,7 +13,7 @@ api_native checks, and this documentation — one slice per PR, one CI watch.
 | **R8.3** | statutory reminders + report delivery (the schedule, the digests, the tick) | done |
 | **R9.1** | treasury operations: own-account transfers (TX-), cheque register with lifecycle | done |
 | **R9.2** | the general ledger: chart of accounts, derived posting rules, manual journal entries | done |
-| R9 | the complete accounting module (R9.4 next: fixed assets) | in flight |
+| R9 | the complete accounting module (R9.5 next: expenses and TDS) | in flight |
 | R10 | POS integration | after R9 |
 
 ## R9 — the complete accounting module
@@ -28,7 +28,7 @@ reminder / delivery schedule. What they still lack, in the order the slices fill
 | **R9.1 — treasury operations** ✅ | transfers between the company's own accounts, cash deposit / withdrawal, and the cheque register with its lifecycle (issued → presented → cleared / bounced, post-dated view) — **shipped v0.16.0** | the most basic gap: money cannot move between own accounts today. A cleared cheque is exactly what the R8.2 bank matcher already explains |
 | **R9.2 — the general ledger** ✅ | chart of accounts (a seeded RMG template), posting rules that derive the GL from the documents that already exist (sales, purchases, notes, receipts, payments, transfers, TR-6, VDS, adjustments, openings), manual journal entries (JE-) for everything else, one account's ledger — **shipped v0.17.0** | the keystone. Derived-posting-first means the GL is complete from day one without anyone typing double entries for transactions |
 | **R9.3 — statements and the close** ✅ | trial balance, profit & loss, balance sheet, cash flow (all folded from the same journal, CSV each), and the period close that locks posting behind `settings.manage` — **shipped v0.18.0** | reads the R9.2 ledger |
-| **R9.4 — fixed assets** | asset register, classes, straight-line depreciation schedules at the NBR's rates, revaluation and disposal, capital-item input-credit tracking | feeds the ledger, the P&L and the 9.1 |
+| **R9.4 — fixed assets** ✅ | asset register (AS- documents), classes at the NBR Third Schedule rates, straight-line depreciation schedules, revaluation and disposal with their derived postings, capital purchases that post to 1500, per-asset input-credit tracking — **shipped v0.19.0** | feeds the ledger, the P&L and the 9.1 |
 | **R9.5 — expenses and TDS** | expense vouchers (rent, professional fees, contractors) and income-tax deducted at source, with AIT challan deposit and the monthly e-TDS return data | the income-tax sibling of the VDS pattern the VAT side already has |
 | **R9.6 — multi-currency** | FX revaluation and realised gain / loss on settlements | imports and exports already carry foreign currency; the money documents do not |
 | **R9.7 — recurring entries and petty cash** | standing payments and receipts executed by the R8.3 schedule's tick, and the petty-cash float book | the tick already knows how to run a day's work idempotently |

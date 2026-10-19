@@ -39,8 +39,9 @@ export const REGISTRY = {
   "bank-accounts-and-statements": { category: "accounting", routes: ["/accounting/bank-accounts", "/accounting/statements", "/accounting/config"], related: ["receipts-and-payments"] },
   "bank-reconciliation": { category: "accounting", routes: ["/accounting/reconcile"], related: ["receipts-and-payments", "bank-accounts-and-statements"] },
   "account-transfers-and-cheques": { category: "accounting", routes: ["/accounting/transfers", "/accounting/cheques"], related: ["receipts-and-payments", "bank-reconciliation", "bank-accounts-and-statements"] },
-  "general-ledger": { category: "accounting", routes: ["/accounting/chart", "/accounting/journal", "/accounting/ledger"], related: ["statements-and-close", "vat-return-9-1", "bank-reconciliation"] },
+  "general-ledger": { category: "accounting", routes: ["/accounting/chart", "/accounting/journal", "/accounting/ledger"], related: ["statements-and-close", "fixed-assets", "vat-return-9-1", "bank-reconciliation"] },
   "statements-and-close": { category: "accounting", routes: ["/accounting/reports"], related: ["general-ledger", "receipts-and-payments", "vat-return-9-1"] },
+  "fixed-assets": { category: "accounting", routes: ["/accounting/assets"], related: ["general-ledger", "statements-and-close", "local-purchases"] },
 
   "compliance-centre": { category: "nbrVat", routes: ["/vat/mushak"], related: ["vat-return-9-1", "purchase-sales-books"] },
   "vat-return-9-1": { category: "nbrVat", routes: ["/vat/return-9-1"], related: ["treasury-tr6", "vat-adjustments", "vds-certificates"] },

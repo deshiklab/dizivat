@@ -28,20 +28,21 @@ import type { Request, Response } from "express"
 import { can, ROLE_PERMS, type Permission, type User } from "@/lib/auth/roles"
 import { runQuery, toCSV } from "@/lib/mock/query"
 import type {
-  AccountingConfig, Allocation, BankStatement, BankStatementLine, ChequeEvent, GlAccount, GlLedger, ManualJournalEntry, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, MoneyTransfer, Party, PartyStatement, Purchase, Sale,
+  AccountingConfig, Allocation, AssetClass, AssetRegisterRow, AssetSchedule, BankStatement, BankStatementLine, ChequeEvent, FixedAsset, GlAccount, GlLedger, ManualJournalEntry, MoneyAccount, MoneyAccountRow, MoneyDoc, MoneyKind, MoneyTransfer, Party, PartyStatement, Purchase, Sale,
 } from "@/lib/types"
 import { chequeRowsOf } from "@/lib/money-ops"
 import type { AccountingSource } from "@/app/api/v1/_r4"
 import type { GlSource } from "@/lib/gl"
 import { chartOf, journalOf, ledgerOf } from "@/lib/gl"
-// R9.3: the statements are pure, so the native module reads them straight from the lib
+// R9.3/R9.4: the statements and the asset fold are pure, so the native module reads them straight from the lib
+import { assetRegisterRows, scheduleOf } from "@/lib/assets"
 import { balanceSheetOf, cashFlowOf, fiscalYearStart, profitLossOf, trialBalanceOf } from "@/lib/statements"
 import { Authed, type AuthedRequest } from "../common/auth"
 import { jsonBody, Problem, searchParams, sendCsv, uniqueViolation } from "../common/http"
 import { lockState } from "../common/state-guard"
 import { WriteBack, type Delta } from "../common/writeback"
 import { db, type Tx } from "../db/client"
-import { accountingConfig, bankStatementLines, bankStatements, chequeEvents, glAccounts, journalEntries, moneyAccounts, moneyAllocations, moneyDocs, moneyTransfers } from "../db/schema"
+import { accountingConfig, assetClasses, bankStatementLines, bankStatements, chequeEvents, fixedAssets, glAccounts, journalEntries, moneyAccounts, moneyAllocations, moneyDocs, moneyTransfers } from "../db/schema"
 import { compat, mirror } from "../state"
 import { AuditService } from "./audit"
 import { applyPurchaseSettlement, revertPurchaseSettlement } from "./purchases"
@@ -1383,6 +1384,7 @@ export async function glSource(): Promise<GlSource> {
     moneyAccounts: mirror.moneyAccounts(), moneyDocs: mirror.moneyDocs(),
     moneyTransfers: mirror.moneyTransfers(), treasury: mirror.treasury(), vds: mirror.vds(),
     adjustments: mirror.adjustments(), glAccounts: mirror.glAccounts(), journalEntries: mirror.journalEntries(),
+    assetClasses: mirror.assetClasses(), assets: mirror.assets(),
     accountingConfig: mirror.accountingConfig(),
   }
 }
@@ -1739,6 +1741,370 @@ export class CloseController {
     await this.audit.record({
       at, actor: user, entity: "accounting", ref: "Close of the books", action: "closed",
       note: `books closed up to ${built.fields.to}${before ? ` (was ${before})` : ""}${built.fields.note ? ` — ${built.fields.note}` : ""}`,
+    })
+    res.json(saved)
+  }
+}
+
+/* ═─ R9.4: the fixed assets and their classes ════════════════════════════ */
+
+type AssetClassDb = typeof assetClasses.$inferSelect
+type AssetDb = typeof fixedAssets.$inferSelect
+
+/** Row → contract shape: the class with its NBR rate. */
+export function toAssetClass(r: AssetClassDb): AssetClass {
+  const c: AssetClass = { id: r.id, name: r.name, rate: Number(r.rate), active: r.active }
+  if (r.note != null) c.note = r.note
+  return c
+}
+
+/** Contract shape → row values (`ord` is the table's own). */
+export const assetClassValues = (c: AssetClass) => ({ id: c.id, name: c.name, rate: c.rate, note: c.note ?? null, active: c.active })
+
+/** Row → contract shape: the asset with its revaluations and its disposal. */
+export function toFixedAsset(r: AssetDb): FixedAsset {
+  const a: FixedAsset = {
+    id: r.id, no: r.no, name: r.name, classId: r.classId, date: r.date,
+    cost: Number(r.cost), salvage: Number(r.salvage), inputVat: Number(r.inputVat), creditable: r.creditable,
+    process: r.process, issuedBy: r.issuedBy, createdAt: r.createdAt.toISOString(),
+    history: r.history ?? [], revaluations: r.revaluations ?? [],
+  }
+  if (r.branchId != null) a.branchId = r.branchId
+  if (r.purchaseId != null) a.purchaseId = r.purchaseId
+  if (r.memo != null) a.memo = r.memo
+  if (r.updatedAt) a.updatedAt = r.updatedAt.toISOString()
+  if (r.cancelReason != null) a.cancelReason = r.cancelReason
+  if (r.disposal) a.disposal = r.disposal
+  return a
+}
+
+/** Contract shape → row values (`ord` and `deletedAt` are the table's own). */
+export const fixedAssetValues = (a: FixedAsset) => ({
+  id: a.id, no: a.no, name: a.name, classId: a.classId, date: a.date, cost: a.cost, salvage: a.salvage,
+  branchId: a.branchId ?? null, purchaseId: a.purchaseId ?? null, inputVat: a.inputVat, creditable: a.creditable,
+  memo: a.memo ?? null, process: a.process, issuedBy: a.issuedBy,
+  createdAt: new Date(a.createdAt), updatedAt: a.updatedAt ? new Date(a.updatedAt) : null,
+  cancelReason: a.cancelReason ?? null, history: a.history ?? [], revaluations: a.revaluations ?? [], disposal: a.disposal ?? null,
+})
+
+const assetWb = new WriteBack<FixedAsset>("fixed_assets", () => mirror.assets(), (a) => a.id)
+export type AssetDelta = Delta<FixedAsset>
+export const markFixedAssets = (list: FixedAsset[]) => assetWb.mark(list)
+export const assetDelta = () => assetWb.delta()
+export const commitAssetDelta = (d: AssetDelta) => assetWb.commit(d)
+
+@Injectable()
+export class AssetService {
+  /** Every live asset in insertion order — the order the mock's array had. */
+  async all(): Promise<FixedAsset[]> {
+    return (await db.select().from(fixedAssets).where(isNull(fixedAssets.deletedAt)).orderBy(asc(fixedAssets.ord))).map(toFixedAsset)
+  }
+
+  /** One asset by id or by number: the register's drill and the audit trail both use both. */
+  find(idOrNo: string) {
+    return this.first(sql`(${fixedAssets.id} = ${idOrNo} or ${fixedAssets.no} = ${idOrNo}) and ${fixedAssets.deletedAt} is null`)
+  }
+
+  /** One live asset by id only — what a delete matches on. */
+  byId(id: string) {
+    return this.first(sql`${fixedAssets.id} = ${id} and ${fixedAssets.deletedAt} is null`)
+  }
+
+  private async first(match: SQL) {
+    const rows = await db.select().from(fixedAssets).where(match)
+    return rows.length ? toFixedAsset(rows[0]) : undefined
+  }
+
+  /** Stores a new asset. `make` builds it inside the lock, so two creates in flight cannot share a number. */
+  async create(date: string, make: (ident: { id: string; no: string }) => FixedAsset): Promise<FixedAsset> {
+    let made: FixedAsset | undefined
+    try {
+      const saved = await db.transaction(async (tx) => {
+        await lockState(tx)
+        made = make(compat().assetIdentity(date)) // the make callback claims the id under the same lock
+        const [row] = await tx.insert(fixedAssets).values(fixedAssetValues(made)).returning()
+        return toFixedAsset(row)
+      })
+      mirror.putAsset(saved)
+      markFixedAssets([saved])
+      return saved
+    } catch (e) {
+      if (made) mirror.removeAsset(made.id)
+      if (uniqueViolation(e) !== null) throw new Problem(409, "That number was just taken — please try again.")
+      throw e as Error
+    }
+  }
+
+  /** Replaces an asset — an edit, a transition, or a disposal / revaluation action. */
+  async update(a: FixedAsset): Promise<FixedAsset> {
+    const [row] = await db.update(fixedAssets).set(fixedAssetValues(a)).where(eq(fixedAssets.id, a.id)).returning()
+    if (!row) throw new Problem(404, "Asset not found")
+    const saved = toFixedAsset(row)
+    mirror.putAsset(saved)
+    markFixedAssets([saved])
+    return saved
+  }
+
+  /** Delete a draft: the row is stamped, so its id and its number stay retired. There is no undo. */
+  async remove(a: FixedAsset, at: string) {
+    await db.update(fixedAssets).set({ ...fixedAssetValues(a), deletedAt: new Date(at) }).where(eq(fixedAssets.id, a.id))
+    mirror.removeAsset(a.id)
+    markFixedAssets(await this.all())
+  }
+}
+
+@Injectable()
+export class AssetClassService {
+  async all(): Promise<AssetClass[]> {
+    return (await db.select().from(assetClasses).orderBy(asc(assetClasses.ord))).map(toAssetClass)
+  }
+
+  async find(id: string) {
+    const [row] = await db.select().from(assetClasses).where(eq(assetClasses.id, id))
+    return row ? toAssetClass(row) : undefined
+  }
+
+  /** Stores a new class, then re-reads the list into the mirror (the register and the fold read it). */
+  async create(c: AssetClass): Promise<AssetClass> {
+    const [row] = await db.insert(assetClasses).values(assetClassValues(c)).returning()
+    this.remirror(await this.all())
+    return toAssetClass(row)
+  }
+
+  /** Replaces a class — a rate change re-runs every schedule that names it (they are derived). */
+  async update(c: AssetClass): Promise<AssetClass> {
+    const [row] = await db.update(assetClasses).set(assetClassValues(c)).where(eq(assetClasses.id, c.id)).returning()
+    if (!row) throw new Problem(404, "Asset class not found")
+    this.remirror(await this.all())
+    return toAssetClass(row)
+  }
+
+  private remirror(list: AssetClass[]) {
+    mirror.putAssetClasses(list)
+  }
+}
+
+/** R9.4 — the fixed-asset register: every asset with its class, its cost, the derived depreciation and the net book value. */
+@Controller("api/v1/accounting/assets")
+export class AssetsController {
+  constructor(
+    @Inject(AssetService) private readonly svc: AssetService,
+    @Inject(AuditService) private readonly audit: AuditService,
+  ) {}
+
+  /** The register: Page<AssetRegisterRow> with facets (status / class / process), or one CSV row per asset. */
+  @Get() @Authed()
+  async list(@Req() req: Request, @Res() res: Response) {
+    const c = compat()
+    const sp = searchParams(req)
+    if (!sp.get("sort")) sp.set("sort", "date.desc")
+    // ?asOf= pins the walk's end month (the reports' own convention) — the drill and the sheet use it
+    const asOf = sp.get("asOf") || today()
+    const rows: AssetRegisterRow[] = assetRegisterRows(await this.svc.all(), mirror.assetClasses(), asOf)
+    const r = runQuery(rows, sp, c.assetSpec)
+    if (sp.get("format") === "csv") {
+      sendCsv(res, toCSV(r.all, c.ASSET_CSV_COLUMNS), `asset-register-${today()}.csv`)
+      return
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { all, ...page } = r
+    res.json({ ...page, facetLabels: {} })
+  }
+
+  /** Create a draft, or create and approve it in one step. The class must exist and be active, the books open. */
+  @Post() @Authed("doc.create")
+  async create(@Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const src = await glSource()
+    const built = c.buildAsset(jsonBody(req), undefined, src)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const approving = built.process === "Approved"
+    if (approving) deny(user, "doc.approve")
+    const at = new Date().toISOString()
+    const doc = await this.svc.create(built.date, (ident) => {
+      const a: FixedAsset = { ...built.fields, ...ident, revaluations: [], process: "Created", createdAt: at, history: [] }
+      // before the document exists: one that cannot be created must not consume an id
+      c.claimAssetId()
+      c.stampLifeHistory(a, user.name, "created", undefined, at)
+      if (!approving) return a
+      const rule = c.assetApproveRule(a, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      a.process = "Approved"
+      c.stampLifeHistory(a, user.name, "approved", undefined, at)
+      return a
+    })
+    await this.audit.record({ at, actor: user, entity: "asset", entityId: doc.id, ref: doc.no, action: "created" })
+    const approved = doc.history?.find((h) => h.action === "approved")
+    if (approved) await this.audit.record({ at: approved.at, actor: user, entity: "asset", entityId: doc.id, ref: doc.no, action: "approved" })
+    res.status(201).json(doc)
+  }
+
+  @Get(":id") @Authed()
+  async one(@Param("id") id: string, @Res() res: Response) {
+    const d = await this.svc.find(id)
+    if (!d) throw new Problem(404, "Asset not found")
+    res.json(d)
+  }
+
+  /** One asset's schedule — month by month from commissioning to today (or `?to`, if earlier). */
+  @Get(":id/schedule") @Authed()
+  async schedule(@Param("id") id: string, @Req() req: Request, @Res() res: Response) {
+    const a = await this.svc.find(id)
+    if (!a) throw new Problem(404, "Asset not found")
+    const to = searchParams(req).get("to")
+    const cls = mirror.assetClasses().find((c) => c.id === a.classId)
+    const sched: AssetSchedule = scheduleOf(a, cls, to && to < today() ? to : today())
+    res.json(sched)
+  }
+
+  /** Edit a draft (full replacement). Only drafts edit; an approved asset acts instead. */
+  @Put(":id") @Authed("doc.edit")
+  async update(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    if (!cur) throw new Problem(404, "Asset not found")
+    if (cur.process !== "Created") throw new Problem(409, `Only drafts can be edited — ${cur.no} is ${cur.process}.`)
+    const src = await glSource()
+    const built = c.buildAsset(jsonBody(req), cur, src)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const approving = built.process === "Approved"
+    if (approving) deny(user, "doc.approve")
+    const before = structuredClone(cur)
+    const next: FixedAsset = { ...cur, ...built.fields }
+    const at = new Date().toISOString()
+    c.stampLifeHistory(next, user.name, "edited", undefined, at)
+    const changes = c.diff(before, next, [...c.ASSET_DIFF_FIELDS])
+    let approvedAt: string | undefined
+    if (approving) {
+      const rule = c.assetApproveRule(next, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      next.process = "Approved"
+      approvedAt = c.stampLifeHistory(next, user.name, "approved")
+    }
+    const saved = await this.svc.update(next)
+    await this.audit.record({ at, actor: user, entity: "asset", entityId: saved.id, ref: saved.no, action: "edited", changes })
+    if (approvedAt) await this.audit.record({ at: approvedAt, actor: user, entity: "asset", entityId: saved.id, ref: saved.no, action: "approved" })
+    res.json(saved)
+  }
+
+  /** State transitions: approve or cancel with a reason. The books must be open for the commissioning month either way. */
+  @Patch(":id") @Authed()
+  async patch(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    if (!cur) throw new Problem(404, "Asset not found")
+    const body = jsonBody(req) as { process?: string; reason?: string }
+    const user = req.dz!.user
+    const src = await glSource()
+    if (body.process === "Approved") {
+      deny(user, "doc.approve")
+      if (cur.process !== "Created") throw new Problem(409, `Cannot approve — ${cur.no} is ${cur.process}.`)
+      const rule = c.assetApproveRule(cur, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      const at = new Date().toISOString()
+      const next = structuredClone(cur)
+      next.process = "Approved"
+      c.stampLifeHistory(next, user.name, "approved", undefined, at)
+      const saved = await this.svc.update(next)
+      await this.audit.record({ at, actor: user, entity: "asset", entityId: saved.id, ref: saved.no, action: "approved" })
+      res.json(saved)
+      return
+    }
+    if (body.process === "Cancelled") {
+      deny(user, "doc.cancel")
+      if (cur.process === "Cancelled") throw new Problem(409, `${cur.no} is already cancelled.`)
+      const rule = c.assetCancelRule(cur, src)
+      if (rule) throw new Problem(rule.status, rule.title, rule.errors)
+      const reason = c.cancelInput.parse({ reason: body.reason ?? "" }).reason
+      const at = new Date().toISOString()
+      const next = structuredClone(cur)
+      next.process = "Cancelled"
+      next.cancelReason = reason
+      c.stampLifeHistory(next, user.name, "cancelled", reason, at)
+      const saved = await this.svc.update(next)
+      await this.audit.record({ at, actor: user, entity: "asset", entityId: saved.id, ref: saved.no, action: "cancelled" })
+      res.json(saved)
+      return
+    }
+    throw new Problem(400, "process must be Approved or Cancelled")
+  }
+
+  /** Delete a draft: the row is stamped, so its id and its number stay retired. There is no undo. */
+  @Delete(":id") @Authed("doc.delete")
+  async remove(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.byId(id)
+    if (!cur) throw new Problem(404, "Asset not found")
+    if (cur.process !== "Created") throw new Problem(409, `Only drafts can be deleted — cancel ${cur.no} instead.`)
+    const at = new Date().toISOString()
+    const next = structuredClone(cur)
+    c.stampLifeHistory(next, req.dz!.user.name, "deleted", undefined, at)
+    await this.svc.remove(next, at)
+    await this.audit.record({ at, actor: req.dz!.user, entity: "asset", entityId: cur.id, ref: cur.no, action: "deleted" })
+    res.json({ ok: true })
+  }
+
+  /** The two final actions a live asset can take: sell it, or re-value it. One append to the record, audited, no undo. */
+  @Post(":id/action") @Authed("doc.edit")
+  @HttpCode(201)
+  async action(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    const built = c.assetActionRule(cur, jsonBody(req), await glSource())
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const user = req.dz!.user
+    const at = new Date().toISOString()
+    const next = structuredClone(cur!)
+    if (built.action === "dispose") {
+      next.disposal = { date: built.date, proceeds: built.proceeds!, ...(built.accountId ? { accountId: built.accountId } : {}), reason: built.reason, at, by: user.name }
+      c.stampLifeHistory(next, user.name, "edited", `Sold for ${built.proceeds!} — ${built.reason}`, at)
+    } else {
+      next.revaluations = [...(next.revaluations ?? []), { date: built.date, toValue: built.toValue!, reason: built.reason, at, by: user.name }]
+      c.stampLifeHistory(next, user.name, "edited", `Revalued to ${built.toValue!} — ${built.reason}`, at)
+    }
+    const saved = await this.svc.update(next)
+    await this.audit.record({ at, actor: user, entity: "asset", entityId: saved.id, ref: saved.no, action: built.action, note: built.reason })
+    res.status(201).json(saved)
+  }
+}
+
+/** R9.4 — the asset classes (settings-managed; the rates the schedules run on). */
+@Controller("api/v1/accounting/asset-classes")
+export class AssetClassesController {
+  constructor(
+    @Inject(AssetClassService) private readonly svc: AssetClassService,
+    @Inject(AuditService) private readonly audit: AuditService,
+  ) {}
+
+  @Get() @Authed()
+  async list(@Res() res: Response) {
+    res.json(await this.svc.all())
+  }
+
+  @Post() @Authed("settings.manage")
+  async create(@Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const built = c.buildAssetClass(jsonBody(req), undefined)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const saved = await this.svc.create({ id: c.nextClassId(), ...built.fields })
+    await this.audit.record({ at: new Date().toISOString(), actor: req.dz!.user, entity: "assetClass", entityId: saved.id, ref: saved.name, action: "created" })
+    res.status(201).json(saved)
+  }
+
+  @Put(":id") @Authed("settings.manage")
+  async update(@Param("id") id: string, @Req() req: AuthedRequest, @Res() res: Response) {
+    const c = compat()
+    const cur = await this.svc.find(id)
+    if (!cur) throw new Problem(404, "Asset class not found")
+    const built = c.buildAssetClass(jsonBody(req), cur)
+    if ("status" in built) throw new Problem(built.status, built.title, built.errors)
+    const before = { name: cur.name, rate: cur.rate, active: cur.active }
+    const saved = await this.svc.update({ ...cur, ...built.fields })
+    await this.audit.record({
+      at: new Date().toISOString(), actor: req.dz!.user, entity: "assetClass", entityId: saved.id, ref: saved.name, action: "edited",
+      note: `rate ${before.rate}% → ${saved.rate}%`, changes: c.diff(before, { name: saved.name, rate: saved.rate, active: saved.active }, ["name", "rate", "active"]),
     })
     res.json(saved)
   }

@@ -1292,7 +1292,7 @@ statements a manufacturer files and reads — and the close is the one control t
   exactly as shown.
 - **The close** (`POST /accounting/close`, `settings.manage`) moves the cut-off the config holds
   (`accounting_config.closed_up_to`): it refuses a non-month-end, a future, or an already-closed date
-  (422), and any draft money document, transfer or journal entry dated on or before it (409, naming
+  (422), and any draft money document, transfer, journal entry or asset dated on or before it (409, naming
   them). After it, every dated document builder answers `dateClosed` — the same rule the money documents
   have had since R5.6, now spoken by the whole journal. The audit trail records who closed, to where, and
   why.
@@ -1302,6 +1302,45 @@ statements a manufacturer files and reads — and the close is the one control t
   foot, the balance sheet balancing, the cash flow tying to the money balances, and the close's refusal and
   success paths; `api_native.py` drills the same against PostgreSQL incl. the restart; `contract.py` carries
   the five new rows.
+
+## R9.4 — the fixed assets
+
+The register, the classes and the derived postings that turn a machine into books. An asset is a document
+(AS-, draft → approved → cancelled, the same lifecycle the money documents ride), and everything the books
+read off it is derived — never stored, so it can no more disagree with the record than the chart can with
+the journal.
+
+- **The classes** (`asset_classes`, migration `0028`) carry the NBR Third Schedule rates (factory building
+  10%, plant and machinery 15%, computer hardware 25%, motor vehicles 10% …) with a free-text note; they are
+  settings-managed (`settings.manage`, unique on name), and a rate change re-runs every schedule that names
+  it the next time it is read.
+- **The asset** (`fixed_assets`, migration `0028`) is commissioned on a date at a cost with a salvage value,
+  its class fixing the rate; `input_vat` and `creditable` carry the input-credit tracking (a passenger
+  vehicle is not creditable — VAT Act 2012 s.46(2)(a) — and the register shows it). A record typed directly
+  (no purchase) is wealth brought forward: its acquisition posts Dr 1500 / Cr 3910 on approval, nothing for
+  a draft. **The schedule** (`lib/assets.ts`, pure) walks month by month from commissioning: the base the
+  charge runs on, the month's straight-line charge (`cost × rate / 12`, capped at cost − salvage), the
+  accumulated total and the closing net book value; `?to=` reads the walk as it stood then. **A revaluation**
+  starts a fresh segment — the carrying amount becomes the valuer's figure from that month, the accumulated
+  column keeps counting the whole life, and the difference posts Dr 1500 / Cr 3950 (revaluation reserve).
+  **A disposal** is final: the month of the sale charges nothing, the asset's cost and accumulated
+  depreciation come off the books, the proceeds land in the account named (or receivables), and the
+  difference is the statement's — Cr 4310 for a gain, Dr 5710 for a loss. The monthly charge posts
+  Dr 5700 / Cr 1510; every posting is derived from the rows, so the 1510 ledger closing equals the active
+  fleet's accumulation to the poisha.
+- **Capital purchases** (R9.4's one widening of an existing document): a purchase with `category:
+  "capital"` moves no stock — its cost posts to 1500 (not 1150), the input VAT credits as usual, and the
+  asset record itself is typed in the register (an optional, display-only `purchaseId` links the two). No
+  auto-creation: the roadmap asks for tracking, not magic.
+- **The screens**: `/accounting/assets` (the register — class, cost, accumulated, NBV, monthly charge,
+  status, the input-credit flag; CSV) with `?view={id}` opening the asset's sheet (the record, the derived
+  postings, and the depreciation schedule with the revaluation and disposal months marked), and the form
+  (new / edit a draft) with the monthly charge previewed. `e2e_r9.py` §16–§20 walks the seeded Gazuria
+  building (revalued to 45,000,000 mid-walk, 43,875,000 NBV at 2026-09-30) and a full lifecycle — draft →
+  approve → cancel, a disposal's 12,000 gain, a revaluation's re-base, every refusal; `api_native.py`
+  drills the tables incl. the stamped delete, the restart and the adoption (a database seeded between R9.2
+  and R9.4 gets the six chart rows and the classes + assets idempotently, no re-seed); `contract.py`
+  carries the eleven new rows.
 
 ## Tables
 
@@ -1324,7 +1363,7 @@ statements a manufacturer files and reads — and the close is the one control t
 | `sales` | **R5.3:** sales invoices (Mushak 6.3) — number and challan (number unique), process, customer and branch as printed, money (`numeric`), the export / deemed-export shipping documents as their own columns, own history (JSONB); `deleted_at` is the undo trash, which keeps a deleted draft's number retired |
 | `sale_lines` | **R5.3:** an invoice's printed lines — item, name, HS code, unit, quantity, price, SD/VAT rates and totals, batch; primary key (invoice, position) |
 | `sale_realisations` | **R5.3:** export proceeds (PRC) recorded against an invoice — bank, PRC number, foreign-currency amount, rate and the BDT value at that rate, the R6.6 batch that posted it |
-| `purchases` | **R5.3:** purchases (Mushak 6.1 input side) — number (unique), challan / BoE number and date, vendor as printed, mode, money (`numeric`), the two totals a purchase adds (`tti`, `rebate`), the Bill of Entry an import clears as its own columns, own history (JSONB); `deleted_at` is the undo trash |
+| `purchases` | **R5.3:** purchases (Mushak 6.1 input side) — number (unique), challan / BoE number and date, vendor as printed, mode, money (`numeric`), the two totals a purchase adds (`tti`, `rebate`), the Bill of Entry an import clears as its own columns, own history (JSONB); **R9.4** `category` widened to `capital` (moves no stock, posts to 1500); `deleted_at` is the undo trash |
 | `purchase_lines` | **R5.3:** a purchase's lines — item, quantity, prices and rates, `rebateable` / `vds`, and an import line's duty breakdown (AV, CD, RD, AIT, AT and the rates) plus what a bonded entry left foregone; primary key (document, position) |
 | `notes` | **R5.3:** credit notes (Mushak 6.7) and debit notes (6.8) — `kind` tells them apart; number (unique), the document each was raised against, the customer or vendor as printed, reason, money (`numeric`), the two totals only a debit note has (`tti`, `rebate`), own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired |
 | `note_lines` | **R5.3:** a note's lines — item, the quantity the source document had (`sold_qty` on a credit note, `purchased_qty` on a debit note), what came back, at the source document's price and rates; primary key (note, position) |
@@ -1344,6 +1383,8 @@ statements a manufacturer files and reads — and the close is the one control t
 | `cheque_events` | **R9.1:** the append-only cheque lifecycle — `received / presented / cleared / bounced` with its date and the ≥10-char reason a bounce requires |
 | `gl_accounts` | **R9.2:** the chart of accounts — the template rows plus one row per money account (`money_account_id` maps it); unique on `code`; the movements the register shows are derived (`lib/gl`), never stored |
 | `journal_entries` | **R9.2:** the manual journal entries (JE-) — number (unique), date, memo, the balanced lines (JSONB), process, own history (JSONB); `deleted_at` keeps a deleted draft's id and number retired |
+| `asset_classes` | **R9.4:** the fixed-asset classes with their NBR Third Schedule rates — name (unique), rate, note, active; settings-managed, and every schedule that names a class re-derives on the next read |
+| `fixed_assets` | **R9.4:** the assets (AS-) — number (unique), the commissioning date, class, cost, salvage, the input-credit block (`input_vat`, `creditable`), an optional display-only `purchaseId`, process, own history (JSONB), `revaluations` and `disposal` as JSONB; `deleted_at` keeps a deleted draft's id and number retired; everything the books read (depreciation, NBV, gain/loss) is derived |
 | `bank_statements` / `bank_statement_lines` | **R8.2:** an imported statement (account, period, keyed closing balance, totals) and its lines in file order, each `open / matched / receipt / charge / ignored` with what it matched and the money document created from it |
 | `reminder_settings` (single row) | **R8.3** the reminder settings as one jsonb object: the three deadlines, each with `enabled` and its lead times |
 | `reminders` | **R8.3** one row per reminder the schedule has fired (`rem:<kind>:<due>:<lead>` — the id is the idempotency) |

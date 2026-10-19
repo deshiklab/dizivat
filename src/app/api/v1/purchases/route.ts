@@ -32,7 +32,7 @@ export const POST = withAuth("doc.create", async (req, _ctx, user) => {
   }
   addHistory(p, user.name, "created")
   // Stock is received on approval only (drafts do not move stock)
-  if (d.process === "Approved") { p.process = "Approved"; postStock("purchase", p.lines, 1); addHistory(p, user.name, "approved") }
+  if (d.process === "Approved") { p.process = "Approved"; if (p.category !== "capital") postStock("purchase", p.lines, 1); addHistory(p, user.name, "approved") }
   db.purchases.push(p)
   return json(p, { status: 201 })
 })

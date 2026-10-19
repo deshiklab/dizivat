@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, JournalLine, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
+import type { AssetDisposal, AssetRevaluation, AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, JournalLine, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -521,7 +521,8 @@ export const purchases = pgTable("purchases", {
   issueDate: date("issue_date", { mode: "string" }).notNull(),
   process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
   /** R2: goods (stock) or service purchase (no stock movement); NULL = goods, as the mock leaves the key out */
-  category: text("category", { enum: ["goods", "service"] }),
+  /** R9.4: `capital` — a machinery / vehicle / equipment purchase; its cost posts to fixed assets (1500), not stock */
+  category: text("category", { enum: ["goods", "service", "capital"] }),
   /** branch / warehouse the goods arrive at */
   branchId: text("branch_id").notNull(),
   branchName: text("branch_name").notNull(),
@@ -2124,4 +2125,64 @@ export const journalEntries = pgTable("journal_entries", {
   index("journal_entries_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
   index("journal_entries_date_idx").on(t.date),
   check("journal_entries_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+])
+
+/**
+ * R9.4 — the fixed assets and their classes. The asset is the document (AS- series, draft → approve →
+ * cancel, like every document); the depreciation, the revaluation reserve and the disposal gain or loss
+ * are derived at read time (`journalOf`), so nothing derived is ever stored. A deleted draft keeps its
+ * row, so its id and number stay retired.
+ */
+export const assetClasses = pgTable("asset_classes", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  name: text("name").notNull(),
+  /** the straight-line rate (% a year) — the NBR Third Schedule's default for the class */
+  rate: numeric("rate", { precision: 5, scale: 2, mode: "number" }).notNull(),
+  note: text("note"),
+  active: boolean("active").default(true).notNull(),
+}, (t) => [
+  uniqueIndex("asset_classes_name_key").on(t.name),
+])
+
+export const fixedAssets = pgTable("fixed_assets", {
+  id: text("id").primaryKey(),
+  /** insertion order — tie-breaker so sorted lists are stable, exactly like the in-memory mock */
+  ord: serial("ord").notNull(),
+  /** AS-MMYY#### */
+  no: text("no").notNull(),
+  name: text("name").notNull(),
+  classId: text("class_id").notNull(),
+  /** the date it was commissioned — depreciation runs from this month */
+  date: date("date", { mode: "string" }).notNull(),
+  cost: numeric("cost", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  salvage: numeric("salvage", { precision: 18, scale: 2, mode: "number" }).default(0).notNull(),
+  branchId: text("branch_id"),
+  /** the capital purchase (category `capital`) that acquired it, when there was one */
+  purchaseId: text("purchase_id"),
+  /** capital-item input-credit tracking: the input VAT the acquisition carried, and whether the 9.1 may claim it */
+  inputVat: numeric("input_vat", { precision: 18, scale: 2, mode: "number" }).default(0).notNull(),
+  creditable: boolean("creditable").default(true).notNull(),
+  memo: text("memo"),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  issuedBy: text("issued_by").notNull(),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  cancelReason: text("cancel_reason"),
+  /** the document's own trail: created / edited / approved / cancelled, as the mock stamped it */
+  history: jsonb("history").$type<HistoryEntry[]>(),
+  /** the revaluations, newest last — each re-bases the carrying amount from its month */
+  revaluations: jsonb("revaluations").$type<AssetRevaluation[]>(),
+  /** the disposal, when the asset was sold — final, no undo */
+  disposal: jsonb("disposal").$type<AssetDisposal | null>(),
+  /** a deleted draft leaves the register but keeps its row, so its id and number stay retired */
+  deletedAt: ts("deleted_at"),
+}, (t) => [
+  uniqueIndex("fixed_assets_no_key").on(t.no),
+  index("fixed_assets_live_idx").on(t.createdAt).where(sql`${t.deletedAt} is null`),
+  index("fixed_assets_date_idx").on(t.date),
+  index("fixed_assets_class_idx").on(t.classId),
+  index("fixed_assets_purchase_idx").on(t.purchaseId),
+  check("fixed_assets_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
 ])
