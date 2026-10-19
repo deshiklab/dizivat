@@ -101,13 +101,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # The runner can read its own logs (the API's log redirect is not always reachable from
-          # outside); echo the failing step's tail into the summary so the cause is visible on the run page.
+          # outside); echo the failing step's tail into the summary so the cause is visible on the run page —
+          # and into annotations as well, which the API can read without a web login.
+          LOG="$(gh run view "$GITHUB_RUN_ID" --log-failed 2>/dev/null | tail -c 16000)"
           {
             echo '## Failed step log tail'
             echo '```'
-            gh run view "$GITHUB_RUN_ID" --log-failed 2>/dev/null | tail -c 16000
+            echo "$LOG"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s' "$LOG" | tr -d '\r' | fold -s -w 700 | head -10 | while IFS= read -r chunk; do
+            [ -n "$chunk" ] && echo "::error title=failed-step-tail::${chunk}"
+          done || true
       - name: Upload screenshots and logs
         if: always()
         uses: actions/upload-artifact@v4
