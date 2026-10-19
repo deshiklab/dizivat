@@ -9,7 +9,7 @@ import { useLocale } from "next-intl"
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { fmtCompact, fmtMoney } from "@/lib/format"
 
-export interface SeriesRow { label: string; sales: number; purchases: number; outputVat: number; inputVat: number }
+export interface SeriesRow { label: string; sales: number; purchases: number; outputVat: number; inputVat: number; netPayable: number; deposited: number }
 
 function useChartStyle() {
   const locale = useLocale()
@@ -47,6 +47,24 @@ export function VatTrendChart({ data, labels }: { data: SeriesRow[]; labels: { o
         <Legend wrapperStyle={{ fontSize: 12 }} />
         <Line type="monotone" dataKey="outputVat" isAnimationActive={false} name={labels.outputVat} stroke="var(--chart-1)" strokeWidth={2} dot={false} />
         <Line type="monotone" dataKey="inputVat" isAnimationActive={false} name={labels.inputVat} stroke="var(--chart-2)" strokeWidth={2} strokeDasharray="5 4" dot={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  )
+}
+
+/** R7.3 — net liability against the money actually deposited: the gap between the lines is what the TR-6 button on the compliance centre is for. */
+export function NetDepositChart({ data, labels }: { data: SeriesRow[]; labels: { netPayable: string; deposited: string } }) {
+  const { tip, axis, compact } = useChartStyle()
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
+        <CartesianGrid vertical={false} stroke="var(--border)" />
+        <XAxis dataKey="label" {...axis} />
+        <YAxis {...axis} width={56} tickFormatter={compact} />
+        <Tooltip {...tip} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Line type="monotone" dataKey="netPayable" isAnimationActive={false} name={labels.netPayable} stroke="var(--chart-3)" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="deposited" isAnimationActive={false} name={labels.deposited} stroke="var(--chart-4)" strokeWidth={2} strokeDasharray="5 4" dot={false} />
       </LineChart>
     </ResponsiveContainer>
   )

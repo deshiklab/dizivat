@@ -4,7 +4,7 @@ import * as React from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { CheckCheck, Download, Eye, Link2, MoreHorizontal, Pencil, Plus, Ship, Trash2, Undo2, XCircle } from "lucide-react"
+import { CheckCheck, Factory, Download, Eye, Link2, MoreHorizontal, Pencil, Plus, Ship, Trash2, Undo2, XCircle } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -108,6 +108,7 @@ export function PurchaseList({ category = "goods" }: { category?: "goods" | "ser
         actions={can("doc.create") ? (svc ? <Button render={<Link href="/purchases/services/new" />}><Plus /> {t("newService")}</Button> : (
           <>
             <Button variant="outline" render={<Link href="/purchases/new?type=import" />}><Ship /> {t("newImport")}</Button>
+            <Button variant="outline" render={<Link href="/purchases/capital/new" />}><Factory /> {t("newCapital")}</Button>
             <Button render={<Link href="/purchases/new" />}><Plus /> {t("new")}</Button>
           </>
         )) : undefined}

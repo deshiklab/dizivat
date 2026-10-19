@@ -91,5 +91,14 @@ const rows: Row[] = [
 export const tariff: TariffLine[] = rows.map(([hsCode, description, cd, sd, vat, ait, rd, at]) => ({
   hsCode, description, cd, sd, vat, ait, rd, at, tti: tti({ cd, sd, vat, ait, rd, at }), chapter: hsCode.slice(0, 2),
 }))
+/** The demo's default fiscal year — also the seed's (`meta.tariff_fy`), and the fallback the API starts from. */
 export const TARIFF_FY = "2026-27"
+
+/** R7.1: the active year and its lines are runtime state — an import replaces both, in place (the binding stays). */
+let activeFy = TARIFF_FY
+export const tariffFy = () => activeFy
+export const setActiveTariff = (fy: string, lines: TariffLine[]) => {
+  activeFy = fy
+  tariff.splice(0, tariff.length, ...lines)
+}
 export const findTariff = (hs: string) => tariff.find((t) => t.hsCode === hs.replace(/\D/g, ""))

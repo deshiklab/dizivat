@@ -1,6 +1,6 @@
 """Sprint 3 end-to-end checks: users & roles, forced password change, company profile, tariff + HS lookup,
 audit trail, notifications. Run after e2e_s2.py (it mutates users; restart the server for a fresh seed)."""
-import asyncio, os, random, re
+import asyncio, json, os, random, re
 from playwright.async_api import async_playwright, expect
 from _auth import BASE, login_ctx
 
@@ -14,6 +14,7 @@ def fail(section, e):
     import traceback
     msg = f"section {section}: {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}"
     failures.append(msg); print("FAIL", msg); traceback.print_exc(limit=1)
+    print(f"::error::e2e_s3 {msg}")  # surfaces in the GitHub UI and the annotations API (logs blobs are not always fetchable)
 def watch(pg, errs):
     pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
     pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" else None)
@@ -22,7 +23,7 @@ VP = {"width": 1440, "height": 900}
 async def settle(pg):
     """Screenshots must not catch a sheet/dialog/popover mid-transition: wait for every running animation."""
     await pg.wait_for_timeout(50)
-    await pg.evaluate("Promise.all(document.getAnimations().map(a => a.finished.catch(() => null)))")
+    await pg.evaluate("Promise.race([Promise.all(document.getAnimations().map(a => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 1500))])")
     await pg.wait_for_timeout(80)
 
 async def main():
@@ -168,6 +169,73 @@ async def main():
             await expect(ap.locator("#sdRate")).to_have_value("20"); ok("'Use tariff rates' copies VAT/SD into the item")
             await settle(ap); await ap.screenshot(path=f"{OUT}/55_item_hs_lookup.png")
             await ap.keyboard.press("Escape")
+
+            # ── R7.1: the tariff import dialog (dry run → preview → apply → restore) ──
+            await ap.goto(BASE + "/en/vat/tariff", wait_until="networkidle")
+            before = (await (await appr.request.get(BASE + "/api/v1/tariff?size=1")).json())["total"]
+            beforeCsv = (await (await appr.request.get(BASE + "/api/v1/tariff?format=csv")).text()).strip().lstrip("\ufeff")  # Excel-friendly BOM
+            sheet = ("hsCode,description,cd,sd,vat,ait,rd,at\r\n"
+                     "61091000,\"T-shirts, singlets and other vests, knitted, of cotton\",25,0,15,5,3,0\r\n"
+                     "52062300,\"Woven fabrics of synthetic staple fibres, dyed\",10,0,15,5,3,0\r\n")
+            dlg = ap.get_by_role("dialog")
+            await ap.get_by_role("button", name="Import tariff").click()
+            await expect(dlg).to_be_visible()
+            await dlg.get_by_label("Fiscal year").fill("2027-28")
+            await dlg.locator("#tariff-file").set_input_files(files=[{"name": "tariff-2027-28.csv", "mimeType": "text/csv", "buffer": sheet.encode()}])
+            await expect(dlg.get_by_text("2 rows · 8 columns recognised.")).to_be_visible(); ok("import dialog: the sheet is read in the browser")
+            await dlg.get_by_role("button", name="Validate (dry run)").click()
+            await expect(dlg.get_by_text("Preview for FY 2027-28")).to_be_visible()
+            await expect(dlg.get_by_text("New codes").locator("..")).to_contain_text("2"); ok("import dialog: the dry run previews the diff")
+            await settle(ap); await ap.screenshot(path=f"{OUT}/55a_tariff_import_preview.png")
+            await dlg.get_by_role("button", name="Import", exact=True).click()
+            await expect(dlg).not_to_be_visible()
+            await expect(ap.get_by_text("2 HS codes · FY 2027-28")).to_be_visible(timeout=10000)
+            await expect(ap.locator("tbody tr")).to_have_count(2); ok("import dialog: applying switches the register to the imported year")
+            await settle(ap); await ap.screenshot(path=f"{OUT}/55b_tariff_imported.png")
+            # restore the seeded year through the API — and prove the export → import round trip is lossless
+            import csv as _csv, io as _io
+            rr = list(_csv.reader(_io.StringIO(beforeCsv)))
+            head, body = rr[0], [r for r in rr[1:] if r]
+            idx = {k: i for i, k in enumerate(head)}
+            rows = [{ "hsCode": r[idx["HS code"]], "description": r[idx["Description"]],
+                      "cd": r[idx["CD"]], "sd": r[idx["SD"]], "vat": r[idx["VAT"]], "ait": r[idx["AIT"]],
+                      "rd": r[idx["RD"]], "at": r[idx["AT"]] } for r in body]
+            r = await appr.request.post(BASE + "/api/v1/tariff/import",
+                                        data={"fiscalYear": "2026-27", "dryRun": False, "rows": rows})
+            j = await r.json()
+            # the mock keeps one year in memory (re-importing an older year reads as all-new); the API keeps
+            # every year — assert what both runtimes guarantee, then that the register is itself again
+            assert r.status == 201 and j["applied"] == before and j["activeFy"] == "2026-27", (r.status, j)
+            after = (await (await appr.request.get(BASE + "/api/v1/tariff?size=1")).json())["total"]
+            assert after == before, (before, after)
+            ok(f"tariff import: the CSV export re-imports losslessly ({before} lines, the year active again)")
+        except Exception as e: fail(5, e)
+
+        # ── 5b. R7.2: the compliance pack download ────────────────────
+        try:
+            await ap.goto(BASE + "/en/vat/mushak", wait_until="networkidle")
+            await expect(ap.get_by_role("link", name="Download pack")).to_be_visible(); ok("compliance hub: the pack download button is there")
+            link = ap.get_by_role("link", name="Download pack")
+            href = await link.get_attribute("href")
+            assert href and "/api/v1/vat/compliance/pack" in href, href
+            r = await appr.request.get(BASE + href)
+            body = await r.body()
+            assert (r.status == 200 and r.headers["content-type"].startswith("application/zip")
+                    and r.headers["content-disposition"].startswith("attachment; filename=\"compliance-pack-")), (r.status, dict(r.headers))
+            assert body[:2] == b"PK" and body.count(b"PK\x03\x04") == 9, len(body)
+            import zipfile as _zf
+            names = _zf.ZipFile(__import__("io").BytesIO(body)).namelist()
+            assert names[0].startswith("manifest-") and any(n.startswith("mushak-6.2-sales-") for n in names) and any(n.startswith("return-9.1-") for n in names), names
+            ok(f"compliance pack: the zip downloads through the browser session ({len(names)} members, manifest first)")
+            ef = ap.get_by_role("link", name="e-Filing JSON")
+            ehref = await ef.get_attribute("href")
+            assert ehref and "/api/v1/vat/compliance/efiling" in ehref, ehref
+            er = await appr.request.get(BASE + ehref)
+            ebody = json.loads(await er.body())
+            assert (er.status == 200 and er.headers["content-type"].startswith("application/json")
+                    and ebody["format"] == "dizivat-efiling-9.1/1" and ebody["taxPeriod"] and "figures" in ebody), (er.status, ebody.get("format"))
+            ok("e-filing document: the JSON downloads through the browser session with the 9.1's figures")
+            await settle(ap); await ap.screenshot(path=f"{OUT}/55c_compliance_pack.png")
         except Exception as e: fail(5, e)
 
         # ── 6. Audit trail ────────────────────────────────────────────

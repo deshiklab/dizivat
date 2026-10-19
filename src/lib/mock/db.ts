@@ -1,4 +1,4 @@
-import type { BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, MoneyAccount, MoneyDoc, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, AssetClass, ChequeEvent, FixedAsset, GlAccount, ManualJournalEntry, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -12,17 +12,21 @@ import { seedR4 } from "./seed-r4"
 import { seedRealisations, seedUds } from "./seed-r6"
 import { seedBondUds, seedDrawbackClaims } from "./seed-r65"
 import { seedLateFilings, seedPrcBatches, seedReturnAmendments } from "./seed-r66"
+import { DEFAULT_REMINDER_SETTINGS, seedDeliveryLog, seedDeliverySchedules } from "./seed-r83"
+import { seedChequeEvents, seedTransfers } from "./seed-r91"
+import { seedChart, seedJournal } from "./seed-r92"
+import { seedAssetClasses, seedAssets } from "./seed-r94"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
   | { kind: "purchase"; doc: Purchase; at: string }
   | { kind: "customer" | "vendor"; doc: Party; at: string }
-interface DB {
+export interface DB {
   sales: Sale[]; purchases: Purchase[]; items: Item[]; customers: Party[]; vendors: Party[]; trash: Trash[]
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number; journal: number; asset: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -36,6 +40,17 @@ interface DB {
   bondUds: BondUd[]; drawbackClaims: DrawbackClaim[]
   /** R6.6: bank PRC-file batches (export proceeds), Mushak 9.3 late-filing and 9.4 amendment applications */
   prcBatches: PrcBatch[]; lateFilings: LateFiling[]; returnAmendments: ReturnAmendment[]
+  /** R8.2: imported bank statements and their lines (reconciliation) */
+  bankStatements: BankStatement[]; bankLines: BankStatementLine[]
+  /** R8.3: the reminder settings (one row), the reminders the schedule has fired, the delivery schedules and their log */
+  reminderSettings: ReminderSettings; reminders: FiredReminder[]
+  deliverySchedules: DeliverySchedule[]; deliveryLog: DeliveryLogRow[]
+  /** R9.1: transfers between the company's own accounts, and the cheque lifecycle events (the register itself is derived) */
+  moneyTransfers: MoneyTransfer[]; chequeEvents: ChequeEvent[]
+  /** R9.2: the chart of accounts and the manual journal entries (the derived postings are never stored) */
+  glAccounts: GlAccount[]; journalEntries: ManualJournalEntry[]
+  /** R9.4: the fixed assets and their classes — the depreciation / revaluation / disposal postings fold from them */
+  assetClasses: AssetClass[]; assets: FixedAsset[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -138,19 +153,40 @@ function init(): DB {
     ...returnAmendments.map((x) => ({ entity: "returnAmendment" as const, id: x.id, ref: `${x.no} · 9.4 · ${x.period.slice(5)}-${x.period.slice(0, 4)}`, history: x.history })),
   ]
   seedAudit(d.sales, d.purchases, [...transfers, ...damages], r2Docs)
-  return {
+  const world: DB = {
     ...d, trash: [], units: seedUnits(), transfers, damages, debitNotes, openings, masterItems,
     creditNotes, boms, workOrders, batches, productionConfig: { procedure: "directStock", consumption: "standard" },
     ...r4,
     uds, bondUds, drawbackClaims, prcBatches, lateFilings, returnAmendments,
+    bankStatements: [], bankLines: [],
+    reminderSettings: DEFAULT_REMINDER_SETTINGS, reminders: [],
+    deliverySchedules: seedDeliverySchedules(), deliveryLog: [],
+    moneyTransfers: [], chequeEvents: [],
+    glAccounts: [], journalEntries: [],
+    assetClasses: seedAssetClasses(), assets: seedAssets(),
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
       account: r4.moneyAccounts.length, receipt: r4.moneyDocs.filter((x) => x.kind === "receipt").length, payment: r4.moneyDocs.filter((x) => x.kind === "payment").length,
       treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length, bondUd: bondUds.length, claim: drawbackClaims.length,
-      prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length,
+      prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length, statement: 0,
+      moneyTransfer: 0, cheque: 0, journal: 0, asset: 8,
     },
   }
+  // the seeded log row's figures come from the seeded books themselves, so both runtimes seed the same document
+  world.deliveryLog = seedDeliveryLog(world)
+  // R9.1: the transfers and the cheque lifecycle, derived from the seeded accounts and cheque money documents
+  world.moneyTransfers = seedTransfers(world)
+  world.chequeEvents = seedChequeEvents(world)
+  world.seq.moneyTransfer = world.moneyTransfers.length
+  world.seq.cheque = world.chequeEvents.length
+  // R9.2: the chart (template + the money accounts' own rows) and the manual journal entries
+  world.glAccounts = seedChart(world)
+  world.journalEntries = seedJournal(world)
+  world.seq.journal = world.journalEntries.length
+  // R9.4: the fixed assets (the classes are constants; the depreciation is derived, never seeded)
+  world.seq.asset = world.assets.length
+  return world
 }
 
 /** Seeds the global audit log from document histories, recent sign-ins and a few admin events. */
@@ -194,6 +230,23 @@ db.seq.ud ??= db.uds.length
 // R6.6: state saved before R6.6 has no PRC batches / return applications yet
 db.prcBatches ??= []; db.lateFilings ??= []; db.returnAmendments ??= []
 db.seq.prcBatch ??= db.prcBatches.length; db.seq.lateFiling ??= db.lateFilings.length; db.seq.amendment ??= db.returnAmendments.length
+// R8.3: state saved before R8.3 has no schedule yet — a restored snapshot gets the defaults, and its seeded log
+// row is computed from the snapshot's own books (the same pure builder the tick uses)
+db.reminderSettings ??= DEFAULT_REMINDER_SETTINGS
+db.reminders ??= []
+// R9.1: state saved before R9.1 has no transfers or cheque events yet (the register derives from the money
+// documents the snapshot already carries)
+db.moneyTransfers ??= []
+db.chequeEvents ??= []
+db.seq.moneyTransfer ??= 0
+db.seq.cheque ??= 0
+// R9.2: a snapshot saved before R9.2 has no chart and no manual entries — the chart is rebuilt from the
+// template and the snapshot's own money accounts, and the manual entries start empty
+db.glAccounts ??= seedChart(db)
+db.journalEntries ??= []
+db.seq.journal ??= 0
+db.deliverySchedules ??= seedDeliverySchedules()
+db.deliveryLog ??= seedDeliveryLog(db)
 
 export const withStock = (i: Item): ItemWithStock => ({
   ...i,
@@ -241,10 +294,20 @@ export function branchLabels() { return Object.fromEntries(company.branches.map(
 export function resolveBranch(id?: string) { return stockBranches().find((b) => b.id === (id || mainBranchId())) ?? null }
 
 /**
+ * The movement documents the derived stock and an item's ledger add up (R5.4): the mock passes its own in-memory
+ * copies, the PostgreSQL API passes the same documents read back from its tables, so both derive the same numbers
+ * from the same code. Every family here has a table of its own now.
+ */
+export type MovementSource = {
+  items: Item[]; sales: Sale[]; purchases: Purchase[]; transfers: Transfer[]; damages: Damage[]
+  debitNotes: DebitNote[]; creditNotes: CreditNote[]; openings: OpeningEntry[]; batches: Batch[]
+}
+
+/**
  * Stock of every item split by branch. Non-main branches = their approved documents
  * (purchases in, sales out, transfers in/out, damage out); the main branch holds the rest.
  */
-export function stockByBranch(): Map<string, Record<string, number>> {
+export function branchSplit(src: MovementSource): Map<string, Record<string, number>> {
   const main = mainBranchId()
   const moves = new Map<string, Record<string, number>>()
   const add = (itemId: string, b: string, q: number) => {
@@ -253,19 +316,19 @@ export function stockByBranch(): Map<string, Record<string, number>> {
     r[b] = (r[b] ?? 0) + q
     moves.set(itemId, r)
   }
-  for (const s of db.sales) if (s.process === "Approved") for (const l of s.lines) add(l.itemId, s.branchId, -l.qty)
-  for (const p of db.purchases) if (p.process === "Approved") for (const l of p.lines) add(l.itemId, p.branchId, l.qty)
-  for (const t of db.transfers) if (t.process === "Approved") for (const l of t.lines) { add(l.itemId, t.fromBranchId, -l.qty); add(l.itemId, t.toBranchId, l.qty) }
-  for (const d of db.damages) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
-  for (const d of db.debitNotes) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
-  for (const o of db.openings) if (o.process === "Approved") add(o.itemId, o.branchId, o.qty)
-  for (const c of db.creditNotes) if (c.process === "Approved") for (const l of c.lines) add(l.itemId, c.branchId, l.qty)
-  for (const b of db.batches) if (b.process === "Approved") {
+  for (const s of src.sales) if (s.process === "Approved") for (const l of s.lines) add(l.itemId, s.branchId, -l.qty)
+  for (const p of src.purchases) if (p.process === "Approved") for (const l of p.lines) add(l.itemId, p.branchId, l.qty)
+  for (const t of src.transfers) if (t.process === "Approved") for (const l of t.lines) { add(l.itemId, t.fromBranchId, -l.qty); add(l.itemId, t.toBranchId, l.qty) }
+  for (const d of src.damages) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
+  for (const d of src.debitNotes) if (d.process === "Approved") for (const l of d.lines) add(l.itemId, d.branchId, -l.qty)
+  for (const o of src.openings) if (o.process === "Approved") add(o.itemId, o.branchId, o.qty)
+  for (const c of src.creditNotes) if (c.process === "Approved") for (const l of c.lines) add(l.itemId, c.branchId, l.qty)
+  for (const b of src.batches) if (b.process === "Approved") {
     for (const x of b.consumption) add(x.itemId, b.branchId, -x.qty)
     for (const l of b.lines) add(l.itemId, b.branchId, l.receiveQty)
   }
   const out = new Map<string, Record<string, number>>()
-  for (const it of db.items) {
+  for (const it of src.items) {
     const r = moves.get(it.id) ?? {}
     const others = Object.values(r).reduce((a, q) => a + q, 0)
     const row: Record<string, number> = { [main]: Math.round((withStock(it).remain - others) * 100) / 100 }
@@ -274,6 +337,9 @@ export function stockByBranch(): Map<string, Record<string, number>> {
   }
   return out
 }
+
+/** The same split over the mock's own in-memory documents — what the Next.js handlers and the rule checks use. */
+export function stockByBranch(): Map<string, Record<string, number>> { return branchSplit(db) }
 
 /** Returns field errors for lines that would drive stock negative (aggregated per item) — at one branch when given. */
 export function stockShortfall(lines: { itemId: string; qty: number }[], branchId?: string) {

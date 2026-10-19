@@ -19,9 +19,9 @@ import { RMG_CATALOG, catalogRows, type CatalogItem } from "@/lib/rmg-catalog"
 import { IMPORT_FIELDS, mapRows, readSheet, templateCsv } from "@/lib/sheet"
 import type { ImportEntity, ImportResult } from "@/lib/types"
 
-const ENTITIES: ImportEntity[] = ["items", "customers", "vendors"]
+const ENTITIES: ImportEntity[] = ["items", "customers", "vendors", "openingStock", "purchases", "sales"]
 const CATS: CatalogItem["category"][] = ["packaging", "labels", "trims", "fabric", "garment"]
-const LIST_HREF: Record<ImportEntity, string> = { items: "/inventory/items", customers: "/master/customers", vendors: "/master/vendors" }
+const LIST_HREF: Record<ImportEntity, string> = { items: "/inventory/items", customers: "/master/customers", vendors: "/master/vendors", openingStock: "/purchases/opening", purchases: "/purchases", sales: "/sales" }
 
 interface Loaded { source: string; rows: Record<string, unknown>[]; unknown: string[]; missing: string[]; columns: string[] }
 

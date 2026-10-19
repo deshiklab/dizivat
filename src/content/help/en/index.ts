@@ -11,6 +11,7 @@ import r63 from "./r63"
 import r64 from "./r64"
 import r65 from "./r65"
 import r66 from "./r66"
+import r83 from "./r83"
 
 /** English knowledge base. `satisfies` makes a missing or unknown article a type error. */
-export const EN = { ...gettingStarted, ...sales, ...purchase, ...inventoryProduction, ...accounting, ...nbrVat, ...adminReference, ...r62, ...r63, ...r64, ...r65, ...r66 } satisfies HelpTexts
+export const EN = { ...gettingStarted, ...sales, ...purchase, ...inventoryProduction, ...accounting, ...nbrVat, ...adminReference, ...r62, ...r63, ...r64, ...r65, ...r66, ...r83 } satisfies HelpTexts

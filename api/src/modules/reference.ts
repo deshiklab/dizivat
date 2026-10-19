@@ -4,13 +4,15 @@ import { asc, eq, sql } from "drizzle-orm"
 import type { Request, Response } from "express"
 import type { User } from "@/lib/auth/roles"
 import { runQuery, toCSV } from "@/lib/mock/query"
-import { companyInput, unitInput } from "@/lib/schemas"
+import { tariffTemplateCsv } from "@/lib/sheet"
+import { companyInput, tariffImportInput, unitInput } from "@/lib/schemas"
+import { tariffDiff, type TariffImportResult } from "@/lib/tariff-import"
 import type { Branch, Company, TariffLine, Unit, UnitRow } from "@/lib/types"
 import { Authed, CurrentUser, type AuthedRequest } from "../common/auth"
 import { jsonBody, parse, Problem, searchParams, sendCsv } from "../common/http"
 import { sqlList } from "../common/list"
 import { db, type Tx } from "../db/client"
-import { branches, company, meta, units } from "../db/schema"
+import { branches, company, meta, tariffLines, units } from "../db/schema"
 import { compat, mirror } from "../state"
 import { AuditService } from "./audit"
 
@@ -179,6 +181,7 @@ export const tariffFy = async () => (await db.select().from(meta).where(eq(meta.
 
 @Controller("api/v1/tariff")
 export class TariffController {
+  constructor(@Inject(AuditService) private readonly audit: AuditService) {}
   /** ?hs=12345678 → one line (404 if unknown); list with facets vat / chapter / sd; ?format=csv. */
   @Get() @Authed()
   async list(@Req() req: Request, @Res() res: Response) {
@@ -211,6 +214,43 @@ export class TariffController {
       ]), `tariff-${fy}.csv`)
     }
     res.json({ ...r, fy })
+  }
+
+  /** R7.1 — a demonstration sheet: the header and two example lines. */
+  @Get("sample") @Authed()
+  sample(@Res() res: Response) {
+    return sendCsv(res, tariffTemplateCsv(), "tariff-template.csv")
+  }
+
+  /**
+   * R7.1 — import the official NBR tariff for a fiscal year. The file is the authority for the year: its lines
+   * replace the year's rows (the ones it omits are removed) and the year becomes the active one. `dryRun`
+   * validates and previews only. All-or-nothing like the master-data import: with any issue nothing is applied.
+   */
+  @Post("import") @Authed("master.edit")
+  async import(@Req() req: AuthedRequest, @Res() res: Response) {
+    const { fiscalYear, rows, dryRun } = parse(tariffImportInput, jsonBody(req))
+    const user = req.dz!.user
+    const existing = (await db.select().from(tariffLines).where(eq(tariffLines.fy, fiscalYear)))
+      .map((r) => ({ hsCode: r.hsCode, description: r.description, chapter: r.chapter, cd: r.cd, sd: r.sd, vat: r.vat, ait: r.ait, rd: r.rd, at: r.at, tti: r.tti }))
+    const { issues, lines, summary } = tariffDiff(rows, existing)
+    const valid = rows.length - new Set(issues.map((x) => x.row)).size
+    if (!dryRun && issues.length) throw new Problem(422, "Validation failed", { rows: ["issues"] })
+    if (!dryRun) {
+      const values = lines.map((l) => ({ fy: fiscalYear, hsCode: l.hsCode, description: l.description, chapter: l.chapter,
+        cd: l.cd, sd: l.sd, vat: l.vat, ait: l.ait, rd: l.rd, at: l.at, tti: l.tti }))
+      await db.transaction(async (tx) => {
+        await tx.delete(tariffLines).where(eq(tariffLines.fy, fiscalYear))
+        for (let i = 0; i < values.length; i += 500) await tx.insert(tariffLines).values(values.slice(i, i + 500))
+        await tx.insert(meta).values({ key: "tariff_fy", value: fiscalYear })
+          .onConflictDoUpdate({ target: meta.key, set: { value: fiscalYear } })
+      })
+      await this.audit.record({ actor: user, entity: "tariff", entityId: fiscalYear, ref: `FY ${fiscalYear}`, action: "imported",
+        note: `${summary.added} added, ${summary.updated} updated, ${summary.removed} removed, ${summary.unchanged} unchanged` })
+    }
+    const activeFy = dryRun ? await tariffFy() : fiscalYear
+    const r: TariffImportResult = { fiscalYear, dryRun, total: rows.length, valid, issues, summary, applied: dryRun ? 0 : lines.length, activeFy }
+    res.status(!dryRun && r.applied ? 201 : 200).json(r)
   }
 }
 

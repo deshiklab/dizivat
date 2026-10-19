@@ -1,6 +1,9 @@
+import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
+import qrcode from "qrcode-generator"
 import { api } from "@/lib/api/client"
 import { useCompany } from "@/components/auth/me-provider"
+import { appUrl } from "@/lib/base-path"
 import { amountInWords, fmtDate, fmtMoney, fmtNum } from "@/lib/format"
 import type { Sale } from "@/lib/types"
 
@@ -16,6 +19,17 @@ export function Mushak63({ sale }: { sale: Sale }) {
   const branch = profile?.branches.find((b) => b.id === sale.branchId)
   const issueAddress = branch ? `${branch.name} — ${branch.address}` : company.address
   const m = (n: number) => fmtMoney(n, "en")
+  // R8.1 (e-invoice): the QR of a signed verification link — scan it and /verify/6.3 recomputes the signature
+  // against the books (works from any phone; the page is public). The origin is the printing app's own.
+  const [origin, setOrigin] = useState("")
+  useEffect(() => setOrigin(window.location.origin), [])
+  const qrSrc = useMemo(() => {
+    if (!sale.qr || !origin) return ""
+    const qr = qrcode(0, "M")
+    qr.addData(`${origin}${appUrl(`/verify/mushak-63?t=${sale.qr}`)}`)
+    qr.make()
+    return qr.createDataURL(4, 0)
+  }, [sale.qr, origin])
   const L = ({ bn, en }: { bn: string; en: string }) => (
     <span className="block leading-tight"><span lang="bn">{bn}</span><span className="block text-[0.625rem] text-neutral-500">{en}</span></span>
   )
@@ -29,6 +43,17 @@ export function Mushak63({ sale }: { sale: Sale }) {
     <article className="print-area relative overflow-hidden mx-auto w-full max-w-[210mm] bg-white p-6 text-[0.75rem] text-neutral-900 shadow-sm ring-1 ring-neutral-200 sm:p-8 print:p-0 print:shadow-none print:ring-0" aria-label="Mushak 6.3 tax invoice">
       <header className="relative mb-4 text-center">
         <span className="absolute top-0 right-0 rounded border border-neutral-800 px-2 py-0.5 text-sm font-semibold" lang="bn">মূসক-৬.৩</span>
+        {qrSrc && (
+          <figure className="absolute top-0 left-0 w-[18mm] text-center leading-none">
+            {/* alt is the bilingual statutory caption — a QR is decorative only to a screen reader, the link text carries it */}
+            {/* eslint-disable-next-line @next/next/no-img-element -- an inline data URL on a printed statutory form; nothing to optimise */}
+            <img src={qrSrc} alt="" className="mx-auto h-[16mm] w-[16mm]" />
+            <figcaption className="mt-0.5 text-[0.45rem] text-neutral-700">
+              <span lang="bn">ই-ক্রয়/ইনভয়েস যাচাই</span>
+              <span className="block">e-Invoice QR — scan to verify</span>
+            </figcaption>
+          </figure>
+        )}
         <p lang="bn" className="text-sm">গণপ্রজাতন্ত্রী বাংলাদেশ সরকার</p>
         <p lang="bn" className="text-sm">জাতীয় রাজস্ব বোর্ড</p>
         <h2 lang="bn" className="mt-1 text-lg font-bold">কর চালানপত্র</h2>

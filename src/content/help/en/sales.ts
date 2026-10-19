@@ -126,4 +126,27 @@ export default {
       warn("You cannot return more than is left on the invoice, and the credit note cannot be dated before the sale. If the original invoice was wrong rather than returned, cancel it instead (while its period is open)."),
     ],
   },
+  "invoice-qr": {
+    title: "The e-invoice QR on Mushak 6.3",
+    summary: "Every tax invoice prints a signed QR — scan it to check the copy against the seller's books, no sign-in needed.",
+    keywords: ["qr", "qr code", "e-invoice", "e-invoicing", "verify", "verification", "authenticate", "signature", "6.3", "mushak 6.3", "tax invoice", "finance bill 2026"],
+    body: [
+      h("What the QR is"),
+      p("Finance Bill 2026 allows enlisted ERP software to issue the Mushak 6.3. Every 6.3 DiziVAT prints carries a small **QR** in the top-left corner. It holds a link with a signed token covering the invoice number, date, totals and the seller's identity — not just the figures, but a cryptographic signature over them."),
+      h("Verifying a copy"),
+      steps(
+        "Scan the QR with any phone camera — it opens the verification page, no sign-in needed.",
+        "A green **Authentic** card shows the invoice number, date, seller, buyer, value and VAT as they stand in the books.",
+        "A cancelled invoice still verifies, but the card says **Cancelled** — it is not a valid tax document.",
+      ),
+      h("When a copy does not verify"),
+      list(
+        "**Not a DiziVAT QR** — the code was not printed from this system.",
+        "**Signature does not check out** — the token was altered or hand-crafted.",
+        "**The invoice has changed** — the copy is genuine, but the draft was edited after printing, so the figures no longer match the books.",
+        "**No such invoice** — the number is not on file (another system's invoice, or a draft deleted before approval).",
+      ),
+      note("The signature is re-computed at the moment of checking, against the books as they stand — nothing about the check is stored on the invoice itself."),
+    ],
+  },
 } satisfies Record<string, ArticleText>

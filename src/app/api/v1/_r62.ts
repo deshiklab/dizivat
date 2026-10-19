@@ -1,6 +1,7 @@
 /**
- * R6.2 shared logic for the mock API (the PostgreSQL build runs the same code through the compat layer, except backups,
- * which the native backup module owns).
+ * R6.2 shared logic for the mock API (the PostgreSQL build runs the same code through the compat layer, except the
+ * backups, which the native backup module owns, and the subcontracting register, whose rows the native API derives
+ * from the batches' own table since R5.5 — the rules below are the ones it calls).
  *  - RMG: UD / UP register with bond licence watch-list, subcontracting (Mushak 6.4) register
  *  - NBR enlistment: bulk master-data import, database backups (GO 16/Mushak/2019: at least two a day)
  */
@@ -9,27 +10,46 @@ import { db } from "@/lib/mock/db"
 import { auditStore } from "@/lib/mock/audit"
 import { userStore } from "@/lib/mock/users"
 import { COMPANY } from "@/lib/company"
-import { bondRows, daysBetween, udRow, UD_WARN_PCT } from "@/lib/rmg"
-import { itemInput, partyInput, type UdInput } from "@/lib/schemas"
+import { bondRows, daysBetween, registerFrom, udAmendment, udFitForSale, udRow, UD_WARN_PCT } from "@/lib/rmg"
+import { z } from "zod"
+import { itemInput, partyInput, type UdParsed } from "@/lib/schemas"
 import type {
-  BackupRow, BackupStatus, Batch, ImportEntity, ImportIssue, ImportResult, Item, Party, SubconProcess, SubconRegister, SubconRow,
-  UdLine, UdRegister, RestoreDrill,
+  AuditChange, BackupRow, BackupStatus, Batch, ImportEntity, ImportIssue, ImportResult, Item, Party, Sale, SubconProcess,
+  SubconRegister, SubconRow, UdLine, UdRecord, UdRegister, UdRow, VatSettings, RestoreDrill,
 } from "@/lib/types"
 import type { User } from "@/lib/auth/roles"
 import { round2 } from "@/lib/vat"
 import { badUnit } from "@/lib/mock/units"
+import { diff as auditDiff } from "@/lib/mock/audit"
+import { buildItem, newItemId } from "./_items"
+import { invalidRule, type RuleProblem } from "./_lib"
+import { newPartyId } from "./_parties"
+import { buildOpening, claimOpeningId, openingIdentity } from "./_r2"
+import { parsePurchase, purchaseIdentity, saleIdentity, stampDocHistory, stampOpeningHistory } from "./_docs"
+import { parseSale } from "./_r3"
+import { buildPurchaseFields } from "@/lib/mock/build"
+import { mainBranchId } from "@/lib/mock/db"
+import { company } from "@/lib/mock/company"
+import type { OpeningEntry, Purchase, VatReturn } from "@/lib/types"
 
 /* ── UD / UP register ─────────────────────────────────────────────────────── */
 
-export function udRegister(today: string, customerId?: string): UdRegister {
-  const rows = db.uds
+/** What the UD register reads and writes: the declarations, the invoices that draw on them, the exporters and the SKUs. */
+export type UdSource = { uds: UdRecord[]; sales: Sale[]; customers: Party[]; items: Item[] }
+/** The company block the register's bond watch-list is built from: the licence the NBR profile carries. */
+export type UdHead = { name: string; profile: VatSettings["profile"] }
+
+/** The register: every exporter's declarations with the quantities already supplied, plus the bond licence watch-list. */
+export function udRegister(today: string, customerId?: string, src: UdSource = db,
+  head: UdHead = { name: COMPANY.name, profile: db.vatSettings.profile }): UdRegister {
+  const rows = src.uds
     .filter((u) => !customerId || u.customerId === customerId)
-    .map((u) => udRow(u, db.sales, today))
+    .map((u) => udRow(u, src.sales, today))
     .sort((a, b) => b.date.localeCompare(a.date) || a.no.localeCompare(b.no))
-  const p = db.vatSettings.profile
+  const p = head.profile
   const own = p && (p.bondLicenseNo || p.segment === "rmgDirect" || p.segment === "rmgComposite")
-    ? { name: COMPANY.name, licenceNo: p.bondLicenseNo, expiry: p.bondLicenseExpiry } : null
-  const bonds = bondRows(own, db.customers.filter((c) => c.active !== false), today)
+    ? { name: head.name, licenceNo: p.bondLicenseNo, expiry: p.bondLicenseExpiry } : null
+  const bonds = bondRows(own, src.customers.filter((c) => c.active !== false), today)
   return {
     rows, bonds,
     totals: {
@@ -42,17 +62,28 @@ export function udRegister(today: string, customerId?: string): UdRegister {
 }
 export { UD_WARN_PCT }
 
+/** The columns the register's CSV prints — one row per input of every declaration. */
+export const udCsvColumns = [
+  { key: "no", label: "UD / UP No" }, { key: "kind", label: "Type" }, { key: "date", label: "Date" }, { key: "expiry", label: "Expiry" },
+  { key: "customer", label: "Exporter" }, { key: "bin", label: "BIN" }, { key: "masterLcNo", label: "Export LC / contract" },
+  { key: "name", label: "Item" }, { key: "hsCode", label: "HS code" }, { key: "uom", label: "Unit" }, { key: "qty", label: "UD quantity" },
+  { key: "used", label: "Supplied" }, { key: "remaining", label: "Remaining" }, { key: "pct", label: "Used %" }, { key: "state", label: "Status" },
+]
+/** …and the rows: every line of every declaration in it. */
+export const udCsvRows = (reg: UdRegister) =>
+  reg.rows.flatMap((u) => u.lines.map((l) => ({ ...l, no: u.no, kind: u.kind, date: u.date, expiry: u.expiry, customer: u.customerName, bin: u.customerBin, masterLcNo: u.masterLcNo, state: u.state })))
+
 /** Business rules for create / update: the customer must be an exporter, items must exist, numbers unique per customer. */
-export function udCheck(d: UdInput & { lines: { itemId: string; qty: number; value?: number }[] }, selfId?: string): { errors?: Record<string, string[]>; customer?: Party; lines?: UdLine[] } {
+export function udCheck(d: UdParsed, selfId?: string, src: UdSource = db): { errors?: Record<string, string[]>; customer?: Party; lines?: UdLine[] } {
   const errors: Record<string, string[]> = {}
-  const customer = db.customers.find((c) => c.id === d.customerId)
+  const customer = src.customers.find((c) => c.id === d.customerId)
   if (!customer) errors.customerId = ["unknown"]
   else if (!customer.exporterType) errors.customerId = ["notExporter"]
   const no = d.no.trim().toUpperCase()
-  if (db.uds.some((u) => u.id !== selfId && u.customerId === d.customerId && u.no.trim().toUpperCase() === no)) errors.no = ["duplicate"]
+  if (src.uds.some((u) => u.id !== selfId && u.customerId === d.customerId && u.no.trim().toUpperCase() === no)) errors.no = ["duplicate"]
   const lines: UdLine[] = []
   d.lines.forEach((l, i) => {
-    const it = db.items.find((x) => x.id === l.itemId)
+    const it = src.items.find((x) => x.id === l.itemId)
     if (!it) { errors[`lines.${i}.itemId`] = ["unknown"]; return }
     lines.push({ itemId: it.id, name: it.name, hsCode: it.hsCode, uom: it.unit, qty: l.qty, ...(l.value != null && Number.isFinite(l.value) ? { value: Math.round(l.value * 100) / 100 } : {}) })
   })
@@ -60,15 +91,110 @@ export function udCheck(d: UdInput & { lines: { itemId: string; qty: number; val
 }
 
 /** Quantity of a UD line already supplied on approved / draft invoices (a UD whose lines are in use cannot be deleted). */
-export const udInUse = (udNo: string, customerId: string) =>
-  db.sales.some((s) => s.customerId === customerId && s.process !== "Cancelled" && s.export?.deemed && (s.export.udNo ?? "").trim().toUpperCase() === udNo.trim().toUpperCase())
+export const udInUse = (udNo: string, customerId: string, sales: Sale[] = db.sales) =>
+  sales.some((s) => s.customerId === customerId && s.process !== "Cancelled" && s.export?.deemed && (s.export.udNo ?? "").trim().toUpperCase() === udNo.trim().toUpperCase())
+
+/** The id the next declaration takes — the mock's own counter, which the API keeps in the snapshot with the rest of `db.seq`. */
+export const newUdId = (stamp: string) => `ud${++db.seq.ud}-${stamp}`
+
+/** What a write hands back: the declaration as it stands, what the register shows, and what the audit trail should say. */
+export type UdWrite = RuleProblem | {
+  ud: UdRecord; row: UdRow
+  action: "created" | "edited" | "deleted"; ref: string; changes?: AuditChange[]; note?: string
+}
+
+/**
+ * Creating one: the rules above, then the document itself — the number in capitals, its inputs priced from the SKUs'
+ * own names and units, and the history entry that opens it. Pushed into `src`, which is the mock's array or, in the
+ * API, the rows that carry the collection.
+ */
+export function udCreate(d: UdParsed, user: User, today: string, src: UdSource = db, stamp = Date.now().toString(36)): UdWrite {
+  const c = udCheck(d, undefined, src)
+  if (c.errors) return { status: 422, title: "Validation failed", errors: c.errors }
+  const at = new Date().toISOString()
+  const ud: UdRecord = {
+    id: newUdId(stamp), no: d.no.trim().toUpperCase(), kind: d.kind, date: d.date, expiry: d.expiry,
+    customerId: c.customer!.id, customerName: c.customer!.name, customerBin: c.customer!.bin, masterLcNo: d.masterLcNo, buyer: d.buyer || undefined,
+    lines: c.lines!, status: d.status, note: d.note || undefined, masterLcValue: d.masterLcValue, currency: d.currency, createdBy: user.name, createdAt: at,
+    history: [{ at, by: user.name, action: "created" }],
+  }
+  src.uds.push(ud)
+  return { ud, row: udRow(ud, src.sales, today), action: "created", ref: `${ud.no} · ${ud.customerName}` }
+}
+
+/**
+ * Editing one — the exporter's customer and the number cannot change once the UD is used on an invoice, and a line
+ * cannot drop below what was already supplied. A change of quantities or of the LC value is an amendment
+ * (BGMEA / BKMEA amendment certificate), and once the UD is in use the amendment needs its reason: the date must be
+ * the UD's own day or later, and not in the future. A line or the LC value sent without a value keeps the one on
+ * file — clearing one needs an explicit 0.
+ */
+export function udUpdate(u: UdRecord, d: UdParsed, user: User, today: string, src: UdSource = db): UdWrite {
+  const c = udCheck(d, u.id, src)
+  if (c.errors) return { status: 422, title: "Validation failed", errors: c.errors }
+  const row = udRow(u, src.sales, today)
+  const used = row.lines.some((l) => l.used > 0) || udInUse(u.no, u.customerId, src.sales)
+  if (used && (d.customerId !== u.customerId || d.no.trim().toUpperCase() !== u.no))
+    return { status: 422, title: "Validation failed", errors: { [d.customerId !== u.customerId ? "customerId" : "no"]: ["udInUse"] } }
+  const errors: Record<string, string[]> = {}
+  row.lines.forEach((l) => {
+    const i = d.lines.findIndex((x) => x.itemId === l.itemId)
+    if (l.used > 0 && (i < 0 || d.lines[i].qty < l.used)) errors[i < 0 ? "lines" : `lines.${i}.qty`] = ["belowUsed"]
+  })
+  for (const l of c.lines!) if (l.value == null) { const old = u.lines.find((x) => x.itemId === l.itemId)?.value; if (old != null) l.value = old }
+  if (d.masterLcValue == null) d.masterLcValue = u.masterLcValue
+  const amendment = udAmendment(u, c.lines!, d.masterLcValue, { reason: d.amendReason, date: d.amendDate || today, by: user.name })
+  if (amendment) {
+    if (used && !amendment.reason) errors.amendReason = ["amendmentReason"]
+    if (amendment.date < u.date) errors.amendDate = ["beforeIssue"]
+    else if (amendment.date > today) errors.amendDate = ["future"]
+  }
+  if (Object.keys(errors).length) return { status: 422, title: "Validation failed", errors }
+  const before = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
+  const at = new Date().toISOString()
+  Object.assign(u, {
+    no: d.no.trim().toUpperCase(), kind: d.kind, date: d.date, expiry: d.expiry, customerId: c.customer!.id, customerName: c.customer!.name, customerBin: c.customer!.bin,
+    masterLcNo: d.masterLcNo, buyer: d.buyer || undefined, lines: c.lines!, status: d.status, note: d.note || undefined, updatedAt: at,
+    masterLcValue: d.masterLcValue, currency: d.currency,
+  })
+  if (amendment) (u.amendments ??= []).push({ ...amendment, at })
+  const after = { ...u, lines: JSON.stringify(u.lines.map((l) => [l.itemId, l.qty, l.value ?? null])) }
+  const changes = auditDiff(before, after, ["no", "kind", "date", "expiry", "masterLcNo", "masterLcValue", "buyer", "status", "lines", "note"])
+  ;(u.history ??= []).push({ at, by: user.name, action: "edited", note: amendment ? `Amendment ${amendment.no}${amendment.reason ? ` — ${amendment.reason}` : ""}` : changes.map((x) => x.field).join(", ") || undefined })
+  return { ud: u, row: udRow(u, src.sales, today), action: "edited", ref: `${u.no} · ${u.customerName}`, changes,
+    note: amendment ? `Amendment ${amendment.no}${amendment.reason ? ` — ${amendment.reason}` : ""}` : undefined }
+}
+
+/** Deleting one: only a UD no invoice refers to can go (otherwise close it). */
+export function udRemove(u: UdRecord, src: UdSource = db): UdWrite {
+  if (udInUse(u.no, u.customerId, src.sales)) return { status: 409, title: "udInUse" }
+  src.uds.splice(src.uds.indexOf(u), 1)
+  return { ud: u, row: udRow(u, src.sales, ""), action: "deleted", ref: `${u.no} · ${u.customerName}` }
+}
+
+/** One UD as the register and the invoice view see it — its lines with what the invoices have drawn on them. */
+export const udAnswer = (u: UdRecord, today: string, src: UdSource = db) => udRow(u, src.sales, today)
+
+/** What the fit question may be given: the exporter, the invoice's date, its lines, and the UD number it cites. */
+export const udFitInput = z.object({
+  saleId: z.string().optional(), customerId: z.string().min(1), issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  udNo: z.string().optional().default(""),
+  lines: z.array(z.object({ itemId: z.string(), qty: z.number() })).default([]),
+})
+
+/** R6.2: does this deemed-export invoice fit inside the exporter's UD? Read-only, asked live by the sales form. */
+export function udFitAnswer(body: { saleId?: string; customerId: string; issueDate: string; udNo?: string; lines: { itemId: string; qty: number }[] },
+  src: UdSource = db) {
+  return udFitForSale({ id: body.saleId ?? "", customerId: body.customerId, issueDate: body.issueDate, lines: body.lines as never,
+    export: { deemed: true, udNo: body.udNo ?? "" } as never }, src.uds, src.sales)
+}
 
 /* ── Subcontracting (Mushak 6.4) register ─────────────────────────────────── */
 
 export const SUBCON_OVERDUE_DAYS = 30
 
-export function subconRegister(from: string, to: string, today: string, overdueDays = SUBCON_OVERDUE_DAYS): SubconRegister {
-  const rows: SubconRow[] = db.batches
+export function subconRegister(from: string, to: string, today: string, overdueDays = SUBCON_OVERDUE_DAYS, src: Batch[] = db.batches): SubconRegister {
+  const rows: SubconRow[] = src
     .filter((b) => b.mode === "contractual" && b.issueDate >= from && b.issueDate <= to)
     .map((b) => subconRow(b, today, overdueDays))
     .sort((a, b) => b.issueDate.localeCompare(a.issueDate) || b.no.localeCompare(a.no))
@@ -83,6 +209,36 @@ export function subconRegister(from: string, to: string, today: string, overdueD
     },
   }
 }
+
+/** A date the register accepts: `YYYY-MM-DD`, as the mock's own route checked it. */
+const SUBCON_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * What the subcontracting register answers for (R5.5: as data, so the API's native register answers with the same
+ * 422 body): the range — by default the fiscal year the RMG registers run on, which `registerFrom` works out — the
+ * overdue threshold in days, and the state `?status=` keeps.
+ */
+export function subconParams(sp: URLSearchParams, today: string): RuleProblem | { from: string; to: string; days: number; only: string | null } {
+  const from = sp.get("from") || registerFrom(today)
+  const to = sp.get("to") || today
+  if (!SUBCON_DATE.test(from) || !SUBCON_DATE.test(to)) return invalidRule({ [SUBCON_DATE.test(from) ? "to" : "from"]: ["date"] })
+  if (to < from) return invalidRule({ to: ["toBeforeFrom"] })
+  const days = Math.min(365, Math.max(1, Number(sp.get("days")) || SUBCON_OVERDUE_DAYS))
+  return { from, to, days, only: sp.get("status") }
+}
+
+/** The rows the register answers with: `?status=` keeps one state of the challan. */
+export const subconRows = (reg: SubconRegister, only: string | null): SubconRow[] =>
+  only ? reg.rows.filter((r) => r.status === only) : reg.rows
+
+/** The register's CSV: one row per challan — sent and returned, what is pending, and for how long. */
+export const SUBCON_CSV_COLUMNS = [
+  { key: "no", label: "Batch No" }, { key: "issueDate", label: "Sent" }, { key: "receiveDate", label: "Returned" }, { key: "vendorName", label: "Contractor" },
+  { key: "vendorBin", label: "BIN" }, { key: "process", label: "Process" }, { key: "issued", label: "Qty sent" }, { key: "received", label: "Qty returned" },
+  { key: "damaged", label: "Wastage" }, { key: "pending", label: "Pending" }, { key: "days", label: "Days" }, { key: "materialValue", label: "Material value" },
+  { key: "value", label: "Finished value" }, { key: "status", label: "Status" },
+]
+export const subconCsvName = (from: string, to: string) => `subcontract-register-${from}-${to}.csv`
 
 function subconRow(b: Batch, today: string, overdueDays: number): SubconRow {
   const issued = b.totalIssue, received = b.totalReceive, damaged = b.totalDamage
@@ -133,8 +289,14 @@ function partyPayload(r: Record<string, unknown>) {
  * Validates every row; rows that already exist (same SKU / same BIN or name) are skipped as duplicates, not errors.
  * All-or-nothing: with any issue nothing is created. dryRun only reports.
  */
+/** What a bulk import reads and writes: the SKUs and the two party books. */
+export type ImportSource = { items: Item[]; customers: Party[]; vendors: Party[] }
+
 export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[], dryRun: boolean, actor: User,
-  audit: (e: { entity: "item" | "customer" | "vendor" | "import"; entityId?: string; ref: string; note?: string }) => void): ImportResult {
+  audit: (e: { entity: "item" | "customer" | "vendor" | "import"; entityId?: string; ref: string; note?: string }) => void,
+  /** the collections the rows are checked against and created in — the mock's arrays, or the API's tables */
+  src?: ImportSource): ImportResult {
+  const world = src ?? (db as unknown as ImportSource)
   const issues: ImportIssue[] = []
   const toCreate: (() => void)[] = []
   let duplicates = 0
@@ -150,14 +312,11 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
       if (seen.has(key)) { issues.push({ row, field: "sku", message: "duplicateInFile" }); return }
       seen.add(key)
       if (badUnit(d.unit)) { issues.push({ row, field: "unit", message: "unknownUnit" }); return }
-      if (db.items.some((x) => x.sku.toLowerCase() === key)) { duplicates++; return }
+      if (world.items.some((x) => x.sku.toLowerCase() === key)) { duplicates++; return }
       toCreate.push(() => {
-        const it: Item = {
-          id: `i${db.items.length + 1}-${Date.now().toString(36)}${i}`, ...d, masterItem: d.name.split(" ")[0], brand: "Local",
-          costPrice: d.purchasePrice ? Math.round(d.purchasePrice * 112) / 100 : Math.round(d.salePrice * 78) / 100,
-          opening: 0, purchased: 0, prodReceive: 0, prodIssue: 0, sold: 0, damage: 0,
-        }
-        db.items.push(it)
+        // the same stored shape the item form produces (R5.2: shared with the native handlers through _items.ts)
+        const it = buildItem(d, d.name.split(" ")[0], newItemId(String(i)))
+        world.items.push(it)
         audit({ entity: "item", entityId: it.id, ref: `${it.sku} · ${it.name}`, note: "Bulk import" })
       })
     } else {
@@ -170,12 +329,12 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
       const key = bin ? `b:${bin}` : `n:${name}`
       if (seen.has(key) || seen.has(`n:${name}`)) { issues.push({ row, field: bin ? "bin" : "name", message: "duplicateInFile" }); return }
       seen.add(key); seen.add(`n:${name}`)
-      const coll = k === "customer" ? db.customers : db.vendors
+      const coll = k === "customer" ? world.customers : world.vendors
       if (coll.some((p) => (bin && p.bin.replace(/^NID /, "") === bin) || p.name.trim().toUpperCase() === name)) { duplicates++; return }
       toCreate.push(() => {
         const { exporterType, bondLicenseNo, bondLicenseExpiry, associationNo, ...rest } = d
         const p: Party = {
-          ...rest, name, id: `${k[0]}${coll.length + db.trash.length + 1}-${Date.now().toString(36)}${i}`, kind: k,
+          ...rest, name, id: newPartyId(k, String(i)), kind: k,
           bin: d.mode === "Non-registered" && d.bin && !d.bin.startsWith("NID ") ? `NID ${d.bin}` : d.bin,
           country: d.mode === "Foreign" ? d.country : undefined,
           exporterType: exporterType || undefined, bondLicenseNo: bondLicenseNo || undefined, bondLicenseExpiry: bondLicenseExpiry || undefined, associationNo: associationNo || undefined,
@@ -193,6 +352,301 @@ export function bulkImport(entity: ImportEntity, rows: Record<string, unknown>[]
   }
   void actor
   return { entity, dryRun, total: rows.length, valid, created: ok && !dryRun ? toCreate.length : 0, duplicates, issues: issues.slice(0, 500) }
+}
+
+/* ── R7.4 — onboarding: opening stock + the purchases before go-live ──────── */
+
+/**
+ * What the onboarding import reads: the SKUs, vendors and branches it resolves names against, the registers it
+ * de-duplicates against, and the returns whose submitted periods a purchase date may not fall in. The two
+ * creators make the drafts — through the same code path a POST /opening-stock and POST /purchases take, so an
+ * imported invoice is indistinguishable from a keyed one. The mock route passes its in-memory db; the API passes
+ * its live views plus the two service-backed creators.
+ */
+export interface OnboardingWorld {
+  items: Item[]
+  vendors: Party[]
+  openings: OpeningEntry[]
+  purchases: Purchase[]
+  customers: Party[]
+  sales: Sale[]
+  returns: VatReturn[]
+  branches: { id: string; name: string }[]
+  mainBranchId: string
+  createOpening: (body: unknown, actor: User) => Promise<RuleProblem | OpeningEntry>
+  createPurchase: (body: unknown, actor: User) => Promise<RuleProblem | Purchase>
+  createSale: (body: unknown, actor: User) => Promise<RuleProblem | Sale>
+}
+
+const INPUT_TAXES = ["standard", "reduced", "zero", "exempt"]
+const METHODS: Record<string, Purchase["method"]> = {
+  cash: "Cash", bank: "Bank", cheque: "Cheque", mobile: "Mobile", transaction: "Transaction",
+  rtgs: "Transaction", beftn: "Transaction", bkash: "Mobile", nagad: "Mobile", card: "Bank",
+}
+
+/** Spreadsheet rows → draft opening-entry bodies. Every rule check is `buildOpening` itself — the POST's own
+ *  validation — so the plan cannot drift from the rule; the planner only resolves names and de-duplicates. */
+function planOpeningStock(rows: Record<string, unknown>[], world: OnboardingWorld) {
+  const issues: ImportIssue[] = []
+  const bodies: { row: number; body: Record<string, unknown> }[] = []
+  let duplicates = 0
+  rows.forEach((raw, i) => {
+    const row = i + 2
+    const sku = str(raw.item).toLowerCase()
+    if (!sku) return issues.push({ row, field: "item", message: "required" })
+    const it = world.items.find((x) => x.sku.toLowerCase() === sku && x.active)
+    if (!it) return issues.push({ row, field: "item", message: "unknownItem" })
+    const bn = str(raw.branch).toLowerCase()
+    const br = bn ? world.branches.find((b) => b.name.toLowerCase() === bn || b.id.toLowerCase() === bn) : world.branches.find((b) => b.id === world.mainBranchId)
+    if (bn && !br) return issues.push({ row, field: "branch", message: "unknownBranch" })
+    const branchId = br?.id ?? world.mainBranchId
+    const date = str(raw.date)
+    if (!date) return issues.push({ row, field: "date", message: "required" })
+    const inputTax = str(raw.inputTax).toLowerCase() || "standard"
+    if (!INPUT_TAXES.includes(inputTax)) return issues.push({ row, field: "inputTax", message: "unknownInputTax" })
+    if (world.openings.some((o) => o.itemId === it.id && o.branchId === branchId && o.date === date && o.process !== "Cancelled")) { duplicates++; return }
+    const built = buildOpening({ itemId: it.id, branchId, date, inputTax, qty: num(raw.qty, NaN), price: num(raw.price, NaN), vatPaid: num(raw.vatPaid, 0), note: str(raw.note), process: "Created" })
+    if ("status" in built) {
+      for (const [f, ms] of Object.entries(built.errors ?? {})) for (const m of ms) issues.push({ row, field: f === "itemId" ? "item" : f === "branchId" ? "branch" : f, message: m })
+      return
+    }
+    bodies.push({ row, body: { itemId: it.id, branchId, date, inputTax, qty: num(raw.qty, NaN), price: num(raw.price, NaN), vatPaid: num(raw.vatPaid, 0), note: str(raw.note), process: "Created" } })
+  })
+  return { bodies, issues, duplicates }
+}
+
+/** Spreadsheet rows → draft purchase bodies. Rows sharing an invoice number become one invoice's lines; the whole
+ *  group is validated by `parsePurchase` — the POST's own validation, the period lock included. */
+function planPurchases(rows: Record<string, unknown>[], world: OnboardingWorld) {
+  const issues: ImportIssue[] = []
+  const bodies: { row: number; body: Record<string, unknown> }[] = []
+  let duplicates = 0
+  const groups = new Map<string, { raw: Record<string, unknown>; row: number }[]>()
+  rows.forEach((raw, i) => {
+    const row = i + 2
+    const invoiceNo = str(raw.invoiceNo).toUpperCase()
+    if (!invoiceNo) return issues.push({ row, field: "invoiceNo", message: "required" })
+    const g = groups.get(invoiceNo) ?? []
+    g.push({ raw, row })
+    groups.set(invoiceNo, g)
+  })
+  const fieldOf = (f: string) => (f === "vendorId" ? "vendor" : f === "issueDate" ? "date" : f)
+  for (const [invoiceNo, g] of groups) {
+    const first = g[0]
+    const date = str(first.raw.date)
+    const vendorKey = str(first.raw.vendor).trim().toLowerCase()
+    for (const { raw, row } of g.slice(1)) {
+      if (str(raw.date) && str(raw.date) !== date) issues.push({ row, field: "date", message: "conflictInInvoice" })
+      if (str(raw.vendor).trim().toLowerCase() && str(raw.vendor).trim().toLowerCase() !== vendorKey) issues.push({ row, field: "vendor", message: "conflictInInvoice" })
+    }
+    const all = (field: string, message: string) => { for (const { row } of g) issues.push({ row, field, message }) }
+    if (!date) { all("date", "required"); continue }
+    if (!vendorKey) { all("vendor", "required"); continue }
+    const vendor = world.vendors.find((v) => v.name.trim().toLowerCase() === vendorKey || (v.bin.replace(/^NID /, "") && v.bin.replace(/^NID /, "") === str(first.raw.vendor).trim()))
+    if (!vendor) { all("vendor", "unknownVendor"); continue }
+    if (vendor.mode === "Foreign") { all("vendor", "foreignVendor"); continue }
+    // the vendor's own bill number is the challan the row becomes — the system's invoiceNo is only the P-… serial
+    const challan = (str(first.raw.challanNo) || invoiceNo).toUpperCase()
+    if (world.purchases.some((p) => { const c = (p.challanNo ?? "").toUpperCase(); return c === challan || c === invoiceNo })) { duplicates += g.length; continue }
+    const methodRaw = str(first.raw.method).toLowerCase()
+    const method = methodRaw ? METHODS[methodRaw] : "Bank"
+    if (!method) { issues.push({ row: first.row, field: "method", message: "unknownMethod" }); continue }
+    const lines: Record<string, unknown>[] = []
+    const lineRows: number[] = []
+    for (const { raw, row } of g) {
+      const sku = str(raw.item).toLowerCase()
+      if (!sku) { issues.push({ row, field: "item", message: "required" }); continue }
+      const it = world.items.find((x) => x.sku.toLowerCase() === sku && x.active)
+      if (!it) { issues.push({ row, field: "item", message: "unknownItem" }); continue }
+      lines.push({
+        itemId: it.id, qty: num(raw.qty, NaN), price: num(raw.price, NaN),
+        vatRate: str(raw.vatRate) === "" ? it.vatRate : num(raw.vatRate, NaN),
+        sdRate: str(raw.sdRate) === "" ? it.sdRate : num(raw.sdRate, NaN), rebateable: true,
+      })
+      lineRows.push(row)
+    }
+    if (!lines.length) continue
+    const body = { vendorId: vendor.id, issueDate: date, challanNo: str(first.raw.challanNo) || invoiceNo, challanDate: str(first.raw.challanDate) || date,
+      method, discount: 0, paid: num(first.raw.paid, 0), issuedBy: "Bulk import", designation: "Bulk import",
+      narration: str(first.raw.narration), process: "Created", branchId: "", category: "goods", lines }
+    const parsed = parsePurchase(body) // the POST's own validation — zod, the vendor, the items, the period lock
+    if ("status" in parsed) {
+      for (const [f, ms] of Object.entries(parsed.errors ?? {})) {
+        const m = /^lines\.(\d+)\.(.*)$/.exec(f)
+        const row = m ? (lineRows[Number(m[1])] ?? first.row) : first.row
+        const field = m ? (m[2] === "itemId" ? "item" : m[2]) : fieldOf(f)
+        for (const msg of ms) issues.push({ row, field, message: msg })
+      }
+      continue
+    }
+    bodies.push({ row: first.row, body })
+  }
+  return { bodies, issues, duplicates }
+}
+
+const SALE_METHODS: Record<string, Sale["method"]> = {
+  cash: "Cash", bank: "Bank", cheque: "Cheque", mobile: "Mobile", bkash: "Mobile", nagad: "Mobile", card: "Bank",
+}
+
+/**
+ * Spreadsheet rows → draft sale-invoice bodies (R7.6 — the sales half of the onboarding import). Like the
+ * purchases planner it only resolves names and de-duplicates; every rule check is `parseSale` itself — the
+ * POST's own validation. Goods only (a sale sells finished goods); a foreign customer makes the invoice a
+ * direct export — zero-rated, with the LC block filled from the sheet (or the bill number and date). The old
+ * system's invoice number rides in the narration as `[old …]` — that marker is what a re-upload skips on.
+ */
+function planSales(rows: Record<string, unknown>[], world: OnboardingWorld) {
+  const issues: ImportIssue[] = []
+  const bodies: { row: number; body: Record<string, unknown> }[] = []
+  let duplicates = 0
+  const groups = new Map<string, { raw: Record<string, unknown>; row: number }[]>()
+  rows.forEach((raw, i) => {
+    const row = i + 2
+    const invoiceNo = str(raw.invoiceNo).toUpperCase()
+    if (!invoiceNo) return issues.push({ row, field: "invoiceNo", message: "required" })
+    const g = groups.get(invoiceNo) ?? []
+    g.push({ raw, row })
+    groups.set(invoiceNo, g)
+  })
+  const fieldOf = (f: string) => f.startsWith("export.") ? f.slice(7) : f === "customerId" ? "customer" : f === "issueDate" || f === "issueTime" ? "date" : f
+  for (const [invoiceNo, g] of groups) {
+    const first = g[0]
+    const date = str(first.raw.date)
+    const custKey = str(first.raw.customer).trim().toLowerCase()
+    for (const { raw, row } of g.slice(1)) {
+      if (str(raw.date) && str(raw.date) !== date) issues.push({ row, field: "date", message: "conflictInInvoice" })
+      if (str(raw.customer).trim().toLowerCase() && str(raw.customer).trim().toLowerCase() !== custKey) issues.push({ row, field: "customer", message: "conflictInInvoice" })
+    }
+    const all = (field: string, message: string) => { for (const { row } of g) issues.push({ row, field, message }) }
+    if (!date) { all("date", "required"); continue }
+    if (!custKey) { all("customer", "required"); continue }
+    const cust = world.customers.find((c) => c.name.trim().toLowerCase() === custKey || (c.bin.replace(/^NID /, "") && c.bin.replace(/^NID /, "") === str(first.raw.customer).trim()))
+    if (!cust) { all("customer", "unknownCustomer"); continue }
+    const marker = `[OLD ${invoiceNo}]`
+    if (world.sales.some((x) => x.process !== "Cancelled" && x.customerId === cust.id && (x.narration ?? "").toUpperCase().includes(marker))) { duplicates += g.length; continue }
+    const methodRaw = str(first.raw.method).toLowerCase()
+    const method = methodRaw ? SALE_METHODS[methodRaw] : "Bank"
+    if (!method) { issues.push({ row: first.row, field: "method", message: "unknownMethod" }); continue }
+    const lines: Record<string, unknown>[] = []
+    const lineRows: number[] = []
+    for (const { raw, row } of g) {
+      const sku = str(raw.item).toLowerCase()
+      if (!sku) { issues.push({ row, field: "item", message: "required" }); continue }
+      const it = world.items.find((x) => x.sku.toLowerCase() === sku && x.active)
+      if (!it) { issues.push({ row, field: "item", message: "unknownItem" }); continue }
+      if (it.group !== "Finished Goods") { issues.push({ row, field: "item", message: "notFinishedGoods" }); continue }
+      lines.push({
+        itemId: it.id, qty: num(raw.qty, NaN), price: num(raw.price, NaN),
+        vatRate: str(raw.vatRate) === "" ? it.vatRate : num(raw.vatRate, NaN),
+        sdRate: str(raw.sdRate) === "" ? it.sdRate : num(raw.sdRate, NaN),
+      })
+      lineRows.push(row)
+    }
+    if (!lines.length) continue
+    const body = {
+      customerId: cust.id, issueDate: date, issueTime: "00:00", method, discount: 0, paid: num(first.raw.paid, 0), vds: false,
+      narration: `${marker} ${str(first.raw.narration)}`.trim(), process: "Created", branchId: "", category: "goods",
+      issuedBy: "Bulk import", designation: "Bulk import", // the importer's own name is stamped at create time
+      lines,
+      ...(cust.mode === "Foreign" ? { export: {
+        deemed: false, lcNo: str(first.raw.lcNo) || invoiceNo, lcDate: str(first.raw.lcDate) || date,
+        customsHouse: str(first.raw.customsHouse), country: str(first.raw.country) || cust.country || "",
+        billNo: str(first.raw.billNo) || invoiceNo, billDate: str(first.raw.billDate) || date, shippingAddress: cust.address,
+      } } : {}),
+    }
+    const parsed = parseSale(body) // the POST's own validation — zod, the customer, the items, the export block, the period lock
+    if ("status" in parsed) {
+      for (const [f, ms] of Object.entries(parsed.errors ?? {})) {
+        const m = /^lines\.(\d+)\.(.*)$/.exec(f)
+        const row = m ? (lineRows[Number(m[1])] ?? first.row) : first.row
+        const field = m ? (m[2] === "itemId" ? "item" : m[2]) : fieldOf(f)
+        for (const msg of ms) issues.push({ row, field, message: msg })
+      }
+      continue
+    }
+    bodies.push({ row: first.row, body })
+  }
+  return { bodies, issues, duplicates }
+}
+
+/**
+ * The onboarding import: dry-run validates every row (and reports the issues on the spreadsheet's own row
+ * numbers), an apply creates the drafts — all of them or none, exactly like the master-data import. What is
+ * created goes through the creators, so stock does not move and no return counts it until the drafts are
+ * approved the ordinary way.
+ */
+export async function importOnboarding(entity: "openingStock" | "purchases" | "sales", rows: Record<string, unknown>[], dryRun: boolean, actor: User,
+  audit: (e: { entity: "opening" | "purchase" | "sale" | "import"; entityId?: string; ref: string; note?: string }) => void,
+  world: OnboardingWorld): Promise<ImportResult> {
+  const plan = entity === "openingStock" ? planOpeningStock(rows, world) : entity === "purchases" ? planPurchases(rows, world) : planSales(rows, world)
+  const valid = rows.length - new Set(plan.issues.map((x) => x.row)).size
+  const clean = plan.issues.length === 0
+  let created = 0
+  if (clean && !dryRun) {
+    for (const p of plan.bodies) {
+      const body = { ...p.body, issuedBy: actor.name, designation: actor.designation || "Import" }
+      const made = entity === "openingStock" ? await world.createOpening(body, actor) : entity === "purchases" ? await world.createPurchase(body, actor) : await world.createSale(body, actor)
+      if ("status" in made) {
+        // the rule refused what the plan cleared — surface it on the row that asked for it (should not happen)
+        for (const [f, ms] of Object.entries(made.errors ?? {})) for (const m of ms) plan.issues.push({ row: p.row, field: f, message: m })
+        continue
+      }
+      created++
+      audit({ entity: entity === "openingStock" ? "opening" : entity === "purchases" ? "purchase" : "sale", entityId: made.id,
+        ref: entity === "openingStock" ? (made as OpeningEntry).no : entity === "purchases" ? (made as Purchase).invoiceNo : (made as Sale).invoiceNo, note: "Bulk import" })
+    }
+    if (created) audit({ entity: "import", ref: `${entity} · ${created} created`, note: `${rows.length} rows, ${plan.duplicates} already on file (skipped)` })
+  }
+  return { entity, dryRun, total: rows.length, valid, created: clean && !dryRun ? created : 0, duplicates: plan.duplicates, issues: plan.issues.slice(0, 500) }
+}
+
+/** The mock's opening creator — the exact code path a POST /opening-stock takes. */
+export function mockCreateOpening(body: unknown, actor: User): RuleProblem | OpeningEntry {
+  const r = buildOpening(body)
+  if ("status" in r) return r
+  const o: OpeningEntry = { ...r.fields, ...openingIdentity(r.fields.date), process: "Created", issuedBy: actor.name, createdAt: new Date().toISOString(), history: [] }
+  claimOpeningId()
+  stampOpeningHistory(o, actor.name, "created")
+  db.openings.push(o)
+  return o
+}
+
+/** The mock's purchase creator — the exact code path a POST /purchases takes (a draft: no stock, no counters). */
+export function mockCreatePurchase(body: unknown, actor: User): RuleProblem | Purchase {
+  const parsed = parsePurchase(body)
+  if ("status" in parsed) return parsed
+  const p: Purchase = {
+    ...buildPurchaseFields(parsed.data, parsed.vendor), ...purchaseIdentity(parsed.data.category ?? "goods", parsed.data.issueDate),
+    createdAt: new Date().toISOString(), process: "Created", history: [],
+  }
+  stampDocHistory(p, actor.name, "created")
+  db.purchases.push(p)
+  return p
+}
+
+/** The mock's sale creator — the exact code path a POST /sales takes (a draft: no stock moves). */
+export function mockCreateSale(body: unknown, actor: User): RuleProblem | Sale {
+  const parsed = parseSale(body)
+  if ("status" in parsed) return parsed
+  const s: Sale = {
+    ...parsed.fields, ...saleIdentity(parsed.data.category ?? "goods", parsed.data.issueDate),
+    createdAt: new Date().toISOString(), process: "Created", history: [],
+  }
+  stampDocHistory(s, actor.name, "created")
+  db.sales.push(s)
+  return s
+}
+
+/** The mock's onboarding world: the in-memory db itself. */
+export function mockOnboardingWorld(): OnboardingWorld {
+  return {
+    items: db.items, vendors: db.vendors, openings: db.openings, purchases: db.purchases,
+    customers: db.customers, sales: db.sales, returns: db.returns,
+    branches: company.branches, mainBranchId: mainBranchId(),
+    createOpening: (body, actor) => Promise.resolve(mockCreateOpening(body, actor)),
+    createPurchase: (body, actor) => Promise.resolve(mockCreatePurchase(body, actor)),
+    createSale: (body, actor) => Promise.resolve(mockCreateSale(body, actor)),
+  }
 }
 
 /* ── Backups (mock: in memory; the PostgreSQL build stores them in the backups table) ── */

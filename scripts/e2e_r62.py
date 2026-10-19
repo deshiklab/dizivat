@@ -191,6 +191,55 @@ async def main():
             st, cust = await send(admin, "POST", "/import", {"entity": "customers", "dryRun": True, "rows": [{"name": f"E2E Garments {RUN}", "address": "Gazipur", "bin": "123", "type": "Local"}]})
             assert st == 200 and cust["issues"], cust
             ok(f"bulk import customers: invalid BIN reported ({cust['issues'][0]['field']})")
+            # R7.4 — onboarding: opening stock and historical purchases become drafts
+            st, os_ = await send(admin, "POST", "/import", {"entity": "openingStock", "dryRun": True, "rows": [
+                {"item": "CN-010", "branch": "Nowhere", "date": "2025-06-30", "qty": "10", "price": "3"}]})
+            assert st == 200 and os_["created"] == 0 and any(i["field"] == "branch" for i in os_["issues"]), os_
+            st, os_ = await send(admin, "POST", "/import", {"entity": "openingStock", "dryRun": False, "rows": [
+                {"item": "CN-010", "date": "2025-06-30", "qty": "10", "price": "38.5", "vatPaid": "0", "note": "e2e onboarding"}]})
+            assert st == 201 and os_["created"] == 1 and not os_["issues"], os_
+            st, os_ = await send(admin, "POST", "/import", {"entity": "openingStock", "dryRun": False, "rows": [
+                {"item": "CN-010", "date": "2025-06-30", "qty": "10", "price": "38.5"}]})
+            assert st == 200 and os_["created"] == 0 and os_["duplicates"] == 1, os_
+            inv = f"E2E-BILL-{RUN}"
+            st, pu = await send(admin, "POST", "/import", {"entity": "purchases", "dryRun": True, "rows": [
+                {"invoiceNo": inv, "date": "2025-06-12", "vendor": "NO SUCH VENDOR", "item": "CN-010", "qty": "1", "price": "1"}]})
+            assert st == 200 and any(i["message"] == "unknownVendor" for i in pu["issues"]), pu
+            st, pu = await send(admin, "POST", "/import", {"entity": "purchases", "dryRun": False, "rows": [
+                {"invoiceNo": inv, "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-010", "qty": "120", "price": "38.5", "method": "bank"},
+                {"invoiceNo": inv, "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-013", "qty": "40", "price": "52"}]})
+            assert st == 201 and pu["created"] == 1 and pu["total"] == 2 and pu["valid"] == 2, pu
+            one = await jget(admin, f"/purchases?q={inv}")
+            assert one["total"] == 1 and one["data"][0]["process"] == "Created" and len(one["data"][0]["lines"]) == 2, one["total"]
+            st, pu2 = await send(admin, "POST", "/import", {"entity": "purchases", "dryRun": False, "rows": [
+                {"invoiceNo": inv, "date": "2025-06-12", "vendor": "BENGAL DYES & CHEMICALS LTD", "item": "CN-010", "qty": "1", "price": "1"}]})
+            assert pu2["created"] == 0 and pu2["duplicates"] == 1, pu2
+            one = await jget(admin, f"/purchases?q={inv}")
+            assert one["total"] == 1, one["total"]
+            ok("R7.4 onboarding: opening stock + purchases import as drafts (unknown branch/vendor reported, duplicate bill skipped, one invoice from two rows)")
+            # R7.6 — onboarding: historical sales become draft invoices
+            sinv = f"E2E-SALE-{RUN}"
+            st, sx = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": True, "rows": [
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "NOBODY LTD", "item": "FG-017", "qty": "1", "price": "1"}]})
+            assert st == 200 and any(i["message"] == "unknownCustomer" for i in sx["issues"]), sx
+            st, sx = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": False, "rows": [
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "100", "price": "610", "paid": "20000"},
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-018", "qty": "10", "price": "880"}]})
+            assert st == 201 and sx["created"] == 1 and sx["valid"] == 2 and not sx["issues"], sx
+            mine = [r for r in (await jget(admin, "/sales?from=2025-06-20&to=2025-06-20&size=100"))["data"]
+                    if f"[OLD {sinv}]" in (r.get("narration") or "")]
+            assert len(mine) == 1 and mine[0]["process"] == "Created" and len(mine[0]["lines"]) == 2 and mine[0]["due"] > 0, mine
+            st, sx2 = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": False, "rows": [
+                {"invoiceNo": sinv, "date": "2025-06-20", "customer": "SUNRISE FASHION RETAIL LTD", "item": "FG-017", "qty": "1", "price": "1"}]})
+            assert sx2["created"] == 0 and sx2["duplicates"] == 1, sx2
+            xinv = f"E2E-EXP-{RUN}"
+            st, se = await send(admin, "POST", "/import", {"entity": "sales", "dryRun": False, "rows": [
+                {"invoiceNo": xinv, "date": "2025-06-22", "customer": "DESERT ROSE TEXTILE TRADING LLC", "item": "FG-017", "qty": "500", "price": "610", "lcNo": f"LC-{RUN}", "customsHouse": "DHAKA"}]})
+            assert st == 201 and se["created"] == 1 and not se["issues"], se
+            xrow = next(r for r in (await jget(admin, "/sales?from=2025-06-22&to=2025-06-22&size=100"))["data"]
+                        if f"[OLD {xinv}]" in (r.get("narration") or ""))
+            assert xrow["mode"] == "Foreign" and xrow["vat"] == 0 and xrow["export"]["lcNo"] == f"LC-{RUN}", xrow
+            ok("R7.6 onboarding: historical sales import as drafts (unknown customer reported, one invoice from two rows, the paid column leaves a receivable, exports zero-rated, duplicate old invoice skipped)")
         except Exception as e: fail(5, e)
 
         # ── 6. Backups (API) ─────────────────────────────────────────────
