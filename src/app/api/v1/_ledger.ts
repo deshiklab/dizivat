@@ -1,5 +1,5 @@
 import { TODAY } from "@/lib/company"
-import { db } from "@/lib/mock/db"
+import { db, type MovementSource } from "@/lib/mock/db"
 import type { BookRow, Item, LedgerEntry, LedgerType } from "@/lib/types"
 import { round2 } from "@/lib/vat"
 
@@ -40,8 +40,11 @@ function allocate(total: number, weights: number[]) {
  * Every stock movement of one item (unsorted, all branches). Purchases, returns, sales, damage, transfers and opening
  * entries are real approved documents. R3: production batches post real issue / receive rows and credit notes post sale
  * returns; production before the first batch (legacy history) stays a monthly summary.
+ *
+ * R5.4: the documents come in as `src` — the mock passes its own in-memory copies, the PostgreSQL API passes the same
+ * documents read back from its tables, so both runtimes derive the same ledger from the same code.
  */
-export function ledgerRows(it: Item): Row[] {
+export function ledgerRows(it: Item, src: MovementSource = db): Row[] {
   const id = it.id
   const rows: Row[] = []
   const pick = (lines: { itemId: string; qty: number; subtotal?: number; sd?: number; vat?: number }[]) => {
@@ -50,7 +53,7 @@ export function ledgerRows(it: Item): Row[] {
   }
 
   // Opening: one row per approved opening entry (R2); items without entries keep a zero FY-start row
-  const openings = db.openings.filter((o) => o.itemId === id && o.process === "Approved")
+  const openings = src.openings.filter((o) => o.itemId === id && o.process === "Approved")
   const fromEntries = round2(openings.reduce((a, o) => a + o.qty, 0))
   for (const o of openings) rows.push({ date: o.date, type: "opening", ref: o.no, refId: o.id, party: o.branchName, in: o.qty, out: 0, at: o.branchId, value: o.value })
   if (!openings.length || Math.abs(fromEntries - it.opening) > 1e-9) {
@@ -58,28 +61,28 @@ export function ledgerRows(it: Item): Row[] {
     rows.push({ date: FY_START, type: "opening", in: q, out: 0, value: round2(q * (it.purchasePrice || it.costPrice)) })
   }
 
-  for (const p of db.purchases) {
+  for (const p of src.purchases) {
     if (p.process !== "Approved" || p.category === "service") continue
     const x = pick(p.lines)
     if (x.q) rows.push({ date: p.issueDate, type: "purchase", ref: p.invoiceNo, refId: p.id, party: p.vendorName, partyAddress: p.vendorAddress, partyBin: p.vendorBin, challan: p.challanNo, refDate: p.challanDate, in: x.q, out: 0, at: p.branchId, value: x.value, sd: x.sd, vat: x.vat })
   }
-  for (const n of db.debitNotes) {
+  for (const n of src.debitNotes) {
     if (n.process !== "Approved") continue
     const x = pick(n.lines)
     if (x.q) rows.push({ date: n.issueDate, type: "purchaseReturn", ref: n.no, refId: n.id, party: n.vendorName, partyAddress: n.vendorAddress, partyBin: n.vendorBin, challan: n.purchaseNo, refDate: n.purchaseDate, in: 0, out: x.q, at: n.branchId, value: x.value, sd: x.sd, vat: x.vat })
   }
-  for (const s of db.sales) {
+  for (const s of src.sales) {
     if (s.process !== "Approved") continue
     const x = pick(s.lines)
     if (x.q) rows.push({ date: s.issueDate, type: "sale", ref: s.invoiceNo, refId: s.id, party: s.customerName, partyAddress: s.customerAddress, partyBin: s.customerBin, challan: s.challanNo, refDate: s.issueDate, in: 0, out: x.q, at: s.branchId, value: x.value, sd: x.sd, vat: x.vat })
   }
-  for (const n of db.creditNotes) {
+  for (const n of src.creditNotes) {
     if (n.process !== "Approved") continue
     const x = pick(n.lines)
     if (x.q) rows.push({ date: n.issueDate, type: "saleReturn", ref: n.no, refId: n.id, party: n.customerName, partyAddress: n.customerAddress, partyBin: n.customerBin, challan: n.saleNo, refDate: n.saleDate, in: x.q, out: 0, at: n.branchId, value: x.value, sd: x.sd, vat: x.vat })
   }
   let batchIn = 0, batchOut = 0
-  for (const b of db.batches) {
+  for (const b of src.batches) {
     if (b.process !== "Approved") continue
     const party = b.vendorName ?? b.branchName
     const rq = round2(b.lines.filter((l) => l.itemId === id).reduce((a, l) => a + l.receiveQty, 0))
@@ -88,12 +91,12 @@ export function ledgerRows(it: Item): Row[] {
     if (c?.qty) { batchOut += c.qty; rows.push({ date: b.issueDate, type: "prodIssue", ref: b.no, refId: b.id, party, in: 0, out: c.qty, at: b.branchId, value: c.value }) }
   }
   let damageDocs = 0
-  for (const d of db.damages) {
+  for (const d of src.damages) {
     if (d.process !== "Approved") continue
     const q = d.lines.filter((l) => l.itemId === id).reduce((a, l) => a + l.qty, 0)
     if (q) { damageDocs += q; rows.push({ date: d.date, type: "damage", ref: d.no, refId: d.id, party: d.branch, in: 0, out: q, at: d.branchId }) }
   }
-  for (const t of db.transfers) {
+  for (const t of src.transfers) {
     if (t.process !== "Approved") continue
     const q = t.lines.filter((l) => l.itemId === id).reduce((a, l) => a + l.qty, 0)
     if (!q) continue
@@ -134,8 +137,8 @@ const DESC: Record<LedgerType, string> = {
  * receipts at document value (purchase value excl. SD/VAT, opening value, production at standard cost),
  * issues at the running average. 6.2 sale rows show the sale value, SD and VAT charged.
  */
-export function buildBook(form: "6.1" | "6.2", it: Item, from: string, to: string) {
-  const rows = sortRows(ledgerRows(it).filter((r) => !r.transfer))
+export function buildBook(form: "6.1" | "6.2", it: Item, from: string, to: string, src: MovementSource = db) {
+  const rows = sortRows(ledgerRows(it, src).filter((r) => !r.transfer))
   let qty = 0, value = 0
   const avg = () => (qty > 0 ? value / qty : it.costPrice || it.purchasePrice)
   const out: BookRow[] = []

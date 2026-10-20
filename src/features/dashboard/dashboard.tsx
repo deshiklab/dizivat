@@ -5,7 +5,7 @@ import { useCan, useCompany, useMe } from "@/components/auth/me-provider"
 import { useLocale, useTranslations } from "next-intl"
 import { useQuery } from "@tanstack/react-query"
 import dynamic from "next/dynamic"
-import { AlertTriangle, ArrowRight, BadgePercent, CalendarClock, CheckCircle2, CircleDollarSign, HandCoins, Landmark, Plus, Receipt, TableProperties, BarChart3 } from "lucide-react"
+import { AlertTriangle, ArrowRight, BadgePercent, CalendarClock, CalendarCheck, CheckCircle2, CircleDollarSign, HandCoins, Landmark, Plus, Receipt, TableProperties, BarChart3 } from "lucide-react"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -23,6 +23,10 @@ import { KpiCard } from "./kpi-card"
 const chartSkeleton = () => <Skeleton className="size-full" aria-hidden />
 const SalesPurchasesChart = dynamic(() => import("./charts").then((m) => m.SalesPurchasesChart), { ssr: false, loading: chartSkeleton })
 const VatTrendChart = dynamic(() => import("./charts").then((m) => m.VatTrendChart), { ssr: false, loading: chartSkeleton })
+const NetDepositChart = dynamic(() => import("./charts").then((m) => m.NetDepositChart), { ssr: false, loading: chartSkeleton })
+
+/** R7.3 — the filing strip's status colours, the compliance centre's own tones */
+const TONE: Record<"open" | "draft" | "submitted" | "overdue", "success" | "warning" | "danger" | "info"> = { submitted: "success", draft: "warning", overdue: "danger", open: "info" }
 
 function ChartCard({ title, description, table, children }: { title: string; description: string; table: React.ReactNode; children: React.ReactNode }) {
   const t = useTranslations("dashboard")
@@ -49,6 +53,7 @@ function ChartCard({ title, description, table, children }: { title: string; des
 export function Dashboard() {
   const company = useCompany()
   const t = useTranslations("dashboard")
+  const tr = useTranslations("ret")
   const locale = useLocale()
   const router = useRouter()
   const { data, isLoading } = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard })
@@ -64,13 +69,17 @@ export function Dashboard() {
       <div className="grid gap-4">
         <Skeleton className="h-12 w-72" />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-32" />)}</div>
-        <div className="grid gap-4 lg:grid-cols-2"><Skeleton className="h-80" /><Skeleton className="h-80" /></div>
+        <div className="grid gap-4 xl:grid-cols-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-80" />)}</div>
+        <Skeleton className="h-36" />
+        <div className="grid gap-4 lg:grid-cols-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-64" />)}</div>
       </div>
     )
   }
   const k = data.kpis
   const series = data.monthly.map((m) => ({ ...m, label: monthLabel(m.month) }))
   const maxCust = Math.max(...data.topCustomers.map((c) => c.amount), 1)
+  const maxVen = Math.max(...data.topVendors.map((c) => c.amount), 1)
+  const maxSku = Math.max(...data.mix.map((c) => c.value), 1)
   const period = fmtDate(`${data.period.label}-01`, locale, "MMMM yyyy")
 
   const monthTable = (keys: [string, string][]) => (
@@ -105,14 +114,39 @@ export function Dashboard() {
         </div>
       </section>
 
-      <div className="mb-4 grid gap-4 xl:grid-cols-2">
+      <div className="mb-4 grid gap-4 xl:grid-cols-3">
         <ChartCard title={t("salesVsPurchases")} description={t("last12")} table={monthTable([["sales", t("sales")], ["purchases", t("purchases")]])}>
           <SalesPurchasesChart data={series} labels={{ sales: t("sales"), purchases: t("purchases") }} />
         </ChartCard>
         <ChartCard title={t("vatTrend")} description={t("vatTrendHint")} table={monthTable([["outputVat", t("outputVat")], ["inputVat", t("inputVat")]])}>
           <VatTrendChart data={series} labels={{ outputVat: t("outputVat"), inputVat: t("inputVat") }} />
         </ChartCard>
+        <ChartCard title={t("netVsDeposits")} description={t("netVsDepositsHint")} table={monthTable([["netPayable", t("netPayable")], ["deposited", t("deposited")]])}>
+          <NetDepositChart data={series} labels={{ netPayable: t("netPayable"), deposited: t("deposited") }} />
+        </ChartCard>
       </div>
+
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><CalendarCheck className="size-4" aria-hidden /> {t("filingStatus")}</CardTitle>
+          <CardDescription>{t("filingStatusHint")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto pb-1" tabIndex={0} role="region" aria-label={t("filingStatus")}>
+            <ol className="flex gap-2">
+              {data.periods.map((p) => (
+                <li key={p.period}>
+                  <Link href={`/vat/return-9-1?period=${p.period}`} aria-current={p.period === data.period.label ? "true" : undefined}
+                    className={`grid min-h-11 min-w-24 gap-1 rounded-md border px-3 py-2 text-left text-xs hover:bg-muted ${p.period === data.period.label ? "border-primary ring-1 ring-primary" : ""}`}>
+                    <span className="font-semibold tabular">{monthLabel(p.period)}</span>
+                    <Pill tone={TONE[p.status]}>{tr(`status.${p.status}`)}</Pill>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
         <Card>
@@ -172,6 +206,42 @@ export function Dashboard() {
                 ))}
               </ul>
             )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="mb-4 grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader><CardTitle>{t("topVendors")}</CardTitle><CardDescription>{t("fyToDate")}</CardDescription></CardHeader>
+          <CardContent>
+            <ol className="grid gap-3">
+              {data.topVendors.map((c) => (
+                <li key={c.name} className="grid gap-1">
+                  <div className="flex items-baseline justify-between gap-2 text-sm">
+                    <span className="truncate" title={c.name}>{c.name}</span>
+                    <span className="shrink-0 tabular font-medium">৳&nbsp;{fmtCompact(c.amount, locale)}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-muted" aria-hidden><div className="h-full rounded-full bg-primary/70" style={{ width: `${(c.amount / maxVen) * 100}%` }} /></div>
+                  <span className="text-xs text-muted-foreground">{t("purchaseInvoices", { count: fmtNum(c.count, locale) })}</span>
+                </li>
+              ))}
+            </ol>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>{t("topSkus")}</CardTitle><CardDescription>{t("fyToDate")}</CardDescription></CardHeader>
+          <CardContent>
+            <ol className="grid gap-3">
+              {data.mix.map((x) => (
+                <li key={x.name} className="grid gap-1">
+                  <div className="flex items-baseline justify-between gap-2 text-sm">
+                    <span className="truncate" title={x.name}>{x.name}</span>
+                    <span className="shrink-0 tabular font-medium">৳&nbsp;{fmtCompact(x.value, locale)}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-muted" aria-hidden><div className="h-full rounded-full bg-primary/40" style={{ width: `${(x.value / maxSku) * 100}%` }} /></div>
+                </li>
+              ))}
+            </ol>
           </CardContent>
         </Card>
       </div>

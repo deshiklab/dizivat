@@ -22,7 +22,7 @@ ENDPOINTS = [
     E("POST", "/me/views", None, "Save a list view {table, name, query}"),
     E("DELETE", "/me/views?table=sales&name=x", None, "Delete a saved view"),
     E("PUT", "/me/password", None, "Change own password {current, next, confirm}; other sessions revoked"),
-    E("GET", "/dashboard", None, "KPIs, charts, deadlines, low stock for the current VAT period"),
+    E("GET", "/dashboard", None, "The home screen: KPIs vs last period, three 12-month trends (sales vs purchases, output vs input VAT, R7.3 net VAT vs TR-6 deposits), the R7.3 filing strip (last 12 tax periods with return status), deadlines, top customers and vendors, product mix, low stock, recent sales"),
     E("GET", "/search?q=bay", None, "Global search (invoices, parties, items)"),
     E("GET", "/notifications", None, "Notifications for the current user {items, unread}"),
     E("POST", "/notifications/read", None, "Mark read {ids} | {all: true}"),
@@ -85,6 +85,8 @@ ENDPOINTS = [
     E("GET", "/company", None, "Company profile"),
     E("PUT", "/company", "settings.manage", "Update company profile (BIN/TIN/NID validated)"),
     E("GET", "/tariff?view=table", None, "NBR tariff — Page<TariffLine>; ?hs=12345678 → one line or 404", page=True, csv=True),
+    E("GET", "/tariff/sample", None, "R7.1: the tariff sheet's template (CSV — the header and two example lines)", ctype="text/csv"),
+    E("POST", "/tariff/import", "master.edit", "R7.1: import the official tariff for a fiscal year {fiscalYear YYYY-YY, rows[{hsCode, description, cd?, sd?, vat?, ait?, rd?, at?}] (≤ 7500), dryRun} → {total, valid, issues[], summary {added, updated, unchanged, removed}, applied, activeFy}; the file is the authority for the year (its lines replace that year's rows, the ones it omits are removed, and the year becomes the one the app looks at); TTI is computed, never uploaded; all-or-nothing: 422 rows.issues on apply when any row fails, dryRun previews only"),
     # R2 — purchase & inventory
     E("GET", "/purchases?category=service", None, "Service purchases (R2) — same Page<Purchase>; category=goods (default) | service | all", page=True, csv=True),
     E("GET", "/services", None, "NBR service codes for service purchases [{id, code, name, vatRate, vds, unit}]"),
@@ -161,9 +163,52 @@ ENDPOINTS = [
     E("GET", "/accounting/statement?kind=customer&party=c1&from=2025-07-01&to=2026-09-25", None, "Party ledger {party, opening, rows[{date, type, ref, debit, credit, balance}], closing, ageing, open invoices, reconciled}; kind=customer|vendor; format=csv", csv=True),
     E("GET", "/accounting/config", None, "Accounting config (books closed up to, default accounts, receipt/voucher numbering)"),
     E("PUT", "/accounting/config", "settings.manage", "Update the accounting config"),
+    E("GET", "/accounting/statements", None, "R8.2: imported bank statements — Page<BankStatement>; facet account", page=True),
+    E("POST", "/accounting/statements", "doc.create", "R8.2: import a statement {accountId, source?, closingBalance?, dryRun, rows[{date, narration, reference?, chequeNo?, deposit, withdrawal}]} — dry-run answers the plan {valid, matched, open, issues, lines[]}; apply stores the statement and its lines all-or-nothing (422 on row-level issues; a line matches a TR-6 challan by number, a recorded receipt / payment by reference, cheque or exact date+amount, else stays open with a suggestion when the narration names a party)"),
+    E("GET", "/accounting/statements/{statement}", None, "R8.2: one statement with its lines and the books-vs-bank answer {statement, lines, books, statementBalance, difference, open}"),
+    E("PATCH", "/accounting/statements/{statement}/lines/{line}", "doc.edit", "R8.2: park an open line {status: charge|ignored, note?} or reopen it (409 matched / a receipt was already created)"),
+    E("POST", "/accounting/statements/{statement}/lines/{line}/receipt", "doc.create", "R8.2: create the money document an open line is about — {kind: receipt|payment} + the ordinary money body (reference / note prefilled from the line), stored as a draft and linked back to the line (409 matched / already created; 422 process Approved — approve it in the register)"),
+    # R9.1 — treasury: transfers between the company's own accounts, and the cheque register
+    E("GET", "/accounting/transfers", None, "R9.1: transfers between the company's own accounts (TX-) — Page<MoneyTransfer>; facets process / fromAccount / toAccount; approving moves both derived balances (amount+charge out of the from-account, the amount into the to-account)", page=True, csv=True),
+    E("POST", "/accounting/transfers", "doc.create", "R9.1: record a transfer {date, fromAccountId, toAccountId, amount, charge?, reference?, note?, process} — the accounts must be active and different; 409 when a saved draft is moved to another pair"),
+    E("GET", "/accounting/transfers/{moneyTransfer}", None, "R9.1: one transfer"),
+    E("PUT", "/accounting/transfers/{moneyTransfer}", "doc.edit", "R9.1: replace a draft (the pair of accounts is locked)"),
+    E("PATCH", "/accounting/transfers/{moneyTransfer}", None, "R9.1: approve / cancel {reason≥10}; the books must be open for the transfer's date either way"),
+    E("DELETE", "/accounting/transfers/{moneyTransfer}", "doc.delete", "R9.1: delete a draft (the row keeps its id and number retired)"),
+    E("GET", "/accounting/cheques", None, "R9.1: the cheque register — Page<ChequeRow> derived from the approved cheque receipts (received) and payments (issued) folded with the lifecycle events; facets kind / status / party / account; ?postDated=true narrows to the post-dated view; row links to the money document", page=True, csv=True),
+    E("POST", "/accounting/cheques/{cheque}/action", "doc.edit", "R9.1: a lifecycle action {action: presented|cleared|bounced, date, reason (≥10 chars, bounced only)} — one append-only event; clear needs a presentation first, cleared/bounced are final, the date must be within [cheque date, today]"),
+    # R9.2 — the general ledger: the chart, the journal register, the manual entries, one account's ledger
+    E("GET", "/accounting/chart", None, "R9.2: the chart of accounts — the RMG template plus one row per money account, each with its derived movement (debit / credit / balance / entries); the two sides always agree, so the foot of the chart is the trial balance", csv=True),
+    E("GET", "/accounting/journal", None, "R9.2: the journal register — Page<JournalRow>, one row per posting, derived and manual side by side (the derived ones link to their source document); facets source / process; ?account={code} narrows to one account's entries", page=True, csv=True),
+    E("POST", "/accounting/journal", "doc.create", "R9.2: create a manual entry (JE-) {date, memo 3-300, lines[{account, debit, credit}] 2-60, process} — the lines must balance to the poisha and name open chart accounts (422 unbalanced / unknownAccount / inactiveAccount / bothSidesOneLine / dateClosed / future)"),
+    E("GET", "/accounting/journal/{journal}", None, "R9.2: one manual entry with its lines and history"),
+    E("PUT", "/accounting/journal/{journal}", "doc.edit", "R9.2: replace a draft (409 if not a draft)"),
+    E("PATCH", "/accounting/journal/{journal}", None, "R9.2: approve (doc.approve) or cancel {reason≥10} (doc.cancel); the books must be open for the entry's date either way"),
+    E("DELETE", "/accounting/journal/{journal}", "doc.delete", "R9.2: delete a draft (the row keeps its id and number retired)"),
+    E("GET", "/accounting/ledger?account={code}", None, "R9.2: one account's ledger — ?account={code} (required) with ?from / ?to: what it opened at, every movement with the running balance, and what it closed at"),
+    # R9.3 — the statements and the close
+    E("GET", "/accounting/reports/trial-balance", None, "R9.3: the trial balance — every account with a position as of ?asOf, on the side it balances; the two columns agree to the poisha; format=csv", csv=True),
+    E("GET", "/accounting/reports/profit-loss", None, "R9.3: the profit & loss for ?from/?to (default: the fiscal year to date, July–June) — revenue / direct / operating / tax cost lines with the gross and the net profit; format=csv", csv=True),
+    E("GET", "/accounting/reports/balance-sheet", None, "R9.3: the balance sheet as of ?asOf — grouped asset, liability and equity sections, the equity carrying the computed profit brought forward and profit for the period, so the two sides balance by construction; format=csv", csv=True),
+    E("GET", "/accounting/reports/cash-flow", None, "R9.3: the cash flow for ?from/?to — every posting that moved a money account grouped by its source kind, with the opening and closing balances and the net movement; format=csv", csv=True),
+    E("POST", "/accounting/close", "settings.manage", "R9.3: close the books through a month-end {to, note?} — refuses a non-month-end / future / already-closed date (422) and any draft money doc, transfer, journal entry or asset dated on or before it (409, naming them); moves the cut-off the config holds"),
+    # R9.4 — the fixed assets and their classes
+    E("GET", "/accounting/assets", None, "R9.4: the fixed-asset register — Page<AssetRegisterRow>, each asset with its class, cost, derived accumulated depreciation, net book value and monthly charge; facets status / class / process; format=csv", page=True, csv=True),
+    E("POST", "/accounting/assets", "doc.create", "R9.4: create an asset (AS-) {name 3-120, classId, date, cost ≥ 1, salvage < cost, inputVat, creditable, memo?, process} — the class must be active, the month open (422 unknownClass / inactiveClass / belowCost / unknownPurchase / dateClosed / future)"),
+    E("GET", "/accounting/assets/{asset}", None, "R9.4: one asset with its revaluations, disposal and history"),
+    E("PUT", "/accounting/assets/{asset}", "doc.edit", "R9.4: replace a draft (409 if not a draft)"),
+    E("PATCH", "/accounting/assets/{asset}", None, "R9.4: approve (doc.approve) or cancel {reason≥10} (doc.cancel); the books must be open for the commissioning month either way — and a disposed asset is never cancelled"),
+    E("DELETE", "/accounting/assets/{asset}", "doc.delete", "R9.4: delete a draft (the row keeps its id and number retired)"),
+    E("GET", "/accounting/assets/{asset}/schedule", None, "R9.4: the asset's depreciation schedule — month by month from commissioning to ?to (default today): the carrying amount, the month's charge, the accumulated total and the closing net book value, revaluation and disposal months marked"),
+    E("POST", "/accounting/assets/{asset}/action", "doc.edit", "R9.4: dispose or revalue {action, date, reason ≥ 10, proceeds+accountId? | toValue?} — final, no undo; refuses a draft asset, a disposed asset (409), a closed month (409) and a bad date (422 beforeCommissioned / future)"),
+    E("GET", "/accounting/asset-classes", None, "R9.4: the asset classes with their NBR Third Schedule rates"),
+    E("POST", "/accounting/asset-classes", "settings.manage", "R9.4: create a class {name 2-80 unique, rate 0-100, note?, active} — 409 on a duplicate name"),
+    E("PUT", "/accounting/asset-classes/{assetClass}", "settings.manage", "R9.4: edit a class — a rate change re-runs every schedule that names it (they are derived)"),
     # R4 — NBR VAT
     E("GET", "/vat/periods", None, "Tax periods, newest first, one entry each (D-15) [{period, status, due, locked}]"),
     E("GET", "/vat/compliance?period=2026-08", None, "Compliance centre for a period {return summary, shortfall, deposits, VDS to issue/awaited, drafts}"),
+    E("GET", "/vat/compliance/pack?period=2026-08", None, "R7.2: the period's submission set as one zip (application/zip, attachment `compliance-pack-<period>.zip`): Mushak 6.2 sales / 6.1 purchases / 6.10 / TR-6 / VDS 6.6 registers as CSV, the 9.1 return as it stands (JSON, manifest marks it absent when not started), a manifest (summary + file list with row counts) and a hand-over checklist; same period validation as the compliance centre (422 outOfRange)", ctype="application/zip"),
+    E("GET", "/vat/compliance/efiling?period=2026-08", None, "R7.5: the 9.1's figures as one e-filing JSON (application/json, attachment `efiling-9.1-<period>.json`, format dizivat-efiling-9.1/1): BIN + tax period, the compliance computation verbatim (outputVat, inputTaxCredit, adjustments, payable, deposited, shortfall, credits), approved-invoice mode splits and rate-wise turnover, the TR-6 deposits with economic codes, register counts, VDS totals and a what-to-key checklist; also a member of the compliance pack; same period validation as the compliance centre (422 outOfRange)", ctype="application/json"),
     E("GET", "/vat/returns", None, "Mushak 9.1 returns — Page<VatReturnRow> + periods; facets status/type", page=True, csv=True),
     E("POST", "/vat/returns", "doc.create", "Start a return {period} (409 if it exists or the previous period is not submitted)"),
     E("GET", "/vat/returns/{period}", None, "The return for a period: every note (1–68) computed live from approved documents, manual notes, shortfall, lock state; 404 for unknown periods"),
@@ -238,13 +283,58 @@ ENDPOINTS = [
     E("POST", "/vat/uds/fit", None, "Does a deemed-export invoice fit its UD? {customerId, issueDate, udNo, lines, saleId?} → {ok, udId, problems (notListed / exceeds / expired / closed), lines}, or null when the UD is not in the register"),
     E("POST", "/sales/{sale}/realisations", "doc.edit", "Record export proceeds (PRC) {date, bank, prcNo, fcAmount, rate, note?} on an approved FC export — 409 notRealisable; 422 over outstanding + 0.5 %, future date, duplicate PRC"),
     E("DELETE", "/sales/{sale}/realisations?rid=x", "doc.approve", "Remove a PRC entered in error (audited)"),
+    E("GET", "/verify/invoice?token=<QR token>", None, "R8.1: public Mushak 6.3 verification (the QR printed on every tax invoice) — the signature is re-computed over the invoice as it stands → {token, valid, reason? malformed | notFound | altered | badSignature, invoice {invoiceNo, issueDate, process, seller, buyer, netTotal, vat, currency}}; a genuine copy of an unaltered invoice verifies (cancelled included, its status shown), an edited or hand-crafted token does not", public=True),
     E("GET", "/production/subcontract?from=2026-07-01&to=2026-09-25", None, "R6.2: subcontracting (Mushak 6.4) register {rows (process, issued / received / damaged / pending, days out, status), totals}; ?status, ?days=30 — 422 when to < from", csv=True),
     E("GET", "/mushak/6.2.1?item=i6&from=2026-07-01&to=2026-09-25", None, "R6.2: Mushak 6.2.1 purchase-sales book of a traded item (purchases and sales side by side)", csv=True),
-    E("POST", "/import", "master.edit", "R6.2 bulk import {entity: items|customers|vendors, dryRun, rows (≤ 2,000, canonical field names)} → {total, valid, created, duplicates, issues [{row, field, message}]}; all-or-nothing; 201 when records were created"),
+    E("POST", "/import", "master.edit", "Bulk import {entity: items|customers|vendors (R6.2) | openingStock|purchases (R7.4 onboarding: rows become draft opening entries / draft purchase invoices — rows sharing an invoiceNo are one invoice's lines) | sales (R7.6: historical finished-goods invoices — one row per line, rows sharing an invoiceNo one invoice; the customer's mode decides local vs zero-rated direct export, LC/bill columns fill the export block, the old number rides in the narration and is the duplicate key; the paid column is the invoice's paid amount, so netTotal − paid becomes the customer's opening receivable), dryRun, rows (≤ 2,000, canonical field names)} → {total, valid, created, duplicates, issues [{row, field, message}]}; all-or-nothing; 201 when records were created"),
     E("GET", "/backups", "settings.manage", "R6.2: backup status {timezone, schedule [02:00, 14:00], retention 30, storage, today, next, last, rows}; R6.3 adds drill (last restore drill: ok, at, backupId, ms, tables, rows, documents, auditChain, boot, mismatches)"),
     E("POST", "/backups", "settings.manage", "Take a backup now (201)"),
     E("GET", "/backups/{backup}", "settings.manage", "Download a backup (application/gzip, `X-Backup-SHA256`); audited", ctype="application/gzip"),
     E("POST", "/backups/{backup}/verify", "settings.manage", "Re-hash a stored backup {id, ok, sha256, size, checkedAt}"),
+    # R8.3 — the reminder and delivery schedule
+    E("GET", "/schedule/settings", None, "R8.3: the reminder settings {return91, treasury, vds: {enabled, leads[] (days, newest first)}, updatedAt, updatedBy} — one row"),
+    E("PUT", "/schedule/settings", "settings.manage", "R8.3: update the reminder settings — lead times are whole days 1–60, at most five per deadline"),
+    E("GET", "/schedule/deliveries", None, "R8.3: the delivery schedules {rows: [{id, kind: vatDigest|receivablesDigest, frequency: monthly|weekly, day (day of month 1–28 / weekday 1 = Monday), recipients, enabled, lastRun?, nextRun, note?}]}"),
+    E("POST", "/schedule/deliveries", "settings.manage", "R8.3: add a delivery schedule {kind, frequency, day, recipients (user ids), enabled, note?} (201); a monthly VAT digest covers the month just closed, a weekly receivables digest the day it runs"),
+    E("GET", "/schedule/deliveries/{delivery}", None, "R8.3: one schedule"),
+    E("PUT", "/schedule/deliveries/{delivery}", "settings.manage", "R8.3: edit a schedule — the report itself is fixed (409 on a kind change: delete and re-create); nextRun re-derives from the new cadence"),
+    E("DELETE", "/schedule/deliveries/{delivery}", "settings.manage", "R8.3: delete a schedule (the log keeps what it already delivered)"),
+    E("GET", "/schedule/log", None, "R8.3: the delivery log — Page<DeliveryLogRow>, newest first; facet kind; each row carries the frozen document it delivered", page=True),
+    E("GET", "/schedule/log/{deliveryLog}", None, "R8.3: one delivered report {id, scheduleId, kind, period?, asOf, generatedAt, recipients, document} — the figures as they stood at delivery"),
+    E("GET", "/schedule/log/{deliveryLog}/document", None, "R8.3: the delivered document — CSV (default) or ?format=html for the printable page; re-printing a past delivery shows the frozen figures", ctype="text/csv"),
+    E("POST", "/schedule/tick", "settings.manage", "R8.3: run the schedule for today — the cron entrypoint (and the page's Run now): fires the reminders whose lead time has arrived (they then own their deadline in the notification feed), delivers the reports whose day has come and prunes the ones whose subject is gone; idempotent per day {date, fired[], pruned, delivered[]}"),
+    # R10 — POS integration (counter POS, settlement reconciliation, external POS API & barcode labels)
+    E("GET", "/pos/catalog?branchId=b3", None, "R10.1: counter POS catalog {branchId, registers (with openShift), items [{id, sku, name, hsCode, unit, salePrice, sdRate, vatRate, priceInclTax, available, barcode}], customers, accounts}"),
+    E("GET", "/pos/sales", None, "R10.1: POS counter & external invoices — Page<PosSale>; filters q/from/to/registerId/shiftId/process/source", page=True, csv=True),
+    E("POST", "/pos/sales", "doc.create", "R10.1: issue an approved POS invoice (POS-MMYY####) with mixed tender (cash/card/bkash/nagad), item-rate VAT, Mushak 6.3 QR token & FA 2026 NBR e-Invoice adapter slot (201; 409 noOpenShift; 422 insufficientStock / insufficientTender / changeExceedsCash)"),
+    E("GET", "/pos/sales/{posSale}", None, "R10.1 / R10.4: one POS invoice + sale63 (Mushak 6.3 view) + ebill (FA 2026 NBR e-invoice adapter payload)"),
+    E("PATCH", "/pos/sales/{posSale}", "doc.cancel", "R10.1: void an approved POS invoice {process: 'Cancelled', reason ≥ 3} — restores counter stock and updates shift totals"),
+    E("GET", "/pos/shifts", None, "R10.1: POS shifts — Page<PosShift>; filters q/from/to/registerId/status", page=True, csv=True),
+    E("POST", "/pos/shifts", "doc.create", "R10.1: open a shift {registerId, openingFloat, date?, note?} → 201 PosShift (SHF-MMYY####; 409 shiftAlreadyOpen)"),
+    E("GET", "/pos/shifts/{posShift}", None, "R10.1: shift detail + live X report (if open) or final Z report (if closed) with tender breakdown and cash drawer reconciliation"),
+    E("POST", "/pos/shifts/{posShift}/close", "doc.create", "R10.1: close an open shift {countedCash, closedDate?, note?} → Z-MMYY#### report with expectedCash and variance (409 alreadyClosed)"),
+    E("GET", "/pos/settlements", None, "R10.2: card / MFS (bKash / Nagad) terminal settlement statements — Page<PosTerminalStatement> with matched/charges/open counts & unexplained gross", page=True, csv=True),
+    E("POST", "/pos/settlements", "doc.create", "R10.2: import a terminal settlement statement {accountId (bank/mfs), channel (card|bkash|nagad), source?, dryRun?, rows [{date, channel?, reference?, narration, gross, fee, net?}]} — auto-matches POS tender legs by reference or exact gross + date window; dryRun=true returns 200 preview plan, commit returns 201 (PST-MMYY####)"),
+    E("GET", "/pos/settlements/{posSettlement}", None, "R10.2: one terminal settlement statement with lines, suggestions, posExpectedGross, totalFees, netSettled & unexplained"),
+    E("DELETE", "/pos/settlements/{posSettlement}", "doc.delete", "R10.2: delete an imported terminal settlement statement"),
+    E("PATCH", "/pos/settlements/lines/{posSettlementLine}", "doc.edit", "R10.2: park a terminal line as a commission/MDR charge {status: 'charge', note?}, ignore it {status: 'ignored'}, or reopen {status: 'open'}"),
+    E("POST", "/pos/settlements/lines/{posSettlementLine}/match", "doc.edit", "R10.2: manually match an open terminal settlement line to a POS invoice {saleId} (409 notOpen / grossMismatch)"),
+    E("GET", "/pos/registers", None, "R10.3: POS registers & terminal bindings with openShift and offline queue watermark lastSeqNo"),
+    E("POST", "/pos/registers", "settings.manage", "R10.3: create a POS register {code, name, branchId, cashAccountId, cardAccountId?, bkashAccountId?, nagadAccountId?, terminalId?} (201; 409 duplicate code)"),
+    E("PUT", "/pos/registers/{posRegister}", "settings.manage", "R10.3: update a POS register"),
+    E("GET", "/pos/tokens", None, "R10.3: scoped POS API tokens (tokenHash omitted)"),
+    E("POST", "/pos/tokens", "settings.manage", "R10.3: issue a scoped POS API token {name, registerId, scopes[]} → 201 {token, secret} (secret shown once)"),
+    E("DELETE", "/pos/tokens/{posToken}", "settings.manage", "R10.3: revoke an active POS API token (409 already revoked)"),
+    E("GET", "/pos/webhooks", None, "R10.3: POS webhooks and signed HMAC-SHA256 delivery log {webhooks, deliveries}"),
+    E("POST", "/pos/webhooks", "settings.manage", "R10.3: register a POS webhook {name, url, secret, events[], active?} (201)"),
+    E("DELETE", "/pos/webhooks/{posWebhook}", "settings.manage", "R10.3: delete a POS webhook"),
+    E("POST", "/pos/webhooks/{posWebhook}/test", "settings.manage", "R10.3: dispatch a signed test ping (`X-DiziVAT-Signature: sha256=...`) to a POS webhook"),
+    E("GET", "/pos/queue", None, "R10.3: offline device sequence queue & per-register sequence watermarks {entries, registers}"),
+    E("GET", "/pos/external/catalog", None, "R10.3: external POS read stock & price catalog (accepts session or `Authorization: Bearer dzpos_...` with `pos:catalog:read`)"),
+    E("POST", "/pos/external/sales", "doc.create", "R10.3: idempotent external POS sale endpoint (accepts session or `Bearer dzpos_...` with `pos:sale:write`; replays existing 200 `{replayed: true, sale}` on matching `Idempotency-Key` / `idempotencyKey`)"),
+    E("POST", "/pos/external/queue", "doc.create", "R10.3: offline device queue batch sync {registerId, entries [{seqNo, idempotencyKey, queuedAt?, sale}]} — ordered by seqNo, deduplicates replayed sequence numbers & idempotency keys (accepts session or `Bearer dzpos_...` with `pos:queue:sync`)"),
+    E("GET", "/pos/labels?format=38x25", None, "R10.4: item Code-128B barcode label sheet {format: 38x25|50x30|a4-24, totalLabels, company, labels [{itemId, sku, name, hsCode, unit, salePrice, vatRate, sdRate, priceInclTax, barcode, bars, qty}]}"),
+    E("POST", "/pos/labels", None, "R10.4: custom item Code-128B barcode label batch {format, specs [{itemId, qty}]} (422 unknown itemId)"),
 ]
 
 # Free-text notes written under the endpoint table by --doc
@@ -252,9 +342,21 @@ NOTES = [
     "**R6.2 — VAT officer:** `POST/PUT /users` accept `role: \"vatOfficer\"` with `accessUntil` (YYYY-MM-DD, today … +90 days;",
     "422 required / accessPast / accessTooLong). After that date `POST /auth/login` answers `403 expired` and existing",
     "sessions get 401. Every officer request is logged in the audit trail (entity `access`, action `viewed`).",
+    "",
+    "**R10.3 — External POS bearer tokens:** `/pos/external/catalog`, `/pos/external/sales`, and `/pos/external/queue`",
+    "accept either a signed-in user session or `Authorization: Bearer dzpos_<register>_<secret>` (or `X-POS-Token`).",
+    "Each token is bound to a register and checked against its `PosScope` list (`pos:catalog:read`, `pos:sale:write`,",
+    "`pos:queue:sync`); invalid/revoked tokens return `401` and missing scopes return `403`.",
 ]
 
 sessions = {}
+def _next_month_end():
+    import datetime
+    t = datetime.date.today()
+    nm = datetime.date(t.year + (t.month == 12), (t.month % 12) + 1, 1)
+    return (nm - datetime.timedelta(days=1)).isoformat()
+
+
 def S(user):
     if user is None: return requests.Session()
     if user not in sessions:
@@ -285,10 +387,27 @@ def fixtures():
     wo = s.get(BASE + "/production/work-orders?process=Approved&size=1").json()["data"][0]["id"]
     batch = s.get(BASE + "/production/batches?process=Approved&mode=inHouse&size=1").json()["data"][0]["id"]
     first = lambda path: s.get(BASE + path).json()["data"][0]["id"]
+    # R9.1: an approved transfer, and cheques in the two states the error contracts need
+    money_transfer = first("/accounting/transfers?process=Approved&size=1")
+    cheque_open = s.get(BASE + "/accounting/cheques?status=outstanding&size=1").json()["data"][0]["id"]
+    cheque_final = s.get(BASE + "/accounting/cheques?status=cleared&size=1").json()["data"][0]["id"]
+    journal = first("/accounting/journal?source=manual&size=1")
+    gl_account = s.get(BASE + "/accounting/chart").json()[0]["code"]  # R9.2: a chart row the ledger fixture reads
+    # R9.4: an approved live asset, the draft and the disposed one the error contracts need
+    asset = first("/accounting/assets?status=Active&size=1")
+    asset_draft = first("/accounting/assets?status=Draft&size=1")
+    asset_disposed = first("/accounting/assets?status=Disposed&size=1")
     r4 = {"receipt": first("/accounting/receipts?process=Approved&size=1"), "payment": first("/accounting/payments?process=Approved&size=1"),
           "treasury": first("/vat/treasury?process=Approved&size=1"), "vds": first("/vat/vds?process=Approved&size=1"),
           "adjustment": first("/vat/adjustments?process=Approved&size=1"), "account": "ac1", "period": "2026-08"}
-    return {**r4, "goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
+    pos_sale = first("/pos/sales?process=Approved&size=1")
+    pos_shift = first("/pos/shifts?size=1")
+    pos_settlement = first("/pos/settlements?size=1")
+    return {**r4, "moneyTransfer": money_transfer, "cheque": cheque_open, "chequeFinal": cheque_final, "journal": journal, "code": gl_account,
+            "asset": asset, "assetDraft": asset_draft, "assetDisposed": asset_disposed, "assetClass": "plant",
+            "posRegister": "reg1", "posShift": pos_shift, "posSale": pos_sale, "posSettlement": pos_settlement,
+            "posSettlementLine": "tsl1-3", "posToken": "ptk2", "posWebhook": "pwh1",
+            "goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
 
 def run():
     fx = fixtures()
@@ -296,6 +415,40 @@ def run():
     fx["ud"] = S("arif").get(BASE + "/vat/uds").json()["rows"][0]["id"]
     adm = S("admin"); rows = adm.get(BASE + "/backups").json().get("rows") or []
     fx["backup"] = rows[0]["id"] if rows else adm.post(BASE + "/backups", json={}).json()["id"]
+    # R8.2 fixture: an imported statement built from the live books — a TR-6 deposit and a recorded receipt the
+    # matcher must find, an open customer line (the suggestion) and a bank charge
+    s82 = S("arif")
+    dep = [t for t in s82.get(BASE + "/vat/treasury?process=Approved&size=500").json()["data"] if t.get("accountId")]
+    rec = [m for m in s82.get(BASE + "/accounting/receipts?process=Approved&method=bankTransfer&size=500").json()["data"] if m.get("reference")]
+    acct82 = dep[0]["accountId"] if dep else rec[0]["accountId"]
+    rows82 = [{"date": dep[0]["challanDate"], "narration": f"VAT treasury challan {dep[0]['challanNo']}", "deposit": 0, "withdrawal": dep[0]["amount"]}]
+    m82 = next((m for m in rec if m["accountId"] == acct82), None)
+    if m82:
+        rows82.append({"date": m82["date"], "narration": f"Inward remittance {m82['reference']}", "reference": m82["reference"], "deposit": round(m82["amount"] - m82["charge"], 2), "withdrawal": 0})
+    cust82 = s82.get(BASE + "/customers?status=active&size=1").json()[0]
+    rows82.append({"date": "2026-09-30", "narration": f"TT from {cust82['name']}", "deposit": 12345.67, "withdrawal": 0})
+    rows82.append({"date": "2026-09-30", "narration": "Account maintenance fee", "deposit": 0, "withdrawal": 500})
+    st82 = s82.post(BASE + "/accounting/statements", json={"accountId": acct82, "source": "contract-fixture.csv", "dryRun": False, "rows": rows82}).json()
+    fx["statement"] = st82["id"]
+    lines82 = s82.get(BASE + f"/accounting/statements/{st82['id']}").json()["lines"]
+    fx["line"] = next(l["id"] for l in lines82 if l["status"] == "open")
+    fx["stMatchLine"] = next(l["id"] for l in lines82 if l["status"] == "matched")
+    # R8.3 fixture: a schedule due today, so the tick has something to deliver — and a second tick proves the
+    # day cannot fire twice (the reminder ids and the (schedule, day) log key are the idempotency)
+    adm83 = S("admin")
+    dl83 = adm83.post(BASE + "/schedule/deliveries", json={"kind": "receivablesDigest", "frequency": "weekly", "day": 5, "recipients": ["u5", "u2"], "enabled": True, "note": "contract fixture"}).json()
+    fx["delivery"] = dl83["id"]
+    r83 = adm83.post(BASE + "/schedule/tick", json={})
+    check(r83.status_code == 200, "the tick answers 200 (an action, not a creation — both runtimes)")
+    tick1 = r83.json()
+    check(any(d["scheduleId"] == dl83["id"] for d in tick1["delivered"]), "schedule tick delivers the due schedule")
+    check(tick1["date"] == "2026-09-25", "schedule tick runs for the demo today")
+    r83b = adm83.post(BASE + "/schedule/tick", json={})
+    tick2 = r83b.json()
+    check(r83b.status_code == 200 and not tick2["fired"] and not tick2["delivered"], "second tick of the day fires nothing")
+    log83 = adm83.get(BASE + "/schedule/log?kind=receivablesDigest&size=1").json()
+    check(log83["total"] >= 1 and log83["data"][0]["document"]["kind"] == "receivablesDigest", "delivery log carries the frozen receivables document")
+    fx["deliveryLog"] = log83["data"][0]["id"]
     for e in ENDPOINTS:
         path = e["p"].format(**fx); url = BASE + path; m = e["m"]
         # 401 for anonymous
@@ -329,6 +482,63 @@ def run():
         (None, "POST", "/auth/login", {}, 422, "username"),
         (None, "POST", "/auth/login", {"username": rnd, "password": "x"}, 401, "_"),
         ("arif", "GET", "/sales/nope", None, 404, None),
+        # R9.1 — transfers and the cheque lifecycle
+        ("arif", "GET", "/accounting/transfers/nope", None, 404, None),
+        ("arif", "POST", "/accounting/transfers", {}, 422, "fromAccountId"),
+        ("arif", "POST", "/accounting/transfers", {"process": "Created", "date": "2026-09-20", "fromAccountId": "ac1", "toAccountId": "ac1", "amount": 100}, 422, "toAccountId"),
+        ("arif", "POST", "/accounting/transfers", {"process": "Created", "date": "2026-09-20", "fromAccountId": "ac1", "toAccountId": "nope", "amount": 100}, 422, "toAccountId"),
+        ("arif", "PUT", f"/accounting/transfers/{fx['moneyTransfer']}", {}, 409, None),
+        ("arif", "DELETE", f"/accounting/transfers/{fx['moneyTransfer']}", None, 409, None),
+        ("arif", "POST", "/accounting/cheques/nope/action", {}, 404, None),
+        ("arif", "POST", f"/accounting/cheques/{fx['chequeFinal']}/action", {"action": "bounced", "date": "2026-09-10", "reason": "Refer to drawer — contract"}, 409, None),
+        ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "cleared", "date": "2026-09-10"}, 409, None),
+        ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "bounced", "date": "2026-09-10", "reason": "too short"}, 422, "reason"),
+        ("arif", "POST", f"/accounting/cheques/{fx['cheque']}/action", {"action": "presented", "date": "2020-01-01"}, 422, "date"),
+        # R9.2 — the general ledger
+        ("arif", "GET", "/accounting/journal/nope", None, 404, None),
+        ("arif", "POST", "/accounting/journal", {}, 422, "date"),
+        ("arif", "POST", "/accounting/journal", {"date": "2026-09-20", "memo": "Not balanced", "lines": [{"account": "5500", "debit": 100}, {"account": "2200", "credit": 90}], "process": "Created"}, 422, "lines"),
+        ("arif", "POST", "/accounting/journal", {"date": "2026-09-20", "memo": "Unknown account", "lines": [{"account": "9999", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"}, 422, "lines"),
+        ("arif", "POST", "/accounting/journal", {"date": "2026-06-15", "memo": "Books are closed", "lines": [{"account": "5500", "debit": 1}, {"account": "2200", "credit": 1}], "process": "Created"}, 422, "date"),
+        ("arif", "PUT", f"/accounting/journal/{fx['journal']}", {}, 409, None),
+        ("arif", "DELETE", f"/accounting/journal/{fx['journal']}", None, 409, None),
+        ("arif", "GET", "/accounting/ledger", None, 422, "account"),
+        ("arif", "GET", "/accounting/ledger?account=9999", None, 404, None),
+        # R9.3 — the statements and the close (the 422s need settings.manage — the guard fires first for others;
+        # "future" is clock-relative, so the case names the next month-end whatever day the suite runs)
+        ("admin", "POST", "/accounting/close", {"to": "2026-09-15"}, 422, "to"),
+        ("admin", "POST", "/accounting/close", {"to": _next_month_end()}, 422, "to"),
+        ("auditor", "POST", "/accounting/close", {"to": "2026-09-30"}, 403, None),
+        # R9.4 — the fixed assets
+        ("arif", "GET", "/accounting/assets/nope", None, 404, None),
+        ("arif", "GET", "/accounting/assets/nope/schedule", None, 404, None),
+        ("arif", "POST", "/accounting/assets", {}, 422, "name"),
+        ("arif", "POST", "/accounting/assets", {"name": "Contract test machine", "classId": "nope", "date": "2026-09-20", "cost": 100, "process": "Created"}, 422, "classId"),
+        ("arif", "POST", "/accounting/assets", {"name": "Contract test machine", "classId": "plant", "date": "2026-09-20", "cost": 100, "salvage": 200, "process": "Created"}, 422, "salvage"),
+        ("arif", "PUT", f"/accounting/assets/{fx['asset']}", {}, 409, None),
+        ("arif", "DELETE", f"/accounting/assets/{fx['asset']}", None, 409, None),
+        ("arif", "POST", f"/accounting/assets/{fx['assetDraft']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1, "reason": "Still a draft, refuse"}, 409, None),
+        ("arif", "POST", f"/accounting/assets/{fx['assetDisposed']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1, "reason": "Already sold, refuse"}, 409, None),
+        ("arif", "POST", f"/accounting/assets/{fx['asset']}/action", {"action": "dispose", "date": "2026-09-20", "reason": "No proceeds given here"}, 422, "proceeds"),
+        ("arif", "POST", f"/accounting/assets/{fx['asset']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1000, "reason": "short"}, 422, "reason"),
+        ("auditor", "POST", f"/accounting/assets/{fx['asset']}/action", {"action": "dispose", "date": "2026-09-20", "proceeds": 1000, "reason": "Viewer may not act"}, 403, None),
+        ("auditor", "POST", "/accounting/asset-classes", {"name": "Contract class", "rate": 10}, 403, None),
+        ("admin", "POST", "/accounting/asset-classes", {"name": "Plant and machinery (factory)", "rate": 10}, 409, None),
+        ("admin", "PUT", "/accounting/asset-classes/nope", {"name": "Nope", "rate": 10}, 404, None),
+        # R10 — POS integration (counter POS, settlement reconciliation, external POS API & barcode labels)
+        ("arif", "GET", "/pos/sales/nope", None, 404, None),
+        ("arif", "GET", "/pos/shifts/nope", None, 404, None),
+        ("arif", "GET", "/pos/settlements/nope", None, 404, None),
+        ("arif", "POST", "/pos/sales", {}, 422, "registerId"),
+        ("arif", "POST", "/pos/shifts", {"registerId": "reg1", "openingFloat": 1000}, 409, None),
+        ("arif", "POST", "/pos/shifts/sh1/close", {"countedCash": 1000}, 409, None),
+        ("arif", "POST", "/pos/settlements", {"accountId": "ac6", "channel": "card", "rows": [{"date": "2026-09-20", "narration": "Cash drawer", "gross": 100, "fee": 0}]}, 422, "accountId"),
+        ("arif", "PATCH", "/pos/settlements/lines/nope", {"status": "charge"}, 404, None),
+        ("arif", "POST", "/pos/settlements/lines/tsl1-1/match", {"saleId": "ps1"}, 409, None),
+        ("admin", "POST", "/pos/registers", {"code": "REG-01", "name": "Dup reg", "branchId": "b1", "cashAccountId": "ac6"}, 409, None),
+        ("admin", "POST", "/pos/tokens", {"name": "Bad reg token", "registerId": "nope", "scopes": ["pos:catalog:read"]}, 422, "registerId"),
+        ("admin", "DELETE", "/pos/tokens/nope", None, 404, None),
+        ("arif", "POST", "/pos/labels", {"format": "38x25", "specs": [{"itemId": "nope", "qty": 2}]}, 422, "specs"),
         ("arif", "GET", "/purchases/nope", None, 404, None),
         ("arif", "GET", "/items/nope", None, 404, None),
         ("arif", "POST", "/sales", {}, 422, "customerId"),
@@ -337,9 +547,14 @@ def run():
         ("arif", "DELETE", f"/sales/{fx['sale']}", None, 409, None),
         ("arif", "PATCH", f"/sales/{fx['sale']}", {"process": "Cancelled", "reason": "short"}, 422, "reason"),
         ("arif", "POST", "/items", {}, 422, "name"),
+        ("arif", "POST", "/import", {"entity": "openingStock"}, 422, "rows"),
+        ("arif", "POST", "/import", {"entity": "wombats", "dryRun": True, "rows": [{}]}, 422, "entity"),
         ("arif", "POST", "/customers", {}, 422, "name"),
         ("arif", "DELETE", "/customers/c1", None, 409, None),
         ("arif", "GET", "/tariff?hs=99999999", None, 404, None),
+        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026-27"}, 422, "rows"),
+        ("arif", "POST", "/tariff/import", {"fiscalYear": "2026/27", "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 422, "fiscalYear"),
+        ("kamal", "POST", "/tariff/import", {"fiscalYear": "2027-28", "dryRun": True, "rows": [{"hsCode": "61091000", "description": "T-shirts, knitted, of cotton"}]}, 403, None),
         ("arif", "POST", "/notifications/read", {}, 422, None),
         ("arif", "PUT", "/me/password", {"current": "wrong-one", "next": "abcd12345", "confirm": "abcd12345"}, 422, "current"),
         ("arif", "PUT", "/me/password", {"current": PW, "next": "short", "confirm": "short"}, 422, "next"),
@@ -436,9 +651,18 @@ def run():
         ("arif", "POST", "/accounting/payments", {}, 422, "partyId"),
         ("arif", "DELETE", f"/accounting/payments/{fx['payment']}", None, 409, None),
         ("arif", "GET", "/accounting/statement?kind=customer&party=nope", None, 422, "party"),
+        # R8.2 — bank statements: schema 422s, an apply refused on row issues, and the state conflicts
+        ("arif", "POST", "/accounting/statements", {}, 422, "accountId"),
+        ("arif", "POST", "/accounting/statements", {"accountId": "ac1", "dryRun": False, "rows": [{"date": "2026-09-30", "narration": ""}]}, 422, "row 2"),
+        ("arif", "GET", "/accounting/statements/nope", None, 404, None),
+        ("arif", "PATCH", f"/accounting/statements/{fx['statement']}/lines/{fx['stMatchLine']}", {"status": "charge"}, 409, None),
+        ("arif", "PATCH", f"/accounting/statements/{fx['statement']}/lines/{fx['line']}", {"status": "wombat"}, 422, "status"),
+        ("arif", "POST", f"/accounting/statements/{fx['statement']}/lines/{fx['stMatchLine']}/receipt", {}, 409, None),
         ("arif", "GET", "/accounting/statement?kind=customer&party=c1&from=2026-09-10&to=2026-09-01", None, 422, "to"),
         # R4 — NBR VAT
         ("arif", "GET", "/vat/compliance?period=2019-01", None, 422, "period"),
+        ("arif", "GET", "/vat/compliance/pack?period=2019-01", None, 422, "period"),
+        ("arif", "GET", "/vat/compliance/efiling?period=2019-01", None, 422, "period"),
         ("arif", "GET", "/vat/returns/2031-01", None, 404, None),
         ("arif", "POST", "/vat/returns", {}, 422, "period"),
         ("arif", "POST", "/vat/returns", {"period": "2026-08"}, 409, None),
@@ -507,6 +731,17 @@ def run():
         ("arif", "GET", "/mushak/6.10?from=bad&to=2026-08-31", None, 422, "from"),
         ("admin", "PUT", "/vat/settings", {}, 422, None),
         ("admin", "PUT", "/accounting/config", {}, 422, None),
+        # R8.3 — the schedule: schema 422s, the fixed-report 409, and the missing rows
+        ("admin", "PUT", "/schedule/settings", {"return91": {"enabled": True, "leads": []}, "treasury": {"enabled": True, "leads": [7]}, "vds": {"enabled": True, "leads": [7]}}, 422, "return91.leads"),
+        ("admin", "PUT", "/schedule/settings", {"return91": {"enabled": True, "leads": [0]}, "treasury": {"enabled": True, "leads": [7]}, "vds": {"enabled": True, "leads": [7]}}, 422, "return91.leads.0"),
+        ("admin", "POST", "/schedule/deliveries", {}, 422, "kind"),
+        ("admin", "POST", "/schedule/deliveries", {"kind": "vatDigest", "frequency": "weekly", "day": 9, "recipients": ["u5"]}, 422, "day"),
+        ("admin", "POST", "/schedule/deliveries", {"kind": "vatDigest", "frequency": "monthly", "day": 20}, 422, "recipients"),
+        ("arif", "GET", "/schedule/deliveries/nope", None, 404, None),
+        ("admin", "PUT", f"/schedule/deliveries/{fx['delivery']}", {"kind": "vatDigest", "frequency": "monthly", "day": 20, "recipients": ["u5"]}, 409, None),
+        ("admin", "DELETE", "/schedule/deliveries/nope", None, 404, None),
+        ("arif", "GET", "/schedule/log/nope", None, 404, None),
+        ("arif", "GET", "/schedule/log/nope/document", None, 404, None),
     ]
     for user, m, path, body, status, key in cases:
         r = S(user).request(m, BASE + path, json=body)

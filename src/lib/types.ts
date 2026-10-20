@@ -1,4 +1,5 @@
 /** Domain types — shaped to match the planned Symfony /api/v1 contract (see plan §5). */
+export type { TariffImportResult, TariffImportIssue, TariffDiffSummary } from "./tariff-import"
 
 export type Process = "Created" | "Approved" | "Cancelled"
 export type SalesMode = "Local" | "Foreign"
@@ -124,6 +125,8 @@ interface DocBase {
 export interface Sale extends DocBase {
   invoiceNo: string
   challanNo: string
+  /** R8.1 (e-invoice): signed verification token for the Mushak 6.3 QR — on detail reads, built from the row as it stands */
+  qr?: string
   issueTime: string
   customerId: string
   customerName: string
@@ -179,7 +182,7 @@ export interface Purchase extends DocBase {
   /** R2: import purchases (mode Foreign) — Bill of Entry header */
   boe?: BillOfEntry
 }
-export type PurchaseCategory = "goods" | "service"
+export type PurchaseCategory = "goods" | "service" | "capital"
 export interface BillOfEntry { no: string; date: string; lcNo: string; lcDate: string; customsHouse: string; origin: string; cnfFirm?: string; receiveAddress?: string; /** R6.4: warehoused under the customs bond (IM-7) — no duty / VAT paid, no input credit; tracked in the bond register */ bonded?: boolean; /** R6.5: own UD / UP the bonded inputs were imported against (settled per UD after export) */ udNo?: string }
 
 export interface Page<T, Totals = Record<string, number>> {
@@ -212,9 +215,14 @@ export interface DashboardData {
     receivable: number; payable: number
     pendingApproval: number
   }
-  monthly: { month: string; sales: number; purchases: number; outputVat: number; inputVat: number }[]
+  /** R7.3: the trend rows also carry the month's net VAT and the TR-6 deposits counted to it */
+  monthly: { month: string; sales: number; purchases: number; outputVat: number; inputVat: number; netPayable: number; deposited: number }[]
   topCustomers: { name: string; amount: number; count: number }[]
+  /** R7.3: the spend side of the year's best customers */
+  topVendors: { name: string; amount: number; count: number }[]
   mix: { name: string; value: number }[]
+  /** R7.3: the last 12 tax periods and where each return stands — the filing strip */
+  periods: TaxPeriod[]
   recentSales: Sale[]
   lowStock: ItemWithStock[]
   deadlines: { id: string; title: string; due: string; status: "due" | "done" | "overdue"; href?: string }[]
@@ -256,19 +264,29 @@ export interface ItemLedger {
 /* ── Sprint 3 ─────────────────────────────────────────────────────────────── */
 
 /** Audit trail (FE-S3-03). One event per state change or sign-in; `changes` holds field-level before/after. */
-export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings"
+export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "customer" | "vendor" | "item" | "unit" | "user" | "company" | "session" | "debitNote" | "opening" | "masterItem" | "creditNote" | "bom" | "workOrder" | "batch" | "productionConfig" | "account" | "receipt" | "payment" | "treasury" | "vds" | "adjustment" | "vatReturn" | "accountingConfig" | "vatSettings" | "tariff" | "statement" | "schedule" | "asset" | "assetClass" | "accounting"
   /** R6.2 */
   | "ud" | "backup" | "access" | "import"
   /** R6.5 */
   | "bondUd" | "drawbackClaim"
   /** R6.6 */
   | "prcBatch" | "lateFiling" | "returnAmendment"
+  /** R9.1 — transfers between the company's own accounts, and the cheque lifecycle */
+  | "moneyTransfer" | "cheque"
+  /** R9.2 — the manual journal entries (the chart is configuration, not documents) */
+  | "journal"
+  /** R10 — counter POS sales, shifts, terminal settlement statements, registers, API tokens, webhooks */
+  | "posSale" | "posShift" | "posSettlement" | "posRegister" | "posToken" | "posWebhook"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
   | "signedIn" | "signedOut" | "signInFailed" | "submitted"
   /** R6.2: VAT-officer page access, export proceeds, backups, bulk import */
   | "viewed" | "realised" | "backedUp" | "downloaded" | "imported"
+  /** R9.1: the cheque register's lifecycle */
+  | "presented" | "cleared" | "bounced"
+  /** R9.3/R9.4: the close of the books, and the fixed assets' final actions */
+  | "closed" | "dispose" | "revalue"
 export interface AuditChange { field: string; from: string; to: string }
 export interface AuditEvent {
   id: string
@@ -312,7 +330,7 @@ export type CompanySummary = Pick<Company, "name" | "bin" | "address" | "vatSlab
 export interface TariffLine { hsCode: string; description: string; cd: number; sd: number; vat: number; ait: number; rd: number; at: number; tti: number; chapter: string }
 
 /** Server-driven notifications (FE-S3-06) */
-export type NotificationKind = "approvals" | "decided" | "deadline" | "lowStock" | "security"
+export type NotificationKind = "approvals" | "decided" | "deadline" | "lowStock" | "security" | "delivery" | "cheque"
 export interface AppNotification {
   id: string
   kind: NotificationKind
@@ -654,6 +672,286 @@ export interface MoneyDoc {
   issuedBy: string
   createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
 }
+/**
+ * R9.1 — a transfer between the company's own accounts (TX-): a cash deposit to the bank, a withdrawal, a
+ * bank-to-bank move. Not a party document: the money never leaves the company, so the books debit one account
+ * and credit another (the charge, if any, is the bank's fee for the move and lands as an expense in the ledger).
+ */
+export interface MoneyTransfer {
+  id: string
+  /** TX-MMYY#### */
+  no: string
+  date: string
+  fromAccountId: string; fromAccount: string
+  toAccountId: string; toAccount: string
+  amount: number
+  /** the bank's fee for the move — leaves the from-account without reaching the to-account */
+  charge: number
+  reference?: string
+  note?: string
+  process: Process
+  issuedBy: string
+  createdAt: string; updatedAt?: string; cancelReason?: string; history?: HistoryEntry[]
+}
+
+/**
+ * R9.1 — the cheque register. The rows are the approved receipts and payments paid by cheque (the instruments
+ * the company holds or has written); the lifecycle is a small append-only event list, so the register itself is a
+ * read model: nothing about a money document changes when a cheque moves.
+ */
+export type ChequeStatus = "outstanding" | "presented" | "cleared" | "bounced"
+export type ChequeKind = "issued" | "received"
+export type ChequeAction = "presented" | "cleared" | "bounced"
+export interface ChequeRow {
+  /** the money document's id — one cheque per document */
+  id: string
+  kind: ChequeKind
+  no: string
+  partyId: string; partyName: string
+  accountId: string; accountName: string
+  /** the receipt (MR-) or voucher (PV-) that carries the cheque (the row's id is that document's id) */
+  moneyNo: string
+  moneyId: string
+  /** the drawer's / drawee's bank, when the money document recorded it */
+  chequeBank: string
+  amount: number
+  chequeDate: string
+  /** a post-dated cheque: dated after the demo today */
+  postDated: boolean
+  /** days since the cheque date, as of the demo today */
+  ageDays: number
+  status: ChequeStatus
+  presentedOn?: string
+  clearedOn?: string
+  bouncedOn?: string
+  reason?: string
+  /** the lifecycle so far, oldest first */
+  events: ChequeEvent[]
+}
+export interface ChequeEvent {
+  id: string
+  /** the money document the cheque belongs to */
+  chequeId: string
+  action: ChequeAction
+  date: string
+  reason?: string
+  by: string
+  at: string
+}
+
+/**
+ * R9.2 — one account of the chart. The money accounts (R4) are things money lives in; a GL account is a line
+ * of the balance sheet. The chart ships as a seeded RMG template, and every money account has its own GL row
+ * (bank / mobile / cash) so the derived postings always have somewhere to land — one is added automatically for
+ * a money account created later, so the ledger never meets a document it cannot post.
+ */
+export type GlKind = "asset" | "liability" | "equity" | "revenue" | "expense"
+export interface GlAccount {
+  code: string
+  name: string
+  kind: GlKind
+  /** the group heading the account rolls up under (the register's facet) */
+  group: string
+  /** set on the money accounts' own GL rows — the link the derived postings follow */
+  moneyAccountId?: string
+  active: boolean
+  note?: string
+}
+
+/** The chart's row as the register serves it: the account with its derived movement and closing balance. */
+export interface GlAccountRow extends GlAccount {
+  /** opening balance this period (always 0 for now — R9.3's close will stamp one) */
+  opening: number
+  /** sum of the debits minus the credits that have posted, derived from the documents */
+  debit: number
+  credit: number
+  /** debit-credit for assets and expenses, credit-debit for the rest — the balance sheet's reading */
+  balance: number
+  entries: number
+}
+
+/** What posted one journal entry: the document that caused it, or `manual` for the entries a user typed. */
+export type JournalSourceKind =
+  | "sale" | "purchase" | "creditNote" | "debitNote" | "receipt" | "payment" | "transfer"
+  | "treasury" | "vdsPurchase" | "vdsSales" | "adjustment" | "opening" | "openingBalance" | "manual"
+  | "asset" | "depreciation" | "revaluation" | "disposal"
+export interface JournalSource { kind: JournalSourceKind; id: string; no: string }
+
+/** One line of a journal entry — exactly one of debit / credit carries the money (the other is 0). */
+export interface JournalLine { account: string; accountName?: string; debit: number; credit: number }
+
+/**
+ * One entry of the general ledger. The derived ones exist only as a read model — the documents they summarise
+ * are the truth — while the manual ones (JE-) are documents of their own with the draft → approve → cancel
+ * lifecycle, stored because there is nothing else to read them from.
+ */
+export interface JournalEntry {
+  id: string
+  /** JE-MMYY#### (manual entries); the source document's id for derived ones */
+  no: string
+  date: string
+  memo: string
+  source: JournalSource
+  lines: JournalLine[]
+  /** manual entries only — derived ones are posted the moment their document is approved */
+  process?: Process
+  issuedBy?: string
+  createdAt?: string
+  history?: HistoryEntry[]
+  updatedAt?: string
+  cancelReason?: string
+}
+
+/** The stored form of a manual journal entry — a full document with a lifecycle, unlike the derived read model. */
+export interface ManualJournalEntry extends JournalEntry {
+  source: { kind: "manual"; id: string; no: string }
+  process: Process
+  issuedBy: string
+  createdAt: string
+  history: HistoryEntry[]
+}
+
+/** The manual journal entry as a body: the lines must balance to the poisha. */
+export interface JournalInput {
+  date: string
+  memo: string
+  lines: { account: string; debit: number; credit: number }[]
+  process: "Created" | "Approved"
+}
+
+/** One account's ledger between two dates: what it opened at, every movement, and what it closed at. */
+export interface GlLedger {
+  account: GlAccount
+  from: string
+  to: string
+  opening: number
+  rows: { date: string; memo: string; no: string; sourceKind: JournalSourceKind; debit: number; credit: number; balance: number; entryId: string }[]
+  totals: { debit: number; credit: number }
+  closing: number
+}
+
+/** One row of the journal register: a whole entry (derived or manual) with its source's identity. */
+export interface JournalRow {
+  id: string
+  no: string
+  date: string
+  memo: string
+  sourceKind: JournalSourceKind
+  sourceNo: string
+  sourceId: string
+  /** the entry's total — each side of every entry is the same */
+  debit: number
+  credit: number
+  lineCount: number
+  /** the accounts the entry touches (facet + drill) */
+  accounts: string[]
+  /** manual entries only — a derived entry is posted the moment its document is approved */
+  process?: Process
+  issuedBy?: string
+}
+
+/* ── R9.3: the statements and the close ────────────────────────────────── */
+
+/** One row of the trial balance: an account's position as of a date, presented on the side it balances. */
+export interface TrialBalanceRow { code: string; name: string; group: string; kind: GlAccount["kind"]; debit: number; credit: number }
+export interface TrialBalanceReport { asOf: string; rows: TrialBalanceRow[]; totals: { debit: number; credit: number } }
+
+/** One line of a statement: an account with its period movement, in the statement's natural sign. */
+export interface StatementLine { code: string; name: string; group: string; amount: number }
+
+/** The profit & loss: revenue less the cost groups, each line an account's movement in its natural sign. */
+export interface ProfitLossReport {
+  from: string; to: string
+  revenue: StatementLine[]; direct: StatementLine[]; operating: StatementLine[]; taxCosts: StatementLine[]
+  revenueTotal: number; directTotal: number; operatingTotal: number; taxTotal: number
+  grossProfit: number; netProfit: number
+}
+
+/** One section of the balance sheet: a group of accounts and their subtotal. */
+export interface BalanceSheetSection { group: string; rows: StatementLine[]; subtotal: number }
+export interface BalanceSheetReport {
+  asOf: string
+  assets: BalanceSheetSection[]; liabilities: BalanceSheetSection[]; equity: BalanceSheetSection[]
+  totals: { assets: number; liabilities: number; equityAccounts: number; profitBroughtForward: number; profitForPeriod: number; liabilitiesAndEquity: number }
+}
+
+/** One row of the cash flow: every posting that moved a money account, grouped by what caused it. */
+export interface CashFlowRow { kind: JournalSourceKind; label?: string; amount: number }
+export interface CashFlowReport {
+  from: string; to: string
+  rows: CashFlowRow[]
+  opening: number; netMovement: number; closing: number
+}
+
+/* ── R9.4: the fixed assets ────────────────────────────────────────────── */
+
+/** An asset class of the register: the NBR Third Schedule's straight-line rate it depreciates at. */
+export interface AssetClass { id: string; name: string; rate: number; active: boolean; note?: string }
+
+/** A disposal — final by design; the correction is a new revaluation or a journal entry, never an undo. */
+export interface AssetDisposal { date: string; proceeds: number; accountId?: string; reason: string; at: string; by: string }
+
+/** A revaluation — the carrying amount is reset to `toValue` against the revaluation reserve (3950). */
+export interface AssetRevaluation { date: string; toValue: number; reason: string; at: string; by: string }
+
+/**
+ * One fixed asset (AS-): a document of its own with the draft → approved → cancelled lifecycle. Approving
+ * starts the depreciation — straight line at the class's NBR rate, one derived posting per month, never
+ * stored. A record typed directly (no `purchaseId`) is wealth brought forward: its cost comes in against
+ * the opening-balance equity; a capital purchase carries its own acquisition posting.
+ */
+export interface FixedAsset {
+  id: string
+  /** AS-MMYY#### */
+  no: string
+  name: string
+  classId: string
+  /** the date it was commissioned — depreciation runs from this month */
+  date: string
+  cost: number
+  salvage: number
+  branchId?: string
+  /** the capital purchase (category `capital`) that acquired it, when there was one */
+  purchaseId?: string
+  /** capital-item input-credit tracking: the input VAT the acquisition carried, and whether the 9.1 may claim it */
+  inputVat: number
+  creditable: boolean
+  /** free text — what the thing is, where it sits */
+  memo?: string
+  process: Process
+  updatedAt?: string
+  disposal?: AssetDisposal
+  revaluations: AssetRevaluation[]
+  issuedBy: string
+  createdAt: string
+  history: HistoryEntry[]
+  cancelReason?: string
+  deletedAt?: string
+}
+
+/** One row of the asset register: the asset with its derived position as of the register's date. */
+export interface AssetRegisterRow {
+  id: string; no: string; name: string; classId: string; className: string; rate: number
+  date: string; cost: number; accumDep: number; nbv: number; monthly: number
+  status: "Active" | "Disposed" | "Draft" | "Cancelled"
+  inputVat: number; creditable: boolean
+  disposalDate?: string; disposalProceeds?: number; gainLoss?: number
+  branchId?: string; purchaseId?: string; process: Process
+}
+
+/** One month of the depreciation schedule. */
+export interface AssetScheduleRow {
+  month: string; base: number; depreciation: number; accum: number; nbv: number
+  event?: "revalued" | "disposed"
+}
+export interface AssetSchedule {
+  asset: { id: string; no: string; name: string; className: string; rate: number; date: string; cost: number; salvage: number; disposedOn?: string }
+  to: string
+  rows: AssetScheduleRow[]
+  totals: { depreciation: number }
+  disposal?: { date: string; proceeds: number; nbvAtDisposal: number; gainLoss: number }
+}
+
 /** An invoice that can still take a receipt / payment. */
 export interface OpenInvoice { id: string; no: string; challanNo: string; date: string; total: number; paid: number; due: number; days: number }
 
@@ -686,6 +984,98 @@ export interface PartyStatement {
   /** closing = Σ invoice due − advances; true when the ledger agrees with the invoice registers */
   reconciled: boolean
   invoiceDue: number
+}
+
+/** R8.2 (bank reconciliation): one imported bank statement line. */
+export type BankLineStatus = "open" | "matched" | "receipt" | "charge" | "ignored"
+export type BankMatchKind = "treasury" | "receipt" | "payment" | "transfer"
+export interface BankStatementLine {
+  id: string
+  statementId: string
+  /** the line's place on the sheet, 1-based */
+  rowNo: number
+  date: string
+  narration: string
+  reference?: string
+  chequeNo?: string
+  /** money into the account (credit) */
+  deposit: number
+  /** money out (debit) */
+  withdrawal: number
+  status: BankLineStatus
+  /** what the matcher found, when it found something */
+  matchKind?: BankMatchKind
+  matchId?: string
+  matchNo?: string
+  /** the money document created from this line, when one was */
+  moneyId?: string
+  moneyNo?: string
+  note?: string
+}
+/** R8.2: an imported bank statement, its lines analysed against the books. */
+export interface BankStatement {
+  id: string
+  /** BS-MMYY#### */
+  no: string
+  accountId: string
+  accountName: string
+  /** file name or note the operator gave */
+  source: string
+  from: string
+  to: string
+  /** the balance the statement itself claims at its end (blank = derived from lines) */
+  closingBalance?: number
+  importedAt: string
+  importedBy: string
+  lineCount: number
+  totals: { deposit: number; withdrawal: number }
+  note?: string
+}
+/** R8.2: what the matcher says about one line (a dry run's answer, and each stored line's live state). */
+export interface BankLineMatch {
+  status: BankLineStatus
+  matchKind?: BankMatchKind
+  matchId?: string
+  matchNo?: string
+  /** a customer / vendor whose name the narration carries, with what they owe / are owed */
+  suggestion?: { kind: MoneyKind; partyId: string; partyName: string; due: number; invoices: number }
+}
+/** R8.2: what POST /accounting/statements answers — the dry-run plan and the stored statement's first view. */
+export interface StatementPlanAnswer {
+  accountId: string
+  accountName: string
+  total: number
+  valid: number
+  matched: number
+  open: number
+  issues: ImportIssue[]
+  lines: (BankStatementLine & BankLineMatch)[]
+  id?: string
+  no?: string
+}
+/** R8.2: GET /accounting/statements/{id} — the statement, its lines, and the books-vs-bank answer. */
+export interface StatementView {
+  statement: BankStatement
+  lines: (BankStatementLine & BankLineMatch)[]
+  /** what the account's ledger says at the statement's end */
+  books: number
+  /** what the statement says (keyed-in closing, or books less the unexplained lines) */
+  statementBalance: number
+  difference: number
+  open: number
+}
+
+/** R8.2: the import's answer — per-row issues like the other importers, plus the analysis. */
+export interface StatementPlan {
+  accountId: string
+  accountName: string
+  total: number
+  valid: number
+  /** lines that matched a TR-6 deposit, a receipt or a payment already on the books */
+  matched: number
+  open: number
+  issues: ImportIssue[]
+  lines: (BankStatementLine & BankLineMatch)[]
 }
 
 /** Treasury deposit (TR-6 challan) under an NBR economic code. */
@@ -995,7 +1385,8 @@ export interface PenaltyQuote { input: PenaltyInput; result: PenaltyResult; basi
 export interface PenaltyExposureRow { period: string; dueDate: string; status: "submitted" | "draft" | "none"; submittedOn?: string; shortVat: number; shortSd: number; lateFiling: boolean; result: PenaltyResult }
 export interface BackupVerify { id: string; ok: boolean; sha256: string; size: number; checkedAt: string }
 
-export type ImportEntity = "items" | "customers" | "vendors"
+/** R7.4: the onboarding entities — rows become draft opening entries / draft purchase invoices */
+export type ImportEntity = "items" | "customers" | "vendors" | "openingStock" | "purchases" | "sales"
 export interface ImportIssue { row: number; field: string; message: string }
 export interface ImportResult { entity: ImportEntity; dryRun: boolean; total: number; valid: number; created: number; duplicates: number; issues: ImportIssue[] }
 
@@ -1323,8 +1714,375 @@ export type ReturnAmendmentRow = ReturnAmendment & {
   applyBy: string
   /** decrease: deemed approved when the Commissioner has not decided within 30 days of filing */
   deemedOn?: string
-  /** tax computation of the return being amended, corrections applied (interest / payment once filed) */
+  /** tax computation of the return being amended (interest / payment once filed) */
   computation: ReturnComputation
   /** the figures being amended (the submitted return, or the previous amended return) */
   base: ReturnComputation
 }
+
+/* ── R8.3: statutory reminders + report delivery ───────────────────────── */
+
+/** The three statutory deadlines the reminder settings can watch: the Mushak 9.1 itself, the treasury deposit
+ *  that must precede it (TR-6, the day before) and the VDS certificates (Mushak 6.6) the period still owes. */
+export type ReminderKind = "return91" | "treasury" | "vds"
+export interface ReminderSettings {
+  /** per deadline: whether reminders are on, and the lead times in days a reminder fires at */
+  return91: { enabled: boolean; leads: number[] }
+  treasury: { enabled: boolean; leads: number[] }
+  vds: { enabled: boolean; leads: number[] }
+  updatedAt: string; updatedBy: string
+}
+/** A reminder the schedule has fired: one per (deadline, due date, lead) — the id makes re-running a day idempotent. */
+export interface FiredReminder {
+  id: string
+  kind: ReminderKind
+  /** the due date of the thing being reminded about (TR-6: the day before the return's due date) */
+  due: string
+  /** the lead time it fired at (days before the due date) */
+  lead: number
+  /** the tax period the deadline belongs to */
+  period: string
+  at: string
+}
+
+/** The two reports the delivery schedules can carry: the monthly VAT digest (the 9.1 figures as filed) and the
+ *  weekly receivables digest (open customer invoices and their ageing). */
+export type DeliveryKind = "vatDigest" | "receivablesDigest"
+export interface DeliverySchedule {
+  id: string
+  kind: DeliveryKind
+  /** monthly: the day of the month (1–28); weekly: the weekday (1 = Monday … 7 = Sunday) */
+  frequency: "monthly" | "weekly"
+  day: number
+  /** the users (ids) the report is delivered to */
+  recipients: string[]
+  enabled: boolean
+  lastRun?: string
+  nextRun: string
+  note?: string
+  createdBy: string; createdAt: string
+}
+/** One delivered report: the figures frozen at delivery time, so the log shows what the recipient saw then. */
+export interface DeliveryLogRow {
+  id: string
+  scheduleId: string
+  kind: DeliveryKind
+  /** monthly VAT digest: the tax period; weekly receivables: the day it ran */
+  period?: string
+  asOf: string
+  generatedAt: string
+  recipients: string[]
+  document: VatDigestDoc | ReceivablesDigestDoc
+}
+export interface VatDigestDoc {
+  kind: "vatDigest"
+  period: string
+  due: string
+  status: "open" | "draft" | "submitted" | "overdue"
+  submittedAt?: string
+  ackNo?: string
+  outputVat: number; inputVat: number
+  netVat: number; payableVat: number; payableSd: number
+  depositedVat: number; shortVat: number; shortSd: number
+  closingVat: number; openingVat: number
+  drafts: number
+  deposits: { count: number; amount: number; pending: number }
+  /** VDS certificates (Mushak 6.6) issued for the period's purchases */
+  vdsIssued: { count: number; amount: number }
+}
+export interface ReceivablesDigestDoc {
+  kind: "receivablesDigest"
+  asOf: string
+  /** open customer invoices and the total still due on them */
+  invoices: { count: number; amount: number }
+  /** the same dues bucketed by invoice age, exactly as the party statements age them */
+  ageing: { d0_30: number; d31_60: number; d61_90: number; d90: number }
+  /** the customers that owe the most, at most ten */
+  top: { partyId: string; name: string; amount: number }[]
+  /** receipts not allocated to any invoice yet (the party statements' `advances`) */
+  advances: number
+}
+
+/* ── R10: POS integration (counter POS, terminal settlement, external API, print & labels) ───────── */
+
+/** R10.1 — payment tender methods on a counter POS sale, mapped to existing MoneyAccount kinds. */
+export type PosTenderMethod = "cash" | "card" | "bkash" | "nagad"
+export interface PosTender {
+  method: PosTenderMethod
+  accountId: string
+  accountName: string
+  /** Gross amount tendered by the buyer (for cash, may include change; for non-cash, exact settled amount) */
+  amount: number
+  /** Change returned to the buyer (only > 0 on a cash tender) */
+  changeGiven: number
+  /** Net amount retained by the register (`amount - changeGiven`) */
+  netAmount: number
+  /** Terminal approval code / RRN / bKash TrxID / Nagad TxnID (required for card / bkash / nagad) */
+  reference?: string
+}
+
+/** R10.4 — Finance Act 2026 NBR e-invoice adapter slot (ERP self-issued Mushak 6.3). */
+export interface NbrEInvoiceAdapter {
+  mode: "selfIssued63" | "nbrPortal"
+  schemaVersion: "FA2026-6.3/1"
+  /** Invoice Reference Number (IRN): `IRN-<BIN>-<invoiceNo>-<sig8>` */
+  irn: string
+  signedAt: string
+  status: "issued" | "voided"
+}
+
+/** R10.1 / R10.3 / R10.4 — a counter or external POS sale (Mushak 6.3 with R8.1 QR & FA 2026 adapter). */
+export interface PosSale {
+  id: string
+  invoiceNo: string
+  challanNo: string
+  qr?: string
+  issueDate: string
+  issueTime: string
+  process: Process
+  registerId: string
+  registerCode: string
+  registerName: string
+  shiftId: string
+  shiftNo: string
+  branchId: string
+  branchName: string
+  customerId: string
+  customerName: string
+  customerBin: string
+  customerMobile?: string
+  customerAddress: string
+  lines: Line[]
+  subtotal: number
+  sd: number
+  vat: number
+  discount: number
+  netTotal: number
+  tenders: PosTender[]
+  tenderedTotal: number
+  changeGiven: number
+  idempotencyKey?: string
+  seqNo?: number
+  source: "counter" | "external" | "offlineQueue"
+  nbrAdapter: NbrEInvoiceAdapter
+  issuedBy: string
+  designation: string
+  note?: string
+  cancelReason?: string
+  createdAt: string
+  updatedAt?: string
+  history: HistoryEntry[]
+}
+
+/** R10.1 / R10.3 — a counter POS register / device bound to a branch and default money accounts. */
+export interface PosRegister {
+  id: string
+  code: string
+  name: string
+  branchId: string
+  branchName: string
+  cashAccountId: string
+  cardAccountId: string
+  bkashAccountId: string
+  nagadAccountId: string
+  terminalId?: string
+  active: boolean
+  /** Highest contiguous offline device queue sequence number processed for this register */
+  lastSeqNo: number
+  lastSeenAt?: string
+  createdAt: string
+}
+
+/** R10.1 — a cashier shift on a register, with X reading (while open) and Z report + cash variance (when closed). */
+export interface PosShift {
+  id: string
+  no: string
+  registerId: string
+  registerCode: string
+  registerName: string
+  branchId: string
+  branchName: string
+  cashAccountId: string
+  date: string
+  status: "open" | "closed"
+  openingFloat: number
+  openedAt: string
+  openedBy: string
+  closedAt?: string
+  closedBy?: string
+  zNo?: string
+  expectedCash?: number
+  countedCash?: number
+  variance?: number
+  note?: string
+  history: HistoryEntry[]
+}
+
+export interface PosShiftReport {
+  kind: "X" | "Z"
+  shift: PosShift
+  generatedAt: string
+  salesCount: number
+  voidedCount: number
+  voidedTotal: number
+  subtotal: number
+  sd: number
+  vat: number
+  discount: number
+  netSales: number
+  vatByRate: { rate: number; taxable: number; vat: number; count: number }[]
+  tenders: {
+    method: PosTenderMethod
+    count: number
+    tendered: number
+    changeGiven: number
+    netAmount: number
+  }[]
+  cashDrawer: {
+    openingFloat: number
+    cashTendered: number
+    changeGiven: number
+    netCashSales: number
+    expectedCash: number
+    countedCash?: number
+    variance?: number
+  }
+  invoices: {
+    id: string
+    invoiceNo: string
+    issueTime: string
+    customerName: string
+    netTotal: number
+    vat: number
+    process: Process
+    methods: PosTenderMethod[]
+  }[]
+}
+
+/** R10.2 — Card / MFS terminal settlement statement and its matched / charge-parked rows. */
+export type PosTerminalLineStatus = "matched" | "open" | "charge" | "ignored"
+export interface PosTerminalLineMatch {
+  status: PosTerminalLineStatus
+  saleId?: string
+  invoiceNo?: string
+  tenderMethod?: PosTenderMethod
+  expectedFee?: number
+  suggestion?: { saleId: string; invoiceNo: string; customerName: string; amount: number; date: string }
+}
+export interface PosTerminalLine extends PosTerminalLineMatch {
+  id: string
+  statementId: string
+  rowNo: number
+  date: string
+  channel: "card" | "bkash" | "nagad"
+  reference: string
+  narration: string
+  gross: number
+  fee: number
+  net: number
+  note?: string
+}
+export interface PosTerminalStatement {
+  id: string
+  no: string
+  accountId: string
+  accountName: string
+  channel: "card" | "bkash" | "nagad"
+  source: string
+  from: string
+  to: string
+  importedAt: string
+  importedBy: string
+  lineCount: number
+  totals: { gross: number; fee: number; net: number }
+}
+
+/** R10.3 — External POS API scoped tokens, webhooks, signed deliveries, and sequence-numbered offline queue. */
+export type PosScope =
+  | "pos:catalog:read"
+  | "pos:sale:write"
+  | "pos:shift:write"
+  | "pos:queue:sync"
+  | "pos:catalog.read"
+  | "pos:stock.read"
+  | "pos:sales.write"
+  | "pos:queue.sync"
+  | "pos:webhooks.manage"
+
+export interface PosApiToken {
+  id: string
+  name: string
+  registerId: string
+  registerCode: string
+  prefix: string
+  tokenHash: string
+  scopes: PosScope[]
+  active: boolean
+  createdAt: string
+  createdBy: string
+  lastUsedAt?: string
+  revokedAt?: string
+}
+
+export type PosWebhookEvent =
+  | "pos.sale.completed"
+  | "pos.sale.voided"
+  | "pos.shift.opened"
+  | "pos.shift.closed"
+  | "pos.settlement.reconciled"
+
+export interface PosWebhook {
+  id: string
+  name: string
+  url: string
+  events: PosWebhookEvent[]
+  secret: string
+  active: boolean
+  createdAt: string
+  createdBy: string
+  lastDeliveryAt?: string
+  lastStatus?: "delivered" | "failed"
+}
+
+export interface PosWebhookDelivery {
+  id: string
+  webhookId: string
+  webhookName: string
+  event: PosWebhookEvent
+  ref: string
+  payload: Record<string, unknown>
+  signature: string
+  status: "delivered" | "failed"
+  deliveredAt: string
+}
+
+export interface PosQueueEntry {
+  id: string
+  registerId: string
+  registerCode: string
+  seqNo: number
+  idempotencyKey: string
+  saleId: string
+  invoiceNo: string
+  netTotal: number
+  clientCreatedAt: string
+  syncedAt: string
+  status: "synced" | "replayed"
+}
+
+/** R10.4 — Item barcode label format and rendered Code-128B label specification. */
+export type PosLabelFormat = "38x25" | "50x30" | "a4-24"
+export interface PosBarcodeLabel {
+  itemId: string
+  sku: string
+  name: string
+  hsCode: string
+  unit: string
+  salePrice: number
+  vatRate: number
+  sdRate: number
+  priceInclTax: number
+  qty: number
+  bars: string
+}
+

@@ -95,7 +95,7 @@ async function freePort(): Promise<number> {
   })
 }
 
-async function bootCheck(target: string, admin: { username: string; password: string } | null, sales: number, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
+async function bootCheck(target: string, admin: { username: string; password: string } | null, docs: { sales: number; purchases: number; batches: number; boms: number; workOrders: number; treasury: number; vds: number; adjustments: number; uds: number; bondUds: number; lateFilings: number; returnAmendments: number; prcBatches: number; drawbackClaims: number; statements?: number }, log: (m: string) => void): Promise<{ ok: boolean; detail: string }> {
   const port = await freePort()
   const child: ChildProcess = spawn(process.execPath, [join(__dirname, "main.js")], {
     env: { ...process.env, DATABASE_URL: target, API_PORT: String(port), API_HOST: "127.0.0.1", BACKUPS: "off", DEMO_RESEED: "off", SESSION_SECRET: randomBytes(24).toString("hex") },
@@ -119,11 +119,47 @@ async function bootCheck(target: string, admin: { username: string; password: st
     const login = await fetch(`${base}/auth/login`, { method: "POST", headers: { "content-type": "application/json", origin: `http://127.0.0.1:${port}` }, body: JSON.stringify({ username: admin.username, password: admin.password }) })
     if (!login.ok) return { ok: false, detail: `sign-in as ${admin.username} failed: HTTP ${login.status}` }
     const cookie = (login.headers.getSetCookie?.() ?? [login.headers.get("set-cookie") ?? ""]).map((c) => c.split(";")[0]).join("; ")
-    const r = await fetch(`${base}/sales?category=all&pageSize=1`, { headers: { cookie } })
-    if (!r.ok) return { ok: false, detail: `GET /sales failed: HTTP ${r.status}` }
-    const page = (await r.json()) as { total?: number }
-    if (page.total !== sales) return { ok: false, detail: `GET /sales total ${page.total} ≠ ${sales} sales in the backup` }
-    log(`  signed in as ${admin.username}; /sales lists all ${sales} invoices`)
+    for (const [path, want, category] of [["sales", docs.sales, true], ["purchases", docs.purchases, true],
+        ["production/batches", docs.batches, true], ["production/boms", docs.boms, true],
+        ["production/work-orders", docs.workOrders, true], ["vat/treasury", docs.treasury, false],
+        ["vat/vds", docs.vds, false], ["vat/adjustments", docs.adjustments, false]] as const) {
+      const r = await fetch(`${base}/${path}${category ? "?category=all&" : "?"}pageSize=1`, { headers: { cookie } })
+      if (!r.ok) return { ok: false, detail: `GET /${path} failed: HTTP ${r.status}` }
+      const page = (await r.json()) as { total?: number }
+      if (page.total !== want) return { ok: false, detail: `GET /${path} total ${page.total} ≠ ${want} ${path} in the backup` }
+    }
+    // R6.2: the UD register answers every declaration at once — it is not paged
+    const udReg = await fetch(`${base}/vat/uds`, { headers: { cookie } })
+    if (!udReg.ok) return { ok: false, detail: `GET /vat/uds failed: HTTP ${udReg.status}` }
+    const buReg = await fetch(`${base}/vat/bond-uds`, { headers: { cookie } })
+    if (!buReg.ok) return { ok: false, detail: `GET /vat/bond-uds failed: HTTP ${buReg.status}` }
+    const lfReg = await fetch(`${base}/vat/late-filings`, { headers: { cookie } })
+    if (!lfReg.ok) return { ok: false, detail: `GET /vat/late-filings failed: HTTP ${lfReg.status}` }
+    const amReg = await fetch(`${base}/vat/return-amendments`, { headers: { cookie } })
+    if (!amReg.ok) return { ok: false, detail: `GET /vat/return-amendments failed: HTTP ${amReg.status}` }
+    const reg = (await udReg.json()) as { rows?: unknown[] }
+    if ((reg.rows?.length ?? -1) !== docs.uds)
+      return { ok: false, detail: `GET /vat/uds answered ${reg.rows?.length ?? 0} declarations ≠ ${docs.uds} in the backup` }
+    const bu = await buReg.json() as { rows?: unknown[] }
+    if ((bu.rows?.length ?? -1) !== docs.bondUds)
+      return { ok: false, detail: `GET /vat/bond-uds answered ${bu.rows?.length ?? 0} own UDs ≠ ${docs.bondUds} in the backup` }
+    const lf = await lfReg.json() as { rows?: unknown[] }
+    if ((lf.rows?.length ?? -1) !== docs.lateFilings)
+      return { ok: false, detail: `GET /vat/late-filings answered ${lf.rows?.length ?? 0} applications ≠ ${docs.lateFilings} in the backup` }
+    const am = await amReg.json() as { rows?: unknown[] }
+    if ((am.rows?.length ?? -1) !== docs.returnAmendments)
+      return { ok: false, detail: `GET /vat/return-amendments answered ${am.rows?.length ?? 0} applications ≠ ${docs.returnAmendments} in the backup` }
+    const dcReg = await fetch(`${base}/vat/drawback-claims`, { headers: { cookie } })
+    if (!dcReg.ok) return { ok: false, detail: `GET /vat/drawback-claims failed: HTTP ${dcReg.status}` }
+    const dc = await dcReg.json() as { rows?: unknown[] }
+    if ((dc.rows?.length ?? -1) !== docs.drawbackClaims)
+      return { ok: false, detail: `GET /vat/drawback-claims answered ${dc.rows?.length ?? 0} claims ≠ ${docs.drawbackClaims} in the backup` }
+    const pbReg = await fetch(`${base}/vat/proceeds/batches`, { headers: { cookie } })
+    if (!pbReg.ok) return { ok: false, detail: `GET /vat/proceeds/batches failed: HTTP ${pbReg.status}` }
+    const pb = await pbReg.json() as { rows?: unknown[] }
+    if ((pb.rows?.length ?? -1) !== docs.prcBatches)
+      return { ok: false, detail: `GET /vat/proceeds/batches answered ${pb.rows?.length ?? 0} batches ≠ ${docs.prcBatches} in the backup` }
+    log(`  signed in as ${admin.username}; /sales lists all ${docs.sales} invoices, /purchases all ${docs.purchases}, /production/batches all ${docs.batches}, /production/boms all ${docs.boms} declarations, /production/work-orders all ${docs.workOrders}, /vat/treasury all ${docs.treasury} deposits, /vat/vds all ${docs.vds} certificates, /vat/adjustments all ${docs.adjustments} and /vat/uds all ${docs.uds} declarations and /vat/bond-uds all ${docs.bondUds} own UDs, /vat/late-filings all ${docs.lateFilings} 9.3 applications, /vat/return-amendments all ${docs.returnAmendments} 9.4 applications and /vat/proceeds/batches all ${docs.prcBatches} PRC batches and /vat/drawback-claims all ${docs.drawbackClaims} drawback claims`)
     return { ok: true, detail: "health, sign-in and documents ok" }
   } finally {
     child.kill("SIGTERM")
@@ -163,10 +199,20 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
       const { rows: [{ n }] } = await tc.query(`select count(*)::int as n from ${q(t)}`)
       if (n > 0) throw new Error(`target database is not empty (${t} has ${n} rows) — restore into a new database`)
     }
+    // a backup taken before the finale still carries compat_state — recreate it if this target's boot already
+    // dropped it, in the 0000 shape, so its rows land; the child boot below adopts them and drops it again
+    if (payload.tables.compat_state && !list.includes("compat_state")) {
+      await tc.query('create table if not exists compat_state ("key" text primary key not null, "data" jsonb not null, "updated_at" timestamp (3) with time zone default now() not null)')
+      list.push("compat_state")
+    }
     const missing = Object.keys(payload.tables).filter((t) => !list.includes(t))
     if (missing.length) throw new Error(`the backup has tables this version does not know: ${missing.join(", ")}`)
 
-    // 3 — users: no password hashes in a backup
+    // 3 — users: no password hashes in a backup. A backup taken before the finale has no `notif_read` on the
+    // user's row — the read ids lived inside compat_state — so they move onto it here, the same way the
+    // migration moves them on a live upgrade. The snapshot row itself lands in the table recreated above, and
+    // the child boot drops it once it has drained it.
+    const snapNotifRead = (payload.tables.compat_state?.[0] as { data?: { notifRead?: Record<string, { ids: string[] }> } } | undefined)?.data?.notifRead ?? {}
     const userRows = payload.tables.users ?? []
     users = userRows.map((u) => ({ id: String(u.id), username: String(u.username), role: String(u.role), active: !!u.active }))
     const admin = a.adminUser ? users.find((u) => u.username === a.adminUser) : users.find((u) => u.role === "admin" && u.active)
@@ -178,6 +224,7 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
       u.password_hash = isAdmin ? adminHash : unusable
       u.password_is_demo = false
       u.must_change_password = !isAdmin
+      u.notif_read ??= snapNotifRead[String(u.id)]?.ids ?? []
     }
 
     // 4 — insert, table by table, in one transaction
@@ -204,7 +251,10 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
       if (n !== payload.tables[t].length) mismatches.push(`${t}: ${n} rows ≠ ${payload.tables[t].length} in the backup`)
     }
     const want = (payload.tables.compat_state?.[0] as { data?: { db?: Record<string, unknown> } } | undefined)?.data?.db ?? {}
-    const got = ((await tc.query("select data from compat_state where key = 'main'")).rows[0]?.data as { db?: Record<string, unknown> } | undefined)?.db ?? {}
+    const compatThere = (await tc.query("select to_regclass('public.compat_state') is not null as t")).rows[0]?.t
+    const got = compatThere
+      ? ((await tc.query("select data from compat_state where key = 'main'")).rows[0]?.data as { db?: Record<string, unknown> } | undefined)?.db ?? {}
+      : {}
     for (const [k, v] of Object.entries(want)) if (Array.isArray(v)) {
       const g = got[k]
       documents += v.length
@@ -229,8 +279,28 @@ export async function run(a: Args, log: (m: string) => void = console.log): Prom
   let boot: RestoreDrill["boot"] = "skipped"
   if (a.boot) {
     const admin = a.adminPassword ? (a.adminUser ? users.find((u) => u.username === a.adminUser) : users.find((u) => u.role === "admin" && u.active)) : undefined
-    const sales = ((payload.tables.compat_state?.[0] as { data?: { db?: { sales?: unknown[] } } } | undefined)?.data?.db?.sales ?? []).length
-    const r = await bootCheck(a.target, admin && a.adminPassword ? { username: admin.username, password: a.adminPassword } : null, sales, log)
+    // the documents the restored instance must list: their own tables since R5.3 (a stamped draft is not listed),
+    // the snapshot's arrays in a backup taken before that — the production batches the same way since R5.4, the
+    // price declarations and the work orders since R5.5, the treasury deposits, the VDS certificates and the VAT
+    // adjustments since R5.6, and the exporters' UDs since R6.2, and our own UDs / UP since R6.5, and the Mushak
+    // 9.3 / 9.4 applications since R6.6
+    const snapshotDb = (payload.tables.compat_state?.[0] as { data?: { db?: Record<string, unknown[]> } } | undefined)?.data?.db
+    const live = (table: string, collection: string) => {
+      const rows = payload.tables[table] as { deleted_at?: string | null }[] | undefined
+      return rows ? rows.filter((r) => !r.deleted_at).length : (snapshotDb?.[collection] ?? []).length
+    }
+    const r = await bootCheck(a.target, admin && a.adminPassword ? { username: admin.username, password: a.adminPassword } : null,
+      {
+        sales: live("sales", "sales"), purchases: live("purchases", "purchases"), batches: live("batches", "batches"),
+        boms: live("boms", "boms"), workOrders: live("work_orders", "workOrders"),
+        treasury: live("treasury_deposits", "treasury"), vds: live("vds_entries", "vds"),
+        adjustments: live("vat_adjustments", "adjustments"), uds: live("uds", "uds"),
+        bondUds: live("bond_uds", "bondUds"),
+        lateFilings: live("late_filings", "lateFilings"), returnAmendments: live("return_amendments", "returnAmendments"),
+        prcBatches: live("prc_batches", "prcBatches"),
+        statements: live("bank_statements", "bankStatements"),
+        drawbackClaims: live("drawback_claims", "drawbackClaims"),
+      }, log)
     boot = r.ok ? "ok" : "failed"
     if (!r.ok) mismatches.push(`boot: ${r.detail}`)
   }

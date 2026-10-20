@@ -105,8 +105,16 @@ export const IMPORT_FIELDS: Record<ImportEntity, string[]> = {
   items: ["name", "sku", "hsCode", "group", "unit", "purchasePrice", "salePrice", "vatRate", "sdRate", "reorderLevel", "active"],
   customers: ["name", "mode", "bin", "country", "mobile", "email", "contactPerson", "address", "exporterType", "bondLicenseNo", "bondLicenseExpiry", "associationNo", "active"],
   vendors: ["name", "mode", "bin", "country", "mobile", "email", "contactPerson", "address", "active"],
+  openingStock: ["item", "branch", "date", "inputTax", "qty", "price", "vatPaid", "note"],
+  purchases: ["invoiceNo", "date", "vendor", "challanNo", "challanDate", "item", "qty", "price", "vatRate", "sdRate", "method", "paid", "narration"],
+  sales: ["invoiceNo", "date", "customer", "item", "qty", "price", "vatRate", "sdRate", "method", "paid", "lcNo", "lcDate", "customsHouse", "country", "billNo", "billDate", "narration"],
 }
-export const REQUIRED_FIELDS: Record<ImportEntity, string[]> = { items: ["name", "sku", "hsCode", "group", "unit"], customers: ["name", "address"], vendors: ["name", "address"] }
+export const REQUIRED_FIELDS: Record<ImportEntity, string[]> = {
+  items: ["name", "sku", "hsCode", "group", "unit"], customers: ["name", "address"], vendors: ["name", "address"],
+  openingStock: ["item", "date", "qty", "price"],
+  purchases: ["invoiceNo", "date", "vendor", "item", "qty", "price"],
+  sales: ["invoiceNo", "date", "customer", "item", "qty", "price"],
+}
 
 const ALIASES: Record<string, string> = {
   itemname: "name", description: "name", product: "name", partyname: "name", customer: "name", vendor: "name", supplier: "name",
@@ -116,6 +124,16 @@ const ALIASES: Record<string, string> = {
   type: "mode", registration: "mode", binnid: "bin", nid: "bin", phone: "mobile", contact: "contactPerson", contactperson: "contactPerson",
   exporter: "exporterType", exportertype: "exporterType", bond: "bondLicenseNo", bondlicence: "bondLicenseNo", bondlicense: "bondLicenseNo", bondlicenseno: "bondLicenseNo", bondlicenceno: "bondLicenseNo",
   bondexpiry: "bondLicenseExpiry", bondlicenseexpiry: "bondLicenseExpiry", bondlicenceexpiry: "bondLicenseExpiry", association: "associationNo", associationno: "associationNo", bgmea: "associationNo", bkmea: "associationNo",
+  // R7.4 — onboarding: opening stock and historical purchases (vat/sd/cost already map above)
+  sku: "item", itemno: "item", quantity: "qty", openingqty: "qty", rate: "price", unitprice: "price",
+  openingstockdate: "date", inputtaxclass: "inputTax", taxclass: "inputTax", vatpaid: "vatPaid", remark: "note",
+  invoiceno: "invoiceNo", billno: "invoiceNo", bill: "invoiceNo", vendorname: "vendor", suppliername: "vendor",
+  invoicedate: "date", issuedate: "date", challanno: "challanNo", challan: "challanNo", challandate: "challanDate",
+  payment: "method", paymentmethod: "method", paidamount: "paid", advance: "paid", remarks: "narration",
+  // R7.6 — onboarding: historical sales ("customer" is canonical here; the customers-sheet aliases do not apply)
+  buyer: "customer", buyername: "customer", soldto: "customer", soldtoname: "customer",
+  lc: "lcNo", lcnumber: "lcNo", lcdated: "lcDate", port: "customsHouse", customshouse: "customsHouse",
+  be: "billNo", beno: "billNo", billofexport: "billNo", bedate: "billDate",
 }
 const norm = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, "")
 
@@ -132,10 +150,72 @@ export function mapRows(entity: ImportEntity, table: string[][]) {
   const missing = REQUIRED_FIELDS[entity].filter((f) => !cols.includes(f))
   const rows = body.map((r) => {
     const o: Record<string, string> = {}
-    cols.forEach((f, i) => { if (f) o[f] = f === "bondLicenseExpiry" ? excelDate(String(r[i] ?? "").trim()) : String(r[i] ?? "").trim() })
+    cols.forEach((f, i) => { if (f) o[f] = f === "bondLicenseExpiry" || f === "date" || f === "challanDate" || f === "lcDate" || f === "billDate" ? excelDate(String(r[i] ?? "").trim()) : String(r[i] ?? "").trim() })
     return o
   })
   return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
+}
+
+/* ── the bank statement (R8.2) — the reconcile view's own import (/accounting/statements) ── */
+
+export const BANK_FIELDS = ["date", "narration", "reference", "chequeNo", "deposit", "withdrawal"]
+const BANK_ALIASES: Record<string, string> = {
+  particulars: "narration", description: "narration", details: "narration", transaction: "narration", transactions: "narration", memo: "narration", remarks: "narration", note: "narration",
+  ref: "reference", refno: "reference", txnid: "reference", transactionid: "reference", instrumentno: "reference",
+  chq: "chequeNo", chqno: "chequeNo", cheque: "chequeNo", chequeno: "chequeNo", chequenumber: "chequeNo", instrument: "chequeNo",
+  credit: "deposit", creditamount: "deposit", moneyin: "deposit", inflow: "deposit", depositamount: "deposit",
+  debit: "withdrawal", debitamount: "withdrawal", moneyout: "withdrawal", outflow: "withdrawal", withdrawalamount: "withdrawal",
+  valuedate: "date", txnDate: "date", transactiondate: "date", postdate: "date", postingdate: "date",
+}
+
+/** Header row → bank-statement records (the same normalisation as the master-data import). */
+export function mapBankRows(table: string[][]) {
+  const [head = [], ...body] = table
+  const byNorm = new Map(BANK_FIELDS.map((f) => [norm(f), f]))
+  const cols = head.map((h) => { const n = norm(String(h)); const f = byNorm.get(n) ?? BANK_ALIASES[n]; return f && BANK_FIELDS.includes(f) ? f : null })
+  const unknown = head.filter((_, i) => !cols[i]).map(String).filter((h) => h.trim())
+  const missing = ["date", "narration"].filter((f) => !cols.includes(f))
+  const rows = body.map((r) => {
+    const o: Record<string, string> = {}
+    cols.forEach((f, i) => {
+      if (!f) return
+      o[f] = f === "date" ? excelDate(String(r[i] ?? "").trim()) : String(r[i] ?? "").trim()
+    })
+    return o
+  })
+  return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
+}
+
+/* ── the NBR tariff sheet (R7.1) — a separate import with its own endpoint (/vat/tariff/import) ── */
+
+export const TARIFF_FIELDS = ["hsCode", "description", "cd", "sd", "vat", "ait", "rd", "at"]
+const TARIFF_ALIASES: Record<string, string> = {
+  hs: "hsCode", hscode: "hsCode", hcode: "hsCode", desc: "description", item: "description", product: "description",
+  customs: "cd", customsduy: "cd", cduty: "cd", supplementary: "sd", supplementaryduty: "sd",
+  valueadded: "vat", valueaddedtax: "vat", advanceincometax: "ait", incometax: "ait",
+  regulatory: "rd", regulatoryduty: "rd", advancetax: "at", additional: "at",
+}
+
+/** Header row → tariff records (the same normalisation as the master-data import). */
+export function mapTariffRows(table: string[][]) {
+  const [head = [], ...body] = table
+  const byNorm = new Map(TARIFF_FIELDS.map((f) => [norm(f), f]))
+  const cols = head.map((h) => { const n = norm(String(h)); const f = byNorm.get(n) ?? TARIFF_ALIASES[n]; return f && TARIFF_FIELDS.includes(f) ? f : null })
+  const unknown = head.filter((_, i) => !cols[i]).map(String).filter((h) => h.trim())
+  const missing = ["hsCode", "description"].filter((f) => !cols.includes(f))
+  const rows = body.map((r) => {
+    const o: Record<string, string> = {}
+    cols.forEach((f, i) => { if (f) o[f] = String(r[i] ?? "").trim() })
+    return o
+  })
+  return { rows, unknown, missing, columns: cols.filter(Boolean) as string[] }
+}
+
+/** CSV template for the tariff (header + two example lines). */
+export function tariffTemplateCsv(): string {
+  const ex = [["52062300", "Woven fabrics of synthetic staple fibres, dyed", "10", "0", "15", "5", "3", "0"],
+              ["61091000", "T-shirts, singlets and other vests, knitted, of cotton", "25", "0", "15", "5", "3", "0"]]
+  return [TARIFF_FIELDS.join(","), ...ex.map((r) => r.join(","))].join("\r\n") + "\r\n"
 }
 
 /** CSV template for an entity (header + one example row). */
@@ -144,6 +224,9 @@ export function templateCsv(entity: ImportEntity): string {
     items: ["Corrugated export carton, 5-ply", "CTN-5P-01", "48191000", "Finished Goods", "Pcs", "38", "52", "15", "0", "500", "yes"],
     customers: ["SAMPLE KNIT COMPOSITE LTD", "Local", "000000000-0101", "", "01711-000000", "accounts@example.com", "Accounts Manager", "Plot 1, Sample EPZ, Savar, Dhaka", "deemed", "", "", "BKMEA-0000", "yes"],
     vendors: ["SAMPLE TRIMS LTD", "Local", "000000000-0202", "", "01811-000000", "sales@example.com", "Sales Manager", "Road 2, Tongi I/A, Gazipur", "yes"],
+    openingStock: ["CTN-5P-01", "Factory", "2025-06-30", "standard", "400", "38", "0", "Go-live count"],
+    purchases: ["B-1001", "2025-06-12", "MEGHNA SPINNING & PROCESSING LTD", "C-4401", "2025-06-12", "YRN-30S", "1200", "410", "", "", "Bank", "0", "June yarn"],
+    sales: ["INV-1001", "2025-06-20", "SAMPLE KNIT COMPOSITE LTD", "FG-019", "1200", "880", "", "", "Bank", "0", "", "", "", "", "", "", "June wholesale"],
   }
   const q = (v: string) => (/[",;\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
   return [IMPORT_FIELDS[entity].join(","), ex[entity].map(q).join(",")].join("\r\n") + "\r\n"

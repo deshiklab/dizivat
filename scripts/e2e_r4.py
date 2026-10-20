@@ -25,7 +25,7 @@ VP = {"width": 1440, "height": 900}
 
 async def settle(pg):
     await pg.wait_for_timeout(60)
-    await pg.evaluate("Promise.all(document.getAnimations().map(a => a.finished.catch(() => null)))")
+    await pg.evaluate("Promise.race([Promise.all(document.getAnimations().map(a => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 1500))])")
     await pg.wait_for_timeout(100)
 
 def is_json(r): return r.headers.get("content-type", "").startswith(("application/json", "application/problem"))
@@ -321,6 +321,172 @@ async def main():
             bad = [w for w in ("Treasuary", "Rerturn", "Purchhase") if w in text]
             assert not bad, bad; ok("legacy typos (Treasuary, Rerturn, Purchhase) are gone")
         except Exception as e: fail(13, e)
+
+        # ── 14. Bank statement import + reconciliation (R8.2) ─────────
+        try:
+            # live books: a treasury deposit (challan) and a recorded receipt the matcher must find
+            dep = next(t for t in (await jget(appr, "/vat/treasury?process=Approved&size=500"))["data"] if t.get("accountId"))
+            acct = dep["accountId"]
+            rec = next(m for m in (await jget(appr, "/accounting/receipts?process=Approved&method=bankTransfer&size=500"))["data"] if m.get("reference") and m["accountId"] == acct)
+            cust = next(c for c in (await jget(appr, "/customers?status=active")) if len(c["name"]) >= 5)
+            amt = 250_000
+            closing = None  # keyed below once the books figure is known
+            await pg.goto(BASE + "/en/accounting/reconcile", wait_until="networkidle")
+            await expect(pg.get_by_role("heading", name="Bank reconciliation")).to_be_visible()
+            rows_before = (await jget(appr, "/accounting/statements?size=1"))["total"]
+            # the bank's own column names (particulars / credit / debit) must be recognised
+            csv = OUT + "/bank-statement.csv"
+            with open(csv, "w", encoding="utf-8") as f:
+                f.write("Date,Particulars,Cheque No,Ref No,Credit,Debit\r\n")
+                f.write(f"{rec['date']},Inward remittance {rec['reference']},,{rec['reference']},{rec['amount'] - rec['charge']:.2f},\r\n")
+                f.write(f"{dep['challanDate']},VAT treasury challan {dep['challanNo']},,,,{dep['amount']:.2f}\r\n")
+                f.write(f"2026-09-24,TT from {cust['name']},,,{amt:.2f},\r\n")
+                f.write("2026-09-23,Account maintenance fee,,,,500.00\r\n")
+            await pg.get_by_test_id("reconcile-import").click()
+            await pg.locator("#rc-account").select_option(acct)
+            await pg.locator("#rc-file").set_input_files(csv)
+            await pg.get_by_role("button", name="Dry run", exact=True).click()
+            dlg = pg.get_by_role("dialog")
+            await expect(dlg.get_by_text("4", exact=True)).to_be_visible()
+            await expect(dlg.get_by_text("matched on the books")).to_be_visible()
+            await expect(dlg.get_by_text("TR-6 challan").first).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/950_reconcile_import.png")
+            await pg.get_by_role("button", name="Import", exact=True).click()
+            await expect(pg.get_by_text(re.compile(r"Statement BS-\d+ imported — 4 lines"))).to_be_visible()
+            await expect(pg.get_by_role("cell", name=re.compile(r"^BS-\d+$")).first).to_be_visible()
+            ok("statement imported (dry run → apply) with the bank's own column names")
+            assert (await jget(appr, "/accounting/statements?size=1"))["total"] == rows_before + 1
+            st = (await jget(appr, "/accounting/statements?size=1"))["data"][0]
+            v = await jget(appr, f"/accounting/statements/{st['id']}")
+            tr = next(l for l in v["lines"] if l["matchKind"] == "treasury"); assert tr["matchNo"] == dep["challanNo"], tr
+            mr = next(l for l in v["lines"] if l["matchKind"] == "receipt"); assert mr["matchNo"] == rec["no"], mr
+            sug = next(l for l in v["lines"] if l.get("suggestion")); assert sug["suggestion"]["partyName"] == cust["name"], sug
+            open_before = [l for l in v["lines"] if l["status"] == "open"]; assert len(open_before) == 2, open_before
+            ok("matcher: the TR-6 challan and the recorded receipt explain themselves; the customer line is suggested")
+            # open the statement: the books-vs-bank strip and every line
+            await pg.get_by_role("cell", name=st["no"]).click()
+            await expect(pg.get_by_test_id("reconcile-books")).to_contain_text(re.compile(r"[\d,]"))
+            await expect(pg.get_by_test_id("reconcile-open")).to_contain_text("2")
+            await expect(pg.get_by_test_id(f"reconcile-sugg-{sug['rowNo']}")).to_contain_text(cust["name"])
+            await settle(pg); await pg.screenshot(path=f"{OUT}/951_reconcile_lines.png")
+            # create the receipt the customer line is about (draft, pre-filled), then approve it
+            await pg.get_by_test_id(f"reconcile-receipt-{sug['rowNo']}").click()
+            await expect(pg.locator("#rc-party")).to_have_value(cust["id"])
+            await expect(pg.locator("#rc-amount")).to_have_value(str(amt))
+            await pg.get_by_test_id("reconcile-receipt-save").click()
+            toast = await pg.get_by_text(re.compile(r"Draft MR-")).first.text_content()
+            draft_no = re.search(r"MR-\d+", toast).group(0)
+            await expect(pg.get_by_test_id(f"reconcile-line-{sug['rowNo']}")).to_contain_text(draft_no)
+            ok(f"receipt {draft_no} created from the line (party + amount pre-filled) and linked back")
+            drafts = (await jget(appr, f"/accounting/receipts?q={draft_no}"))["data"]
+            assert drafts and drafts[0]["process"] == "Created" and drafts[0]["no"] == draft_no, drafts
+            st2, _ = await patch(appr, f"/accounting/receipts/{drafts[0]['id']}", {"process": "Approved"})
+            assert st2 == 200, st2
+            # books moved by the approved receipt; the keyed closing leaves exactly the bank charge unexplained
+            v2 = await jget(appr, f"/accounting/statements/{st['id']}")
+            closing = round(v2["books"] - 500, 2)
+            st3, d3 = await post(appr, "/accounting/statements", {"accountId": acct, "source": "bank-statement.csv", "closingBalance": closing,
+                "dryRun": False, "rows": [
+                    {"date": rec["date"], "narration": f"Inward remittance {rec['reference']}", "reference": rec["reference"], "deposit": rec["amount"] - rec["charge"], "withdrawal": 0},
+                    {"date": dep["challanDate"], "narration": f"VAT treasury challan {dep['challanNo']}", "deposit": 0, "withdrawal": dep["amount"]},
+                    {"date": "2026-09-24", "narration": f"TT from {cust['name']}", "deposit": amt, "withdrawal": 0},
+                    {"date": "2026-09-23", "narration": "Account maintenance fee", "deposit": 0, "withdrawal": 500}]})
+            assert st3 == 201, (st3, d3)
+            v3 = await jget(appr, f"/accounting/statements/{d3['id']}")
+            # the TT line now matches the approved receipt (same account, date and amount) — only the fee is open
+            assert v3["difference"] == 500 and v3["open"] == 1, (v3["difference"], v3["open"])
+            assert next(l for l in v3["lines"] if l["deposit"] == amt)["matchNo"] == draft_no, v3["lines"]
+            ok("books vs keyed closing balance: the difference is exactly the unbooked bank charge (500)")
+            # park the charge, reopen it, park it again — the open count follows
+            fee = next(l for l in v3["lines"] if l["withdrawal"] == 500)
+            st4, _ = await patch(appr, f"/accounting/statements/{d3['id']}/lines/{fee['id']}", {"status": "charge", "note": "Quarterly account maintenance"})
+            assert st4 == 200, st4
+            st5, fee2 = await patch(appr, f"/accounting/statements/{d3['id']}/lines/{fee['id']}", {"status": "open"})
+            assert st5 == 200 and fee2["status"] == "open", (st5, fee2)
+            st6, _ = await patch(appr, f"/accounting/statements/{d3['id']}/lines/{fee['id']}", {"status": "ignored"})
+            assert st6 == 200, st6
+            st7, d7 = await post(appr, f"/accounting/statements/{d3['id']}/lines/{fee['id']}/receipt", {"kind": "payment", "partyId": "v1", "date": "2026-09-23", "method": "bankTransfer", "accountId": acct, "amount": 500, "charge": 0, "allocations": [], "process": "Created"})
+            assert st7 == 409, (st7, d7); ok("a parked line cannot spawn a receipt (409), reopen works, charge/ignore park the line")
+            await pg.goto(f"{BASE}/bn/accounting/reconcile?s={d3['id']}", wait_until="networkidle")
+            await expect(pg.get_by_role("heading", name="ব্যাংক মিলানো (রিকনসাইলিয়েশন)")).to_be_visible()
+            await expect(pg.get_by_text("পার্থক্য", exact=True)).to_be_visible()
+            await settle(pg); await pg.screenshot(path=f"{OUT}/952_reconcile_bn.png"); ok("reconcile page in Bangla")
+        except Exception as e: fail(14, e)
+
+        # ── 15. Reminders + report delivery (R8.3) ─────────────────────
+        try:
+            apg = await admin.new_page(); watch(apg, errs)
+            # a lead time that has arrived (20 days left ≤ 25) and one that has not (10), and a schedule due today
+            st15, _ = await put(admin, "/schedule/settings", {"return91": {"enabled": True, "leads": [25, 10]}, "treasury": {"enabled": True, "leads": [7, 1]}, "vds": {"enabled": True, "leads": [7, 1]}})
+            assert st15 == 200, st15
+            st15, d15 = await post(admin, "/schedule/deliveries", {"kind": "vatDigest", "frequency": "monthly", "day": 25, "recipients": ["u5"], "enabled": True, "note": "E2E monthly digest"})
+            assert st15 == 201, (st15, d15)
+            sched15 = d15["id"]
+            log0 = (await jget(admin, "/schedule/log?size=1"))["total"]
+            await apg.goto(BASE + "/en/master/schedule", wait_until="networkidle")
+            await expect(apg.get_by_role("heading", name="Reminders & report delivery")).to_be_visible()
+            await expect(apg.get_by_test_id("reminder-return91")).to_be_visible()
+            await expect(apg.locator("#leads-return91")).to_have_value("25, 10")
+            await expect(apg.locator("#leads-treasury")).to_have_value("7, 1")
+            await expect(apg.get_by_role("cell", name=re.compile("VAT digest")).first).to_be_visible()
+            await expect(apg.get_by_role("cell", name=re.compile("Receivables digest")).first).to_be_visible()
+            # the seeded delivery is in the log with its frozen figures
+            seeded = await jget(admin, "/schedule/log/dx1")
+            assert seeded["document"]["period"] == "2026-08" and seeded["document"]["kind"] == "vatDigest", seeded
+            await expect(apg.get_by_role("cell", name="08-2026").first).to_be_visible()
+            await settle(apg); await apg.screenshot(path=f"{OUT}/960_schedule.png")
+            ok("schedule page: reminder cards, the seeded schedules and the seeded delivery")
+            # run the day: the arrived lead time fires its reminder, the due schedule delivers
+            await apg.get_by_test_id("run-now").click()
+            await expect(apg.get_by_text(re.compile(r"Schedule run: 1 reminder fired, 1 report delivered"))).to_be_visible()
+            log1 = (await jget(admin, "/schedule/log?size=1"))["total"]
+            assert log1 == log0 + 1, (log0, log1)
+            notif = await jget(admin, "/notifications")
+            ids15 = [n["id"] for n in notif["items"]]
+            assert "rem:return91:2026-10-15:25" in ids15, ids15
+            assert "deadline:r91:2026-10-15" not in ids15, ids15  # the stored reminder owns the deadline now
+            assert "deadline:tr6:2026-10-15" in ids15, ids15      # the treasury one is still ambient
+            assert any(i.startswith("delivered:") for i in ids15), ids15
+            ok("tick fires the arrived reminder (which takes over its deadline in the bell) and delivers the report")
+            # the second run of the day changes nothing
+            st15, tick2 = await post(admin, "/schedule/tick", {})
+            assert st15 == 200 and not tick2["fired"] and not tick2["delivered"], tick2
+            ok("a second tick of the day fires nothing (idempotent)")
+            # the delivered document: the frozen figures in the dialog, the CSV beside them
+            newest = (await jget(admin, "/schedule/log?size=1"))["data"][0]
+            assert newest["period"] == "2026-08" and newest["scheduleId"] == sched15, newest
+            await apg.get_by_test_id(f"log-{newest['id']}").get_by_role("button", name="View").click()
+            dlg = apg.get_by_role("dialog")
+            await expect(dlg.get_by_test_id("delivery-document")).to_be_visible()
+            await expect(dlg.get_by_text("Net VAT (50)", exact=True)).to_be_visible()
+            await expect(dlg.get_by_role("link", name="CSV")).to_have_attribute("href", re.compile(r"/schedule/log/.+/document\?format=csv"))
+            await settle(apg); await apg.screenshot(path=f"{OUT}/961_delivery_document.png")
+            r15 = await admin.request.get(API + f"/schedule/log/{newest['id']}/document?format=csv")
+            assert r15.ok and r15.headers["content-type"].startswith("text/csv") and "Net VAT (50)" in await r15.text(), r15.status
+            ok("delivered document: dialog figures + CSV download of the frozen digest")
+            # close the viewer, then edit the lead times from the page itself
+            await apg.keyboard.press("Escape")
+            await expect(apg.get_by_test_id("delivery-document")).not_to_be_visible()
+            await apg.locator("#leads-return91").fill("24, 10")
+            await apg.get_by_test_id("save-reminders").click()
+            await expect(apg.get_by_text("Reminder settings saved")).to_be_visible()
+            settings15 = await jget(admin, "/schedule/settings")
+            assert settings15["return91"]["leads"] == [24, 10], settings15
+            ok("reminder settings save from the page")
+            # role gating: an approver reads the schedule but cannot run or edit it
+            st15, _ = await put(appr, "/schedule/settings", settings15)
+            assert st15 == 403, st15
+            st15, _ = await post(appr, "/schedule/tick", {})
+            assert st15 == 403, st15
+            ok("settings.manage gates the writes (approver 403)")
+            # Bangla
+            await apg.goto(BASE + "/bn/master/schedule", wait_until="networkidle")
+            await expect(apg.get_by_role("heading", name="রিমাইন্ডার ও রিপোর্ট ডেলিভারি")).to_be_visible()
+            await expect(apg.get_by_text("আইনি রিমাইন্ডার")).to_be_visible()
+            await settle(apg); await apg.screenshot(path=f"{OUT}/962_schedule_bn.png")
+            await apg.close()
+            ok("schedule page in Bangla")
+        except Exception as e: fail(15, e)
 
         real = [e for e in errs if "418" not in e and "Failed to load resource" not in e]
         if real: failures.append(f"console errors: {real[:5]}")

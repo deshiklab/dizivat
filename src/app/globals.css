@@ -188,6 +188,8 @@
   body * { visibility: hidden; }
   .print-area, .print-area * { visibility: visible; }
   .print-area { position: absolute; inset: 0 auto auto 0; width: 100%; box-shadow: none !important; border: 0 !important; }
+  .print-area.print-thermal-80mm { width: 80mm !important; max-width: 80mm !important; padding: 3mm !important; font-family: var(--font-mono) !important; font-size: 9pt !important; line-height: 1.35 !important; }
+  .print-area.print-labels { width: 100% !important; padding: 4mm !important; }
   .no-print { display: none !important; }
 }
 

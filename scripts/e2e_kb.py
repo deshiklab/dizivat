@@ -20,13 +20,13 @@ def watch(pg, errs):
     pg.on("pageerror", lambda e: errs.append("pageerror " + str(e)[:200]))
     pg.on("console", lambda m: errs.append(m.text[:240]) if m.type == "error" else None)
 VP = {"width": 1440, "height": 900}
-N_ARTICLES = 49
+N_ARTICLES = 59
 # window.print is replaced in every frame (the print frame is a srcdoc iframe): count calls on the top window.
 PRINT_STUB = "window.print = () => { try { window.top.__kbPrints = (window.top.__kbPrints || 0) + 1 } catch (e) {} }"
 
 async def settle(pg):
     await pg.wait_for_timeout(60)
-    await pg.evaluate("Promise.all(document.getAnimations().map(a => a.finished.catch(() => null)))")
+    await pg.evaluate("Promise.race([Promise.all(document.getAnimations().map(a => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 1500))])")
     await pg.wait_for_timeout(100)
 
 async def download(pg, open_menu, item):

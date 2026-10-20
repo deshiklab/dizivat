@@ -39,7 +39,7 @@ const emptyLine = { itemId: "", qty: undefined as unknown as number, price: unde
  * goods (stock items, receives into a branch) and service (NBR service codes, no stock movement).
  * Imports have their own duty grid — see ImportForm.
  */
-export function PurchaseForm({ initial, category: cat }: { initial?: Purchase; category?: "goods" | "service" } = {}) {
+export function PurchaseForm({ initial, category: cat }: { initial?: Purchase; category?: "goods" | "service" | "capital" } = {}) {
   const category = initial?.category ?? cat ?? "goods"
   const svc = category === "service"
   const listHref = svc ? "/purchases/services" : "/purchases"
@@ -122,8 +122,8 @@ export function PurchaseForm({ initial, category: cat }: { initial?: Purchase; c
 
   return (
     <form noValidate onSubmit={(e) => { e.preventDefault(); submit("Created") }}>
-      <PageHeader crumbs={[...(svc ? [{ label: t("servicesTitle"), href: listHref }] : []), ...(initial ? [{ label: initial.invoiceNo, href: `/purchases/${initial.id}` }, { label: tc("edit") }] : [{ label: t(svc ? "newService" : "new") }])]}
-        title={initial ? t("editTitle", { no: initial.invoiceNo }) : t(svc ? "newServiceTitle" : "newTitle")} description={initial ? ts("editSub") : t(svc ? "newServiceSub" : "newSub")}
+      <PageHeader crumbs={[...(svc ? [{ label: t("servicesTitle"), href: listHref }] : []), ...(cat === "capital" && !initial ? [{ label: t("newCapital") }] : []), ...(initial ? [{ label: initial.invoiceNo, href: `/purchases/${initial.id}` }, { label: tc("edit") }] : [{ label: t(svc ? "newService" : "new") }])]}
+        title={initial ? t("editTitle", { no: initial.invoiceNo }) : t(svc ? "newServiceTitle" : cat === "capital" ? "newCapitalTitle" : "newTitle")} description={initial ? ts("editSub") : t(svc ? "newServiceSub" : cat === "capital" ? "newCapitalSub" : "newSub")}
         actions={<span className="rounded-md border bg-card px-2.5 py-1 text-sm text-muted-foreground">{t("purchaseNo")}: <span className="font-medium text-foreground">{initial?.invoiceNo ?? ts("autoNo")}</span></span>} />
       <div className="grid gap-4 xl:grid-cols-[1fr_19rem] 2xl:grid-cols-[1fr_22rem]">
         <div className="grid min-w-0 content-start gap-4">

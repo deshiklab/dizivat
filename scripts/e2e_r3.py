@@ -22,7 +22,7 @@ VP = {"width": 1440, "height": 900}
 
 async def settle(pg):
     await pg.wait_for_timeout(50)
-    await pg.evaluate("Promise.all(document.getAnimations().map(a => a.finished.catch(() => null)))")
+    await pg.evaluate("Promise.race([Promise.all(document.getAnimations().map(a => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 1500))])")
     await pg.wait_for_timeout(80)
 
 async def jget(ctx, path):
@@ -319,6 +319,31 @@ async def main():
             bad = [w for w in ("Opeining", "Requsition", "Purachse", "Comapny", "In-Houe") if w in text]
             assert not bad, bad; ok("legacy typos (Opeining, Requsition, Purachse, Comapny, In-Houe) are gone")
         except Exception as e: fail(11, e)
+
+        # ── 12. R8.1: the e-invoice QR on the 6.3 and its public verification ──
+        try:
+            seeded = (await jget(appr, "/sales?process=Approved&size=1"))["data"][0]
+            det = await jget(appr, f"/sales/{seeded['id']}")
+            assert det.get("qr", "").startswith(seeded["invoiceNo"] + "."), det.get("qr")
+            qpg = await appr.new_page(); watch(qpg, errs)
+            await qpg.goto(BASE + f"/en/sales/{seeded['id']}?tab=mushak", wait_until="networkidle")
+            await expect(qpg.locator("figure img").first).to_be_visible()
+            await expect(qpg.get_by_text("e-Invoice QR — scan to verify")).to_be_visible()
+            await settle(qpg); await qpg.screenshot(path=f"{OUT}/91_mushak63_qr.png"); ok("6.3 print view carries the e-invoice QR")
+            await qpg.close()
+            # the QR's landing page is public — a fresh context with no session at all
+            pub = await b.new_context(viewport=VP)
+            ppg = await pub.new_page(); watch(ppg, errs)
+            await ppg.goto(BASE + f"/verify/mushak-63?t={det['qr']}", wait_until="networkidle")
+            await expect(ppg.get_by_text("Authentic — this copy matches the books")).to_be_visible()
+            await expect(ppg.get_by_text(seeded["invoiceNo"])).to_be_visible()
+            await settle(ppg); await ppg.screenshot(path=f"{OUT}/92_verify_authentic.png")
+            parts = det["qr"].split("."); parts[2] = str(int(parts[2]) + 1)
+            await ppg.goto(BASE + "/verify/mushak-63?t=" + ".".join(parts), wait_until="networkidle")
+            await expect(ppg.get_by_text("This copy does not verify")).to_be_visible()
+            await settle(ppg); await ppg.screenshot(path=f"{OUT}/93_verify_tampered.png"); ok("public verification: authentic for the real token, refused for a doctored one")
+            await pub.close()
+        except Exception as e: fail(12, e)
 
         real = [e for e in errs if "418" not in e and "Failed to load resource" not in e]
         if real: failures.append(f"console errors: {real[:5]}")

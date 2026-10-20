@@ -63,7 +63,7 @@ export const saleInput = z.object({
   branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
   /** R3: "service" = service sale (lines reference the sale-service list, no stock) */
-  category: z.enum(["goods", "service"]).optional().default("goods"),
+  category: z.enum(["goods", "service", "capital"]).optional().default("goods"),
   /** R3: export / deemed-export documents — required for a foreign customer */
   export: exportInput.optional(),
 })
@@ -85,7 +85,7 @@ export const purchaseInput = z.object({
   branchId: z.string().max(40).optional().default(""),
   lines: z.array(lineInput).min(1, "atLeastOneLine"),
   /** R2: "service" = service purchase (lines reference the service-code list, no stock) */
-  category: z.enum(["goods", "service"]).optional().default("goods"),
+  category: z.enum(["goods", "service", "capital"]).optional().default("goods"),
 })
 export type PurchaseInput = z.input<typeof purchaseInput>
 
@@ -603,6 +603,8 @@ export const udInput = z.object({
   v.lines.forEach((l, i) => { if (seen.has(l.itemId)) ctx.addIssue({ code: "custom", path: ["lines", i, "itemId"], message: "duplicate" }); seen.add(l.itemId) })
 })
 export type UdInput = z.input<typeof udInput>
+/** A UD as the rule parsed it — every default filled in. This is what the rules run on. */
+export type UdParsed = z.output<typeof udInput>
 
 /** Export proceeds realised through the bank (PRC). */
 export const realisationInput = z.object({
@@ -617,7 +619,7 @@ export type RealisationInput = z.input<typeof realisationInput>
 
 /** Bulk import: one call validates (dryRun) or creates every row; rows are the already-parsed spreadsheet records. */
 export const bulkImportInput = z.object({
-  entity: z.enum(["items", "customers", "vendors"]),
+  entity: z.enum(["items", "customers", "vendors", "openingStock", "purchases", "sales"]),
   dryRun: z.boolean().default(true),
   rows: z.array(z.record(z.string(), z.unknown())).min(1, "atLeastOneRow").max(2000, "tooManyRows"),
 })
@@ -755,3 +757,275 @@ export const amendActionInput = z.object({
   amount: z.number().positive("positive").optional(),
 })
 export type AmendActionInputT = z.input<typeof amendActionInput>
+
+/** R7.1 — the NBR tariff import: the official sheet for one fiscal year, previewed (dryRun) or applied. */
+export const tariffImportInput = z.object({
+  fiscalYear: z.string().trim().regex(/^\d{4}-\d{2}$/, "fiscalYear"),
+  rows: z.array(z.record(z.string(), z.unknown())).min(1, "rows").max(7500, "rows"),
+  dryRun: z.boolean().default(false),
+})
+export type TariffImportInputT = z.input<typeof tariffImportInput>
+
+/** R8.3 — the reminder settings: the three statutory deadlines, each with its lead times in days. */
+const reminderKindInput = z.object({
+  enabled: z.boolean(),
+  leads: z.array(z.number().int().min(1).max(60)).min(1, "required").max(5, "tooMany"),
+})
+export const reminderSettingsInput = z.object({
+  return91: reminderKindInput, treasury: reminderKindInput, vds: reminderKindInput,
+})
+export type ReminderSettingsInputT = z.output<typeof reminderSettingsInput>
+
+/** R8.3 — a delivery schedule: `day` is the day of the month (1–28) or the weekday (1 = Monday). */
+export const deliveryInput = z.object({
+  kind: z.enum(["vatDigest", "receivablesDigest"]),
+  frequency: z.enum(["monthly", "weekly"]),
+  day: z.number().int().min(1).max(28),
+  recipients: z.array(z.string().trim().min(1)).min(1, "required").max(20),
+  enabled: z.boolean().default(true),
+  note: z.string().trim().max(250).optional().default(""),
+}).superRefine((s, ctx) => {
+  if (s.frequency === "weekly" && s.day > 7) ctx.addIssue({ code: "custom", path: ["day"], message: "weekday" })
+})
+export type DeliveryInputT = z.output<typeof deliveryInput>
+
+/** R9.1 — a transfer between the company's own accounts. */
+export const moneyTransferInput = z.object({
+  date,
+  fromAccountId: z.string().min(1, "required"),
+  toAccountId: z.string().min(1, "required"),
+  amount: money(0.01),
+  charge: z.number().min(0, "min0").max(9_999_999).optional().default(0),
+  reference: z.string().trim().max(60).optional().default(""),
+  note: z.string().trim().max(500).optional().default(""),
+  process: z.enum(["Created", "Approved"]),
+})
+export type MoneyTransferInput = z.input<typeof moneyTransferInput>
+
+/** R9.1 — a cheque lifecycle action: presented / cleared / bounced. */
+export const chequeActionInput = z.object({
+  action: z.enum(["presented", "cleared", "bounced"]),
+  date,
+  reason: z.string().trim().max(300).optional().default(""),
+})
+export type ChequeActionInput = z.input<typeof chequeActionInput>
+
+/** R9.2 — a manual journal entry. The balancing itself is a rule of the module (`buildJournal`), not of the
+ * schema: a 422 from the rule can name the lines, a schema error could not. */
+export const journalInput = z.object({
+  date,
+  memo: z.string().trim().min(3, "minLength").max(300, "maxLength"),
+  lines: z.array(z.object({
+    account: z.string().trim().min(1, "required"),
+    debit: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+    credit: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  })).min(2, "minLines").max(60, "maxLines"),
+  process: z.enum(["Created", "Approved"]),
+})
+export type JournalEntryInput = z.input<typeof journalInput>
+
+/* ── R9.3: the close of the books ──────────────────────────────────────── */
+
+export const closeInput = z.object({
+  /** the month-end the books are closed through */
+  to: date,
+  note: z.string().trim().max(300, "maxLength").optional(),
+})
+export type CloseInput = z.input<typeof closeInput>
+
+/* ── R9.4: the fixed assets and their classes ──────────────────────────── */
+
+export const assetClassInput = z.object({
+  name: z.string().trim().min(2, "minLength").max(80, "maxLength"),
+  /** the straight-line rate (% a year) — the NBR Third Schedule's default for the class */
+  rate: z.number().min(0, "min0").max(100, "max100"),
+  note: z.string().trim().max(300, "maxLength").optional(),
+  active: z.boolean().optional().default(true),
+})
+
+export const assetInput = z.object({
+  name: z.string().trim().min(3, "minLength").max(120, "maxLength"),
+  classId: z.string().trim().min(1, "required"),
+  date,
+  cost: z.number().min(1, "min0").max(9_999_999_999),
+  salvage: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  branchId: z.string().trim().max(20, "maxLength").optional(),
+  purchaseId: z.string().trim().max(20, "maxLength").optional(),
+  inputVat: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  creditable: z.boolean().optional().default(true),
+  memo: z.string().trim().max(300, "maxLength").optional(),
+  process: z.enum(["Created", "Approved"]),
+})
+
+export const assetActionInput = z.object({
+  action: z.enum(["dispose", "revalue"]),
+  date,
+  /** dispose: what the sale realised, and where it landed (a money account; omitted → on account) */
+  proceeds: z.number().min(0, "min0").max(9_999_999_999).optional(),
+  accountId: z.string().trim().max(20, "maxLength").optional(),
+  /** revalue: the carrying amount the asset is reset to */
+  toValue: z.number().min(0, "min0").max(9_999_999_999).optional(),
+  reason: z.string().trim().min(10, "minLength").max(300, "maxLength"),
+})
+export type AssetInput = z.input<typeof assetInput>
+export type AssetClassInput = z.input<typeof assetClassInput>
+export type AssetActionInput = z.input<typeof assetActionInput>
+
+/* ── R10: POS integration (counter POS, terminal settlement, external API, print & labels) ───────── */
+
+export const posTenderMethodSchema = z.enum(["cash", "card", "bkash", "nagad"])
+
+export const posTenderInput = z.object({
+  method: posTenderMethodSchema,
+  accountId: z.string().trim().max(20).optional(),
+  amount: z.number({ error: "required" }).positive("positive").max(9_999_999_999),
+  reference: z.string().trim().max(80).optional().default(""),
+})
+
+export const posLineInput = z.object({
+  itemId: z.string().trim().min(1, "required"),
+  qty: z.number({ error: "required" }).positive("positive").max(999_999),
+  price: z.number().positive("positive").max(9_999_999_999).optional(),
+  sdRate: z.number().min(0, "min0").max(500).optional(),
+  vatRate: z.number().min(0, "min0").max(100).optional(),
+})
+
+export const posSaleInput = z.object({
+  registerId: z.string().trim().min(1, "required"),
+  shiftId: z.string().trim().max(20).optional(),
+  issueDate: date.optional(),
+  issueTime: z.string().trim().regex(/^\d{2}:\d{2}$/, "time").optional(),
+  customerId: z.string().trim().max(40).optional().default("walkin"),
+  customerName: z.string().trim().max(120).optional().default(""),
+  customerBin: z.string().trim().max(30).optional().default(""),
+  customerMobile: z.string().trim().max(30).optional().default(""),
+  customerAddress: z.string().trim().max(200).optional().default(""),
+  discount: z.number().min(0, "min0").max(9_999_999_999).optional().default(0),
+  idempotencyKey: z.string().trim().max(120).optional(),
+  seqNo: z.number().int().min(1).max(1_000_000).optional(),
+  note: z.string().trim().max(300).optional().default(""),
+  lines: z.array(posLineInput).min(1, "atLeastOneLine").max(100, "maxLines"),
+  tenders: z.array(posTenderInput).min(1, "atLeastOneTender").max(10),
+})
+export type PosSaleInput = z.input<typeof posSaleInput>
+
+export const posSalePatchInput = z.object({
+  process: z.literal("Cancelled").optional().default("Cancelled"),
+  reason: z.string().trim().min(3, "reasonMin").max(300, "maxLength"),
+})
+export type PosSalePatchInput = z.input<typeof posSalePatchInput>
+
+export const posShiftOpenInput = z.object({
+  registerId: z.string().trim().min(1, "required"),
+  date: date.optional(),
+  openingFloat: z.number().min(0, "min0").max(9_999_999_999),
+  cashAccountId: z.string().trim().max(20).optional(),
+  note: z.string().trim().max(300).optional().default(""),
+})
+export type PosShiftOpenInput = z.input<typeof posShiftOpenInput>
+
+export const posShiftCloseInput = z.object({
+  countedCash: z.number({ error: "required" }).min(0, "min0").max(9_999_999_999),
+  closedDate: date.optional(),
+  note: z.string().trim().max(300).optional().default(""),
+})
+export type PosShiftCloseInput = z.input<typeof posShiftCloseInput>
+
+export const posTerminalImportInput = z.object({
+  accountId: z.string().trim().min(1, "required"),
+  channel: z.enum(["card", "bkash", "nagad"]).optional(),
+  source: z.string().trim().max(120).optional().default(""),
+  dryRun: z.boolean().default(false),
+  rows: z.array(z.record(z.string(), z.unknown())).min(1, "atLeastOneRow").max(2000, "tooManyRows"),
+})
+export type PosTerminalImportInput = z.input<typeof posTerminalImportInput>
+
+export const posTerminalLinePatchInput = z.object({
+  status: z.enum(["open", "charge", "ignored"]),
+  note: z.string().trim().max(200).optional().default(""),
+})
+export type PosTerminalLinePatchInput = z.input<typeof posTerminalLinePatchInput>
+
+export const posTerminalLineMatchInput = z.object({
+  saleId: z.string().trim().min(1, "required"),
+})
+export type PosTerminalLineMatchInput = z.input<typeof posTerminalLineMatchInput>
+
+export const posRegisterInput = z.object({
+  code: z.string().trim().min(2, "minLength").max(24, "maxLength"),
+  name: z.string().trim().min(3, "minLength").max(120, "maxLength"),
+  branchId: z.string().trim().min(1, "required"),
+  cashAccountId: z.string().trim().min(1, "required"),
+  cardAccountId: z.string().trim().min(1, "required").optional().default("ac1"),
+  bkashAccountId: z.string().trim().min(1, "required").optional().default("ac4"),
+  nagadAccountId: z.string().trim().min(1, "required").optional().default("ac5"),
+  terminalId: z.string().trim().max(60).optional().default(""),
+  active: z.boolean().optional().default(true),
+})
+export type PosRegisterInput = z.input<typeof posRegisterInput>
+
+export const posScopeSchema = z.enum([
+  "pos:catalog:read",
+  "pos:sale:write",
+  "pos:shift:write",
+  "pos:queue:sync",
+  "pos:catalog.read",
+  "pos:stock.read",
+  "pos:sales.write",
+  "pos:queue.sync",
+  "pos:webhooks.manage",
+])
+
+export const posTokenInput = z.object({
+  name: z.string().trim().min(3, "minLength").max(80, "maxLength"),
+  registerId: z.string().trim().min(1, "required"),
+  scopes: z.array(posScopeSchema).min(1, "required").max(10),
+})
+export type PosTokenInput = z.input<typeof posTokenInput>
+
+export const posWebhookEventSchema = z.enum([
+  "pos.sale.completed",
+  "pos.sale.voided",
+  "pos.shift.opened",
+  "pos.shift.closed",
+  "pos.settlement.reconciled",
+])
+
+export const posWebhookInput = z.object({
+  name: z.string().trim().min(3, "minLength").max(80, "maxLength"),
+  url: z.string().trim().url("url").max(240),
+  events: z.array(posWebhookEventSchema).min(1, "required").max(10),
+  secret: z.string().trim().min(8, "minLength").max(120).optional(),
+  active: z.boolean().optional().default(true),
+})
+export type PosWebhookInput = z.input<typeof posWebhookInput>
+
+const posQueueEventItem = z.object({
+  seqNo: z.number().int().min(1, "min0").max(1_000_000),
+  idempotencyKey: z.string().trim().min(3, "required").max(120),
+  clientCreatedAt: z.string().trim().max(40).optional(),
+  queuedAt: z.string().trim().max(40).optional(),
+  sale: posSaleInput.omit({ registerId: true, idempotencyKey: true, seqNo: true }).and(
+    z.object({ registerId: z.string().optional(), idempotencyKey: z.string().optional(), seqNo: z.number().optional() }),
+  ),
+})
+
+export const posQueueSyncInput = z.object({
+  registerId: z.string().trim().min(1, "required"),
+  events: z.array(posQueueEventItem).min(1, "atLeastOneRow").max(100, "tooManyRows").optional(),
+  entries: z.array(posQueueEventItem).min(1, "atLeastOneRow").max(100, "tooManyRows").optional(),
+})
+export type PosQueueSyncInput = z.input<typeof posQueueSyncInput>
+
+const posLabelSpecItem = z.object({
+  itemId: z.string().trim().min(1, "required"),
+  qty: z.number().int().min(1, "min0").max(200),
+})
+
+export const posLabelInput = z.object({
+  format: z.enum(["38x25", "50x30", "a4-24"]).optional().default("38x25"),
+  items: z.array(posLabelSpecItem).min(1, "atLeastOneLine").max(60).optional(),
+  specs: z.array(posLabelSpecItem).min(1, "atLeastOneLine").max(60).optional(),
+})
+export type PosLabelInput = z.input<typeof posLabelInput>
+
