@@ -101,6 +101,9 @@ jobs:
       - name: E2E — R9 (account transfers TX- with derived balances, cheque register with present/clear/bounce lifecycle)
         working-directory: scripts
         run: bash .ci-run.sh e2e_r9.py
+      - name: E2E — R10 (counter POS, mixed tender, X/Z shift reports, terminal settlement reconciliation, external POS API & barcode labels)
+        working-directory: scripts
+        run: bash .ci-run.sh e2e_r10.py
       - name: E2E — Knowledge base (help centre, search, articles en/bn, print, HTML/Markdown downloads, help menu)
         working-directory: scripts
         run: bash .ci-run.sh e2e_kb.py

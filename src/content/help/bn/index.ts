@@ -12,6 +12,7 @@ import r64 from "./r64"
 import r65 from "./r65"
 import r66 from "./r66"
 import r83 from "./r83"
+import r10 from "./r10"
 
 /** Bangla knowledge base (NFC). `satisfies` makes a missing or unknown article a type error. */
-export const BN = { ...gettingStarted, ...sales, ...purchase, ...inventoryProduction, ...accounting, ...nbrVat, ...adminReference, ...r62, ...r63, ...r64, ...r65, ...r66, ...r83 } satisfies HelpTexts
+export const BN = { ...gettingStarted, ...sales, ...purchase, ...inventoryProduction, ...accounting, ...nbrVat, ...adminReference, ...r62, ...r63, ...r64, ...r65, ...r66, ...r83, ...r10 } satisfies HelpTexts

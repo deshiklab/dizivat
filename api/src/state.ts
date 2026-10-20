@@ -9,7 +9,7 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import type { Preferences, SavedView, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AssetClass, AssetDisposal, AssetRevaluation, AuditEvent, Batch, Bom, BondUd, ChequeEvent, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, FixedAsset, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
+  AccountingConfig, AssetClass, AssetDisposal, AssetRevaluation, AuditEvent, Batch, Bom, BondUd, ChequeEvent, Company, CreditNote, DebitNote, DeliveryLogRow, DeliverySchedule, DrawbackClaim, FiredReminder, FixedAsset, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PosApiToken, PosQueueEntry, PosRegister, PosSale, PosShift, PosTerminalLine, PosTerminalStatement, PosWebhook, PosWebhookDelivery, PrcBatch, ProductionConfig, Purchase, ReminderSettings, ReturnAmendment, Sale, StockDoc, StockDocKind,
   TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder,
 } from "@/lib/types"
 
@@ -51,6 +51,11 @@ interface Globals {
     glAccounts?: GlAccount[]; journalEntries?: ManualJournalEntry[]
     /** R9.4: the fixed assets and their classes (the depreciation is derived, never stored) */
     assetClasses?: AssetClass[]; assets?: FixedAsset[]
+    /** R10: counter POS registers, shifts, sales, terminal settlement statements, tokens, webhooks & offline queue */
+    posRegisters?: PosRegister[]; posShifts?: PosShift[]; posSales?: PosSale[]
+    posSettlements?: PosTerminalStatement[]; posSettlementLines?: PosTerminalLine[]
+    posTokens?: PosApiToken[]; posWebhooks?: PosWebhook[]; posWebhookDeliveries?: PosWebhookDelivery[]
+    posQueue?: PosQueueEntry[]
   }
   __dzUsers?: UserStore
   __dzAudit?: { events: AuditEvent[]; seq: number }
@@ -84,6 +89,11 @@ export function restoreGlobals(s: {
   glAccounts?: GlAccount[]; journalEntries?: ManualJournalEntry[]
   /** R9.4: the fixed assets and their classes (tables; a pre-R9.4 database adopts the class seed) */
   assetClasses?: AssetClass[]; assets?: FixedAsset[]
+  /** R10: POS registers, shifts, sales, terminal settlements, API tokens, webhooks and offline queue */
+  posRegisters?: PosRegister[]; posShifts?: PosShift[]; posSales?: PosSale[]
+  posSettlements?: PosTerminalStatement[]; posSettlementLines?: PosTerminalLine[]
+  posTokens?: PosApiToken[]; posWebhooks?: PosWebhook[]; posWebhookDeliveries?: PosWebhookDelivery[]
+  posQueue?: PosQueueEntry[]
   units: Unit[]; customers: Party[]; vendors: Party[]; partyTrash: TrashEntry[]; items: Item[]; masterItems: MasterItem[]
   transfers: StockDoc[]; damages: StockDoc[]; sales: Sale[]; saleTrash: TrashEntry[]
   purchases: Purchase[]; purchaseTrash: TrashEntry[]
@@ -122,6 +132,10 @@ export function restoreGlobals(s: {
     moneyTransfers: s.moneyTransfers ?? [], chequeEvents: s.chequeEvents ?? [],
     glAccounts: s.glAccounts ?? [], journalEntries: s.journalEntries ?? [],
     assetClasses: s.assetClasses ?? [], assets: s.assets ?? [],
+    posRegisters: s.posRegisters ?? [], posShifts: s.posShifts ?? [], posSales: s.posSales ?? [],
+    posSettlements: s.posSettlements ?? [], posSettlementLines: s.posSettlementLines ?? [],
+    posTokens: s.posTokens ?? [], posWebhooks: s.posWebhooks ?? [],
+    posWebhookDeliveries: s.posWebhookDeliveries ?? [], posQueue: s.posQueue ?? [],
   }
   G.__dzUsers = { users: s.users, passwords: {}, prefs: s.prefs, views: {}, failures: {}, notifRead: s.notifRead ?? {}, revokedBefore: {} }
   G.__dzAudit = { events: s.events, seq: s.events.reduce((m, e) => Math.max(m, Number(e.id.slice(1)) || 0), 0) }
@@ -639,4 +653,23 @@ export const mirror = {
   /** Deleted documents and parties (the 10-second undo); party entries mirror `parties.deleted_at`. */
   trash: (): TrashEntry[] => G.__dzDb!.trash,
   audit: () => G.__dzAudit!,
+  /** R10: POS registers, shifts, sales, terminal settlements, API tokens, webhooks and offline queue */
+  posRegisters: (): PosRegister[] => (G.__dzDb!.posRegisters ??= []),
+  putPosRegisters(list: PosRegister[]) { const a = mirror.posRegisters(); a.splice(0, a.length, ...list) },
+  posShifts: (): PosShift[] => (G.__dzDb!.posShifts ??= []),
+  putPosShifts(list: PosShift[]) { const a = mirror.posShifts(); a.splice(0, a.length, ...list) },
+  posSales: (): PosSale[] => (G.__dzDb!.posSales ??= []),
+  putPosSales(list: PosSale[]) { const a = mirror.posSales(); a.splice(0, a.length, ...list) },
+  posSettlements: (): PosTerminalStatement[] => (G.__dzDb!.posSettlements ??= []),
+  putPosSettlements(list: PosTerminalStatement[]) { const a = mirror.posSettlements(); a.splice(0, a.length, ...list) },
+  posSettlementLines: (): PosTerminalLine[] => (G.__dzDb!.posSettlementLines ??= []),
+  putPosSettlementLines(list: PosTerminalLine[]) { const a = mirror.posSettlementLines(); a.splice(0, a.length, ...list) },
+  posTokens: (): PosApiToken[] => (G.__dzDb!.posTokens ??= []),
+  putPosTokens(list: PosApiToken[]) { const a = mirror.posTokens(); a.splice(0, a.length, ...list) },
+  posWebhooks: (): PosWebhook[] => (G.__dzDb!.posWebhooks ??= []),
+  putPosWebhooks(list: PosWebhook[]) { const a = mirror.posWebhooks(); a.splice(0, a.length, ...list) },
+  posWebhookDeliveries: (): PosWebhookDelivery[] => (G.__dzDb!.posWebhookDeliveries ??= []),
+  putPosWebhookDeliveries(list: PosWebhookDelivery[]) { const a = mirror.posWebhookDeliveries(); a.splice(0, a.length, ...list) },
+  posQueue: (): PosQueueEntry[] => (G.__dzDb!.posQueue ??= []),
+  putPosQueue(list: PosQueueEntry[]) { const a = mirror.posQueue(); a.splice(0, a.length, ...list) },
 }

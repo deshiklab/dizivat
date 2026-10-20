@@ -396,9 +396,11 @@ export class VerifyController {
   @Get("invoice")
   async invoice(@Req() req: Request, @Res() res: Response) {
     const token = searchParams(req).get("token") ?? ""
-    const sale = await this.svc.find(token.split(".")[0])
+    const invNo = token.split(".")[0]
+    const posSale = mirror.posSales().find((s) => s.invoiceNo === invNo)
+    const sale = (await this.svc.find(invNo)) ?? (posSale ? compat().posSaleAsSale(posSale) : null)
     const c = mirror.company()
-    res.json(await verifyInvoiceAnswer(token, sale ?? null, { bin: c.bin, name: c.name }))
+    res.json(await verifyInvoiceAnswer(token, sale, { bin: c.bin, name: c.name }))
   }
 }
 

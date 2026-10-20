@@ -13,8 +13,8 @@ api_native checks, and this documentation — one slice per PR, one CI watch.
 | **R8.3** | statutory reminders + report delivery (the schedule, the digests, the tick) | done |
 | **R9.1** | treasury operations: own-account transfers (TX-), cheque register with lifecycle | done |
 | **R9.2** | the general ledger: chart of accounts, derived posting rules, manual journal entries | done |
-| R9 | the complete accounting module (R9.5 next: expenses and TDS) | in flight |
-| R10 | POS integration | after R9 |
+| R9 | the complete accounting module (R9.3 statements/close + R9.4 fixed assets landed; R9.5 next: expenses and TDS) | in flight |
+| **R10** | POS integration: counter POS (R10.1), terminal settlement reconciliation (R10.2), external POS API & offline queue (R10.3), 80 mm receipts, barcode labels & FA 2026 e-invoice adapter (R10.4) | **done** |
 
 ## R9 — the complete accounting module
 
@@ -39,10 +39,10 @@ Both flavours, in this order, because the second reuses the first:
 
 | Slice | Scope | Notes |
 | --- | --- | --- |
-| **R10.1 — the counter POS** | a fast sale screen: scan or type the SKU, mixed tender (cash / card / bKash / Nagad — the account kinds already exist), VAT by the item's own rate, a Mushak 6.3 with the R8.1 QR, shift open / close with X / Z reports and the cash count variance | items already carry SKUs; QR verification and the e-filing JSON already exist — this slice is mostly the screen and a lean counter-sale document |
-| **R10.2 — settlement reconciliation** | the card / MFS terminal settlement statements imported and matched against the POS invoices, commission and service charges parked as charge lines | the R8.2 bank-statement matcher pattern, applied to terminals |
-| **R10.3 — the external POS API** | scoped API tokens, idempotent REST endpoints for third-party front-ends (post a sale, read stock and price), webhooks, an offline device queue with sequence numbers, and the register / device management page | makes DiziVAT the system of record whatever the counter runs on |
-| **R10.4 — print and labels** | 80 mm thermal receipts (print CSS, like the statutory forms) and item barcode labels | keeps a slot for the NBR e-invoice adapter: the Finance Act 2026 lets an ERP issue the Mushak 6.3 itself |
+| **R10.1 — the counter POS** ✅ | a fast sale screen: scan or type the SKU, mixed tender (cash / card / bKash / Nagad — the account kinds already exist), VAT by the item's own rate, a Mushak 6.3 with the R8.1 QR, shift open / close with X / Z reports and the cash count variance — **shipped v0.20.0** | items already carry SKUs; QR verification and the e-filing JSON already exist — this slice is mostly the screen and a lean counter-sale document |
+| **R10.2 — settlement reconciliation** ✅ | the card / MFS terminal settlement statements imported and matched against the POS invoices, commission and service charges parked as charge lines — **shipped v0.20.0** | the R8.2 bank-statement matcher pattern, applied to terminals |
+| **R10.3 — the external POS API** ✅ | scoped API tokens, idempotent REST endpoints for third-party front-ends (post a sale, read stock and price), webhooks, an offline device queue with sequence numbers, and the register / device management page — **shipped v0.20.0** | makes DiziVAT the system of record whatever the counter runs on |
+| **R10.4 — print and labels** ✅ | 80 mm thermal receipts (print CSS, like the statutory forms) and item barcode labels — **shipped v0.20.0** | keeps a slot for the NBR e-invoice adapter: the Finance Act 2026 lets an ERP issue the Mushak 6.3 itself |
 
 ## Beyond — the other candidates, in rough priority
 

@@ -1,4 +1,4 @@
-import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, AssetClass, ChequeEvent, FixedAsset, GlAccount, ManualJournalEntry, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
+import type { BankStatement, BankStatementLine, BondUd, DrawbackClaim, LateFiling, PrcBatch, ReturnAmendment, UdRecord, AccountingConfig, AssetClass, ChequeEvent, FixedAsset, GlAccount, ManualJournalEntry, DeliveryLogRow, DeliverySchedule, FiredReminder, MoneyAccount, MoneyDoc, MoneyTransfer, ReminderSettings, TreasuryDeposit, VatAdjustment, VatReturn, VatSettings, VdsEntry, AuditChange, Batch, Bom, Branch, CreditNote, Damage, DebitNote, HistoryEntry, Item, ItemWithStock, MasterItem, OpeningEntry, Party, PosApiToken, PosQueueEntry, PosRegister, PosSale, PosShift, PosTerminalLine, PosTerminalStatement, PosWebhook, PosWebhookDelivery, ProductionConfig, Purchase, Sale, StockDoc, Transfer, Unit, WorkOrder } from "../types"
 import * as seed from "./seed"
 import { auditStore, recordAudit } from "./audit"
 import { users } from "./users"
@@ -16,6 +16,7 @@ import { DEFAULT_REMINDER_SETTINGS, seedDeliveryLog, seedDeliverySchedules } fro
 import { seedChequeEvents, seedTransfers } from "./seed-r91"
 import { seedChart, seedJournal } from "./seed-r92"
 import { seedAssetClasses, seedAssets } from "./seed-r94"
+import { seedPos } from "./seed-r10"
 
 type Trash =
   | { kind: "sale"; doc: Sale; at: string }
@@ -26,7 +27,7 @@ export interface DB {
   /** Sprint 4 */
   units: Unit[]; transfers: Transfer[]; damages: Damage[]
   /** last id number handed out per stock-document kind (ids are never reused, even after a draft is deleted) */
-  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number; journal: number; asset: number }
+  seq: { transfer: number; damage: number; unit: number; debitNote: number; opening: number; masterItem: number; creditNote: number; bom: number; workOrder: number; batch: number; account: number; receipt: number; payment: number; treasury: number; vds: number; adjustment: number; ud: number; bondUd: number; claim: number; prcBatch: number; lateFiling: number; amendment: number; statement: number; moneyTransfer: number; cheque: number; journal: number; asset: number; posRegister: number; posShift: number; posSale: number; posSettlement: number; posToken: number; posWebhook: number; posDelivery: number; posQueue: number }
   /** R2 */
   debitNotes: DebitNote[]; openings: OpeningEntry[]; masterItems: MasterItem[]
   /** R3 */
@@ -51,6 +52,16 @@ export interface DB {
   glAccounts: GlAccount[]; journalEntries: ManualJournalEntry[]
   /** R9.4: the fixed assets and their classes — the depreciation / revaluation / disposal postings fold from them */
   assetClasses: AssetClass[]; assets: FixedAsset[]
+  /** R10: counter POS registers, shifts, sales, terminal settlement statements, tokens, webhooks & offline queue */
+  posRegisters: PosRegister[]
+  posShifts: PosShift[]
+  posSales: PosSale[]
+  posSettlements: PosTerminalStatement[]
+  posSettlementLines: PosTerminalLine[]
+  posTokens: PosApiToken[]
+  posWebhooks: PosWebhook[]
+  posWebhookDeliveries: PosWebhookDelivery[]
+  posQueue: PosQueueEntry[]
 }
 
 const APPROVERS = ["Arif Hossain", "Farzana Akter"]
@@ -153,6 +164,8 @@ function init(): DB {
     ...returnAmendments.map((x) => ({ entity: "returnAmendment" as const, id: x.id, ref: `${x.no} · 9.4 · ${x.period.slice(5)}-${x.period.slice(0, 4)}`, history: x.history })),
   ]
   seedAudit(d.sales, d.purchases, [...transfers, ...damages], r2Docs)
+  const r10 = seedPos(d.items, company.branches)
+  const r10Lines = Object.values(r10.posSettlementLines).flat()
   const world: DB = {
     ...d, trash: [], units: seedUnits(), transfers, damages, debitNotes, openings, masterItems,
     creditNotes, boms, workOrders, batches, productionConfig: { procedure: "directStock", consumption: "standard" },
@@ -164,6 +177,15 @@ function init(): DB {
     moneyTransfers: [], chequeEvents: [],
     glAccounts: [], journalEntries: [],
     assetClasses: seedAssetClasses(), assets: seedAssets(),
+    posRegisters: r10.posRegisters,
+    posShifts: r10.posShifts,
+    posSales: r10.posSales,
+    posSettlements: r10.posSettlements,
+    posSettlementLines: r10Lines,
+    posTokens: r10.posTokens,
+    posWebhooks: r10.posWebhooks,
+    posWebhookDeliveries: r10.posWebhookDeliveries,
+    posQueue: r10.posQueue,
     seq: {
       transfer: transfers.length, damage: damages.length, unit: 7, debitNote: debitNotes.length, opening: openings.length, masterItem: masterItems.length,
       creditNote: creditNotes.length, bom: boms.length, workOrder: workOrders.length, batch: batches.length,
@@ -171,6 +193,9 @@ function init(): DB {
       treasury: r4.treasury.length, vds: r4.vds.length, adjustment: r4.adjustments.length, ud: uds.length, bondUd: bondUds.length, claim: drawbackClaims.length,
       prcBatch: prcBatches.length, lateFiling: lateFilings.length, amendment: returnAmendments.length, statement: 0,
       moneyTransfer: 0, cheque: 0, journal: 0, asset: 8,
+      posRegister: r10.posRegisters.length, posShift: r10.posShifts.length, posSale: r10.posSales.length,
+      posSettlement: r10.posSettlements.length, posToken: r10.posTokens.length, posWebhook: r10.posWebhooks.length,
+      posDelivery: r10.posWebhookDeliveries.length, posQueue: r10.posQueue.length,
     },
   }
   // the seeded log row's figures come from the seeded books themselves, so both runtimes seed the same document
@@ -247,6 +272,27 @@ db.journalEntries ??= []
 db.seq.journal ??= 0
 db.deliverySchedules ??= seedDeliverySchedules()
 db.deliveryLog ??= seedDeliveryLog(db)
+// R10: a snapshot saved before R10 has no POS collections yet — seed the defaults from the snapshot's items/branches
+if (!db.posRegisters) {
+  const r10 = seedPos(db.items, company.branches)
+  db.posRegisters = r10.posRegisters
+  db.posShifts = r10.posShifts
+  db.posSales = r10.posSales
+  db.posSettlements = r10.posSettlements
+  db.posSettlementLines = Object.values(r10.posSettlementLines).flat()
+  db.posTokens = r10.posTokens
+  db.posWebhooks = r10.posWebhooks
+  db.posWebhookDeliveries = r10.posWebhookDeliveries
+  db.posQueue = r10.posQueue
+}
+db.seq.posRegister ??= db.posRegisters.length
+db.seq.posShift ??= db.posShifts.length
+db.seq.posSale ??= db.posSales.length
+db.seq.posSettlement ??= db.posSettlements.length
+db.seq.posToken ??= db.posTokens.length
+db.seq.posWebhook ??= db.posWebhooks.length
+db.seq.posDelivery ??= db.posWebhookDeliveries.length
+db.seq.posQueue ??= db.posQueue.length
 
 export const withStock = (i: Item): ItemWithStock => ({
   ...i,

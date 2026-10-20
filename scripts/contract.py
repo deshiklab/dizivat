@@ -303,6 +303,38 @@ ENDPOINTS = [
     E("GET", "/schedule/log/{deliveryLog}", None, "R8.3: one delivered report {id, scheduleId, kind, period?, asOf, generatedAt, recipients, document} — the figures as they stood at delivery"),
     E("GET", "/schedule/log/{deliveryLog}/document", None, "R8.3: the delivered document — CSV (default) or ?format=html for the printable page; re-printing a past delivery shows the frozen figures", ctype="text/csv"),
     E("POST", "/schedule/tick", "settings.manage", "R8.3: run the schedule for today — the cron entrypoint (and the page's Run now): fires the reminders whose lead time has arrived (they then own their deadline in the notification feed), delivers the reports whose day has come and prunes the ones whose subject is gone; idempotent per day {date, fired[], pruned, delivered[]}"),
+    # R10 — POS integration (counter POS, settlement reconciliation, external POS API & barcode labels)
+    E("GET", "/pos/catalog?branchId=b3", None, "R10.1: counter POS catalog {branchId, registers (with openShift), items [{id, sku, name, hsCode, unit, salePrice, sdRate, vatRate, priceInclTax, available, barcode}], customers, accounts}"),
+    E("GET", "/pos/sales", None, "R10.1: POS counter & external invoices — Page<PosSale>; filters q/from/to/registerId/shiftId/process/source", page=True, csv=True),
+    E("POST", "/pos/sales", "doc.create", "R10.1: issue an approved POS invoice (POS-MMYY####) with mixed tender (cash/card/bkash/nagad), item-rate VAT, Mushak 6.3 QR token & FA 2026 NBR e-Invoice adapter slot (201; 409 noOpenShift; 422 insufficientStock / insufficientTender / changeExceedsCash)"),
+    E("GET", "/pos/sales/{posSale}", None, "R10.1 / R10.4: one POS invoice + sale63 (Mushak 6.3 view) + ebill (FA 2026 NBR e-invoice adapter payload)"),
+    E("PATCH", "/pos/sales/{posSale}", "doc.cancel", "R10.1: void an approved POS invoice {process: 'Cancelled', reason ≥ 3} — restores counter stock and updates shift totals"),
+    E("GET", "/pos/shifts", None, "R10.1: POS shifts — Page<PosShift>; filters q/from/to/registerId/status", page=True, csv=True),
+    E("POST", "/pos/shifts", "doc.create", "R10.1: open a shift {registerId, openingFloat, date?, note?} → 201 PosShift (SHF-MMYY####; 409 shiftAlreadyOpen)"),
+    E("GET", "/pos/shifts/{posShift}", None, "R10.1: shift detail + live X report (if open) or final Z report (if closed) with tender breakdown and cash drawer reconciliation"),
+    E("POST", "/pos/shifts/{posShift}/close", "doc.create", "R10.1: close an open shift {countedCash, closedDate?, note?} → Z-MMYY#### report with expectedCash and variance (409 alreadyClosed)"),
+    E("GET", "/pos/settlements", None, "R10.2: card / MFS (bKash / Nagad) terminal settlement statements — Page<PosTerminalStatement> with matched/charges/open counts & unexplained gross", page=True, csv=True),
+    E("POST", "/pos/settlements", "doc.create", "R10.2: import a terminal settlement statement {accountId (bank/mfs), channel (card|bkash|nagad), source?, dryRun?, rows [{date, channel?, reference?, narration, gross, fee, net?}]} — auto-matches POS tender legs by reference or exact gross + date window; dryRun=true returns 200 preview plan, commit returns 201 (PST-MMYY####)"),
+    E("GET", "/pos/settlements/{posSettlement}", None, "R10.2: one terminal settlement statement with lines, suggestions, posExpectedGross, totalFees, netSettled & unexplained"),
+    E("DELETE", "/pos/settlements/{posSettlement}", "doc.delete", "R10.2: delete an imported terminal settlement statement"),
+    E("PATCH", "/pos/settlements/lines/{posSettlementLine}", "doc.edit", "R10.2: park a terminal line as a commission/MDR charge {status: 'charge', note?}, ignore it {status: 'ignored'}, or reopen {status: 'open'}"),
+    E("POST", "/pos/settlements/lines/{posSettlementLine}/match", "doc.edit", "R10.2: manually match an open terminal settlement line to a POS invoice {saleId} (409 notOpen / grossMismatch)"),
+    E("GET", "/pos/registers", None, "R10.3: POS registers & terminal bindings with openShift and offline queue watermark lastSeqNo"),
+    E("POST", "/pos/registers", "settings.manage", "R10.3: create a POS register {code, name, branchId, cashAccountId, cardAccountId?, bkashAccountId?, nagadAccountId?, terminalId?} (201; 409 duplicate code)"),
+    E("PUT", "/pos/registers/{posRegister}", "settings.manage", "R10.3: update a POS register"),
+    E("GET", "/pos/tokens", None, "R10.3: scoped POS API tokens (tokenHash omitted)"),
+    E("POST", "/pos/tokens", "settings.manage", "R10.3: issue a scoped POS API token {name, registerId, scopes[]} → 201 {token, secret} (secret shown once)"),
+    E("DELETE", "/pos/tokens/{posToken}", "settings.manage", "R10.3: revoke an active POS API token (409 already revoked)"),
+    E("GET", "/pos/webhooks", None, "R10.3: POS webhooks and signed HMAC-SHA256 delivery log {webhooks, deliveries}"),
+    E("POST", "/pos/webhooks", "settings.manage", "R10.3: register a POS webhook {name, url, secret, events[], active?} (201)"),
+    E("DELETE", "/pos/webhooks/{posWebhook}", "settings.manage", "R10.3: delete a POS webhook"),
+    E("POST", "/pos/webhooks/{posWebhook}/test", "settings.manage", "R10.3: dispatch a signed test ping (`X-DiziVAT-Signature: sha256=...`) to a POS webhook"),
+    E("GET", "/pos/queue", None, "R10.3: offline device sequence queue & per-register sequence watermarks {entries, registers}"),
+    E("GET", "/pos/external/catalog", None, "R10.3: external POS read stock & price catalog (accepts session or `Authorization: Bearer dzpos_...` with `pos:catalog:read`)"),
+    E("POST", "/pos/external/sales", "doc.create", "R10.3: idempotent external POS sale endpoint (accepts session or `Bearer dzpos_...` with `pos:sale:write`; replays existing 200 `{replayed: true, sale}` on matching `Idempotency-Key` / `idempotencyKey`)"),
+    E("POST", "/pos/external/queue", "doc.create", "R10.3: offline device queue batch sync {registerId, entries [{seqNo, idempotencyKey, queuedAt?, sale}]} — ordered by seqNo, deduplicates replayed sequence numbers & idempotency keys (accepts session or `Bearer dzpos_...` with `pos:queue:sync`)"),
+    E("GET", "/pos/labels?format=38x25", None, "R10.4: item Code-128B barcode label sheet {format: 38x25|50x30|a4-24, totalLabels, company, labels [{itemId, sku, name, hsCode, unit, salePrice, vatRate, sdRate, priceInclTax, barcode, bars, qty}]}"),
+    E("POST", "/pos/labels", None, "R10.4: custom item Code-128B barcode label batch {format, specs [{itemId, qty}]} (422 unknown itemId)"),
 ]
 
 # Free-text notes written under the endpoint table by --doc
@@ -310,6 +342,11 @@ NOTES = [
     "**R6.2 — VAT officer:** `POST/PUT /users` accept `role: \"vatOfficer\"` with `accessUntil` (YYYY-MM-DD, today … +90 days;",
     "422 required / accessPast / accessTooLong). After that date `POST /auth/login` answers `403 expired` and existing",
     "sessions get 401. Every officer request is logged in the audit trail (entity `access`, action `viewed`).",
+    "",
+    "**R10.3 — External POS bearer tokens:** `/pos/external/catalog`, `/pos/external/sales`, and `/pos/external/queue`",
+    "accept either a signed-in user session or `Authorization: Bearer dzpos_<register>_<secret>` (or `X-POS-Token`).",
+    "Each token is bound to a register and checked against its `PosScope` list (`pos:catalog:read`, `pos:sale:write`,",
+    "`pos:queue:sync`); invalid/revoked tokens return `401` and missing scopes return `403`.",
 ]
 
 sessions = {}
@@ -363,8 +400,13 @@ def fixtures():
     r4 = {"receipt": first("/accounting/receipts?process=Approved&size=1"), "payment": first("/accounting/payments?process=Approved&size=1"),
           "treasury": first("/vat/treasury?process=Approved&size=1"), "vds": first("/vat/vds?process=Approved&size=1"),
           "adjustment": first("/vat/adjustments?process=Approved&size=1"), "account": "ac1", "period": "2026-08"}
+    pos_sale = first("/pos/sales?process=Approved&size=1")
+    pos_shift = first("/pos/shifts?size=1")
+    pos_settlement = first("/pos/settlements?size=1")
     return {**r4, "moneyTransfer": money_transfer, "cheque": cheque_open, "chequeFinal": cheque_final, "journal": journal, "code": gl_account,
             "asset": asset, "assetDraft": asset_draft, "assetDisposed": asset_disposed, "assetClass": "plant",
+            "posRegister": "reg1", "posShift": pos_shift, "posSale": pos_sale, "posSettlement": pos_settlement,
+            "posSettlementLine": "tsl1-3", "posToken": "ptk2", "posWebhook": "pwh1",
             "goodsSale": goods_sale["id"], "saleLine": goods_sale["lines"][0]["itemId"], "credit": credit, "bom": bom, "wo": wo, "batch": batch,"sale": sale, "purchase": purchase, "item": "i1", "transfer": transfer, "damage": damage, "debit": debit, "opening": opening, "draftPurchase": draft, "purchaseLine": line}
 
 def run():
@@ -483,6 +525,20 @@ def run():
         ("auditor", "POST", "/accounting/asset-classes", {"name": "Contract class", "rate": 10}, 403, None),
         ("admin", "POST", "/accounting/asset-classes", {"name": "Plant and machinery (factory)", "rate": 10}, 409, None),
         ("admin", "PUT", "/accounting/asset-classes/nope", {"name": "Nope", "rate": 10}, 404, None),
+        # R10 — POS integration (counter POS, settlement reconciliation, external POS API & barcode labels)
+        ("arif", "GET", "/pos/sales/nope", None, 404, None),
+        ("arif", "GET", "/pos/shifts/nope", None, 404, None),
+        ("arif", "GET", "/pos/settlements/nope", None, 404, None),
+        ("arif", "POST", "/pos/sales", {}, 422, "registerId"),
+        ("arif", "POST", "/pos/shifts", {"registerId": "reg1", "openingFloat": 1000}, 409, None),
+        ("arif", "POST", "/pos/shifts/sh1/close", {"countedCash": 1000}, 409, None),
+        ("arif", "POST", "/pos/settlements", {"accountId": "ac6", "channel": "card", "rows": [{"date": "2026-09-20", "narration": "Cash drawer", "gross": 100, "fee": 0}]}, 422, "accountId"),
+        ("arif", "PATCH", "/pos/settlements/lines/nope", {"status": "charge"}, 404, None),
+        ("arif", "POST", "/pos/settlements/lines/tsl1-1/match", {"saleId": "ps1"}, 409, None),
+        ("admin", "POST", "/pos/registers", {"code": "REG-01", "name": "Dup reg", "branchId": "b1", "cashAccountId": "ac6"}, 409, None),
+        ("admin", "POST", "/pos/tokens", {"name": "Bad reg token", "registerId": "nope", "scopes": ["pos:catalog:read"]}, 422, "registerId"),
+        ("admin", "DELETE", "/pos/tokens/nope", None, 404, None),
+        ("arif", "POST", "/pos/labels", {"format": "38x25", "specs": [{"itemId": "nope", "qty": 2}]}, 422, "specs"),
         ("arif", "GET", "/purchases/nope", None, 404, None),
         ("arif", "GET", "/items/nope", None, 404, None),
         ("arif", "POST", "/sales", {}, 422, "customerId"),

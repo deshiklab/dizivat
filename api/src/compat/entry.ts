@@ -278,3 +278,21 @@ export {
   ASSET_CSV_COLUMNS, ASSET_DIFF_FIELDS, assetActionRule, assetApproveRule, assetCancelRule, assetIdentity,
   assetSpec, buildAsset, buildAssetClass, claimAssetId, nextClassId,
 } from "@/app/api/v1/_r94"
+// R10: the counter POS, terminal settlement reconciliation, external POS API (scoped tokens, idempotent sales,
+// offline queue, webhooks) and thermal receipts / barcode labels / FA 2026 e-invoice adapter rules.
+export {
+  authenticatePosToken, buildPosRegister, buildPosSale, buildPosWebhook, cancelPosSale, closePosShift,
+  deletePosWebhook, deleteTerminalStatement, extractBearerOrPosToken, firePosWebhooks, importTerminalStatement,
+  issuePosToken, matchTerminalLine, matchTerminalLineToSale, openPosShift, patchTerminalLine, planTerminalStatement,
+  POS_SALE_CSV_COLUMNS, POS_SETTLEMENT_CSV_COLUMNS, POS_SHIFT_CSV_COLUMNS,
+  posCatalogItems, posCatalogView, posLabelsView, posQueueView, posRegistersList, PosRuleError,
+  posSaleDetail, posSaleEbill, posSalesPage, posShiftDetail, posShiftsPage, posSoldByBranch, posStockLookup,
+  posTokensList, posWebhooksView, processPosQueueBatch, revokePosToken, terminalStatementsPage,
+  terminalStatementView, testPosWebhook, updatePosRegister, withPosQr, type PosCatalogItem, type PosSource,
+} from "@/app/api/v1/_r10"
+export { posLabelInput } from "@/lib/schemas"
+export {
+  buildBarcodeLabels, buildNbrAdapterPayload, encodeCode128B, posPriceInclTax, posSaleAsSale, posShiftReport,
+} from "@/lib/pos"
+export { DEMO_POS_READ_TOKEN, DEMO_POS_TOKEN, hashPosToken, makeNbrAdapter, seedPos, signPosWebhook } from "@/lib/mock/seed-r10"
+

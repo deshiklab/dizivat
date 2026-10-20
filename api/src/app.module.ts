@@ -29,9 +29,10 @@ import { BondController, ExportsController, PenaltyController, RegistersService,
 import { AdjustmentsController, AdjustmentsService, TreasuryController, TreasuryService, VdsController, VdsEligibleController, VdsService } from "./modules/vat"
 import { ComplianceController, PeriodsController, ReturnSubFormController, ReturnsController, ReturnsService, VatSettingsController } from "./modules/returns"
 import { BooksService, DashboardController, ImportController, MushakController, NotificationsController, SaleServicesController, SearchController, ServicesController } from "./modules/books"
+import { PosController, PosService } from "./modules/pos"
 import { SEED_VERSION } from "./boot"
 
-export const VERSION = "0.17.0"
+export const VERSION = "0.20.0"
 const NATIVE_CONTROLLERS = [
   AuthController, MeController, UsersController, CompanyController, UnitsController, TariffController, AuditController, BackupsController,
   CustomersController, VendorsController, ItemsController, MasterItemsController, TransfersController, DamageController,
@@ -76,6 +77,8 @@ const NATIVE_CONTROLLERS = [
   // import — nothing among them stores a row of its own
   MushakController, DashboardController, SearchController, NotificationsController,
   ServicesController, SaleServicesController, ImportController,
+  // R10: POS integration (counter POS, shifts X/Z, terminal settlement reconciliation, external API, labels)
+  PosController,
 ]
 
 @Global()
@@ -85,7 +88,7 @@ const NATIVE_CONTROLLERS = [
     PurchasesService, NotesService, OpeningsService, BatchesService, BomsService, ProductionConfigService,
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
     TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService, UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
-    TransfersService, ChequeEventsService, JournalService, AssetService, AssetClassService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
+    TransfersService, ChequeEventsService, JournalService, AssetService, AssetClassService, PosService, { provide: ACCESS_LOGGER, useExisting: AuditService }, { provide: APP_GUARD, useClass: AuthGuard },
   ],
   exports: [
     SessionService, AuditService, UsersService, UnitsService, PartiesService, ItemsService, StockService, SalesService,
@@ -93,7 +96,7 @@ const NATIVE_CONTROLLERS = [
     WorkOrdersService, MoneyAccountsService, MoneyDocsService, BankStatementsService, AccountingConfigService,
     TreasuryService, VdsService, AdjustmentsService, ReturnsService, BooksService, DerivedService, BackupsService, ScheduleService,
     UdsService, BondUdsService, ReturnAppsService, ProceedsService, ClaimsService, RegistersService,
-    TransfersService, ChequeEventsService, JournalService, AssetService, AssetClassService,
+    TransfersService, ChequeEventsService, JournalService, AssetService, AssetClassService, PosService,
   ],
 })
 class CoreModule {}

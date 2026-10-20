@@ -9,12 +9,12 @@ import { asc, eq, sql } from "drizzle-orm"
 import { BACKUP_FORMAT, lastSlot } from "@/lib/backup-schedule"
 import type { Preferences, User } from "@/lib/auth/roles"
 import type {
-  AccountingConfig, AssetClass, AuditEvent, Batch, Bom, ChequeEvent, CreditNote, Damage, DebitNote, FixedAsset, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
+  AccountingConfig, AssetClass, AuditEvent, Batch, Bom, ChequeEvent, CreditNote, Damage, DebitNote, FixedAsset, GlAccount, Item, LateFiling, ManualJournalEntry, MasterItem, MoneyAccount, MoneyDoc, MoneyTransfer, OpeningEntry, Party, PosApiToken, PosQueueEntry, PosRegister, PosSale, PosShift, PosTerminalLine, PosTerminalStatement, PosWebhook, PosWebhookDelivery, PrcBatch, ProductionConfig, Purchase, ReturnAmendment, Sale, DrawbackClaim,
   BondUd, StockDoc, Transfer, TreasuryDeposit, UdRecord, Unit, VatAdjustment, VatReturn, VatSettings, VdsEntry, WorkOrder
 } from "@/lib/types"
 import { hashPassword } from "./common/password"
 import { db } from "./db/client"
-import { assetClasses, auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, chequeEvents, compatState, fixedAssets, glAccounts, items, journalEntries, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, moneyTransfers, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
+import { assetClasses, auditEvents, backups, batchConsumption, batchLines, batches, bomCosts, bomInputs, boms, bondUdGarments, bondUdInputs, bondUds, chequeEvents, compatState, fixedAssets, glAccounts, items, journalEntries, lateFilings, returnAmendments, masterItems, meta, noteLines, notes, openingEntries, parties, posQueue, posRegisters, posSales, posSettlementLines, posSettlements, posShifts, posTokens, posWebhookDeliveries, posWebhooks, prcBatches, productionConfig, purchaseLines, purchases, drawbackClaims, deliveryLog, deliverySchedules, moneyTransfers, reminderSettings, reminders, saleLines, saleRealisations, sales, stockDocumentLines, stockDocuments, tariffLines, units, users, workOrderLines, workOrders, accountingConfig, moneyAccounts, moneyAllocations, moneyDocs, treasuryDeposits, udLines, uds, vatAdjustments, vatReturns, vatSettings, vdsEntries } from "./db/schema"
 import { snapshot } from "./modules/backups"
 import { chainValues, markPersisted, rawToEvent, sealUnchained } from "./modules/audit"
 import { GENESIS_HASH } from "@/lib/integrity"
@@ -49,12 +49,18 @@ import { deliveryLogValues, reminderValues, scheduleValues, toDeliveryLog, toDel
 import { DEFAULT_REMINDER_SETTINGS, seedDeliverySchedules } from "@/lib/mock/seed-r83"
 import { seedChart } from "@/lib/mock/seed-r92"
 import { seedAssetClasses, seedAssets } from "@/lib/mock/seed-r94"
+import { seedPos } from "@/lib/mock/seed-r10"
+import {
+  posDeliveryValues, posQueueValues, posRegisterValues, posSaleValues, posSettlementLineValues,
+  posSettlementValues, posShiftValues, posTokenValues, posWebhookValues, toPosDelivery, toPosQueue,
+  toPosRegister, toPosSale, toPosSettlement, toPosSettlementLine, toPosShift, toPosToken, toPosWebhook,
+} from "./modules/pos"
 import { CHART_TEMPLATE } from "@/lib/gl"
 import { loadCompany, saveCompany } from "./modules/reference"
 import { G, loadCompat, mirror, restoreGlobals, type TrashEntry } from "./state"
 import { lockState, setEpoch } from "./common/state-guard"
 
-export const SEED_VERSION = "r9.4"
+export const SEED_VERSION = "r10.0"
 
 /**
  * Demo instances re-seed when the code ships a newer demo data set (SEED_VERSION differs from the stored one) —
@@ -166,6 +172,16 @@ async function seed(log: (m: string) => void) {
   // R9.4: the fixed assets and their classes — the depreciation is derived, never seeded
   const demoAssetClasses: AssetClass[] = m.db.assetClasses
   const demoAssets: FixedAsset[] = m.db.assets
+  // R10: POS registers, shifts, sales, terminal settlements, API tokens, webhooks and offline queue
+  const demoPosRegisters: PosRegister[] = m.db.posRegisters
+  const demoPosShifts: PosShift[] = m.db.posShifts
+  const demoPosSales: PosSale[] = m.db.posSales
+  const demoPosSettlements: PosTerminalStatement[] = m.db.posSettlements
+  const demoPosSettlementLines: PosTerminalLine[] = m.db.posSettlementLines
+  const demoPosTokens: PosApiToken[] = m.db.posTokens
+  const demoPosWebhooks: PosWebhook[] = m.db.posWebhooks
+  const demoPosDeliveries: PosWebhookDelivery[] = m.db.posWebhookDeliveries
+  const demoPosQueue: PosQueueEntry[] = m.db.posQueue
   // R5.6: the Mushak 9.1 returns — one row per tax period, the period being its id — and the NBR settings row
   const demoReturns: VatReturn[] = m.db.returns
   const demoVatSettings: VatSettings = m.db.vatSettings
@@ -177,7 +193,8 @@ async function seed(log: (m: string) => void) {
     for (const t of ["sessions", "saved_views", "login_failures", "users", "branches", "company", "units", "parties", "items", "master_items", "stock_documents", "stock_document_lines", "sales", "sale_lines", "sale_realisations", "purchases", "purchase_lines", "notes", "note_lines", "opening_entries", "batches", "batch_lines", "batch_consumption", "boms", "bom_inputs", "bom_costs", "production_config", "work_orders", "work_order_lines",
       "money_accounts", "money_docs", "money_allocations", "accounting_config", "treasury_deposits", "vds_entries", "vat_adjustments", "tariff_lines",
       "bank_statements", "bank_statement_lines", "money_transfers", "cheque_events",
-      "gl_accounts", "journal_entries",
+      "gl_accounts", "journal_entries", "asset_classes", "fixed_assets",
+      "pos_settlement_lines", "pos_settlements", "pos_webhook_deliveries", "pos_webhooks", "pos_tokens", "pos_queue", "pos_sales", "pos_shifts", "pos_registers",
       "uds", "ud_lines",
       "bond_uds", "bond_ud_inputs", "bond_ud_garments",
       "audit_events", "compat_state", "meta"])
@@ -250,6 +267,16 @@ async function seed(log: (m: string) => void) {
     // R9.4: the classes and the assets — the schedules and the postings fold from these rows
     await tx.insert(assetClasses).values(demoAssetClasses.map(assetClassValues))
     for (let i = 0; i < demoAssets.length; i += 500) await tx.insert(fixedAssets).values(demoAssets.slice(i, i + 500).map(fixedAssetValues))
+    // R10: POS registers, shifts, sales, terminal settlements, API tokens, webhooks and offline queue
+    await tx.insert(posRegisters).values(demoPosRegisters.map(posRegisterValues))
+    await tx.insert(posShifts).values(demoPosShifts.map(posShiftValues))
+    for (let i = 0; i < demoPosSales.length; i += 500) await tx.insert(posSales).values(demoPosSales.slice(i, i + 500).map(posSaleValues))
+    await tx.insert(posSettlements).values(demoPosSettlements.map(posSettlementValues))
+    for (let i = 0; i < demoPosSettlementLines.length; i += 500) await tx.insert(posSettlementLines).values(demoPosSettlementLines.slice(i, i + 500).map(posSettlementLineValues))
+    await tx.insert(posTokens).values(demoPosTokens.map(posTokenValues))
+    await tx.insert(posWebhooks).values(demoPosWebhooks.map(posWebhookValues))
+    for (let i = 0; i < demoPosDeliveries.length; i += 500) await tx.insert(posWebhookDeliveries).values(demoPosDeliveries.slice(i, i + 500).map(posDeliveryValues))
+    for (let i = 0; i < demoPosQueue.length; i += 500) await tx.insert(posQueue).values(demoPosQueue.slice(i, i + 500).map(posQueueValues))
     const unitSeq = (m.db.seq as Record<string, number>).unit
     await tx.execute(sql`select setval('unit_id_seq', ${unitSeq})`)
     for (let i = 0; i < m.tariff.length; i += 500)
@@ -461,6 +488,43 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     liveAssets = assets
     log(`adopted the R9.4 fixed assets (${classes.length} NBR classes + ${assets.length} assets)`)
   }
+  // R10: POS registers, shifts, sales, terminal settlements, API tokens, webhooks and offline queue
+  let livePosRegisters: PosRegister[] = (await db.select().from(posRegisters).orderBy(asc(posRegisters.ord))).map(toPosRegister)
+  let livePosShifts: PosShift[] = (await db.select().from(posShifts).orderBy(asc(posShifts.ord))).map(toPosShift)
+  let livePosSales: PosSale[] = (await db.select().from(posSales).orderBy(asc(posSales.ord))).map(toPosSale)
+  let livePosSettlements: PosTerminalStatement[] = (await db.select().from(posSettlements).orderBy(asc(posSettlements.ord))).map(toPosSettlement)
+  let livePosSettlementLines: PosTerminalLine[] = (await db.select().from(posSettlementLines).orderBy(asc(posSettlementLines.rowNo))).map(toPosSettlementLine)
+  let livePosTokens: PosApiToken[] = (await db.select().from(posTokens).orderBy(asc(posTokens.ord))).map(toPosToken)
+  let livePosWebhooks: PosWebhook[] = (await db.select().from(posWebhooks).orderBy(asc(posWebhooks.ord))).map(toPosWebhook)
+  let livePosDeliveries: PosWebhookDelivery[] = (await db.select().from(posWebhookDeliveries).orderBy(asc(posWebhookDeliveries.ord))).map(toPosDelivery)
+  let livePosQueue: PosQueueEntry[] = (await db.select().from(posQueue).orderBy(asc(posQueue.ord))).map(toPosQueue)
+  const loadedCompany = await loadCompany()
+  if (!livePosRegisters.length) {
+    const r10 = seedPos(itemRows, loadedCompany.branches)
+    const r10Lines = Object.values(r10.posSettlementLines).flat()
+    await db.transaction(async (tx) => {
+      await lockState(tx)
+      await tx.insert(posRegisters).values(r10.posRegisters.map(posRegisterValues))
+      await tx.insert(posShifts).values(r10.posShifts.map(posShiftValues))
+      await tx.insert(posSales).values(r10.posSales.map(posSaleValues))
+      await tx.insert(posSettlements).values(r10.posSettlements.map(posSettlementValues))
+      await tx.insert(posSettlementLines).values(r10Lines.map(posSettlementLineValues))
+      await tx.insert(posTokens).values(r10.posTokens.map(posTokenValues))
+      await tx.insert(posWebhooks).values(r10.posWebhooks.map(posWebhookValues))
+      await tx.insert(posWebhookDeliveries).values(r10.posWebhookDeliveries.map(posDeliveryValues))
+      await tx.insert(posQueue).values(r10.posQueue.map(posQueueValues))
+    })
+    livePosRegisters = r10.posRegisters
+    livePosShifts = r10.posShifts
+    livePosSales = r10.posSales
+    livePosSettlements = r10.posSettlements
+    livePosSettlementLines = r10Lines
+    livePosTokens = r10.posTokens
+    livePosWebhooks = r10.posWebhooks
+    livePosDeliveries = r10.posWebhookDeliveries
+    livePosQueue = r10.posQueue
+    log(`adopted the R10 POS seed (${livePosRegisters.length} registers, ${livePosShifts.length} shifts, ${livePosSales.length} POS sales)`)
+  }
   const [vatSettingsDbRow] = await db.select().from(vatSettings).where(eq(vatSettings.id, 1))
   // the settings row is written by the seed and by the adoption below, so this fallback only guards a restore that
   // came from a backup older than both: the company's own zone, the one the NBR codes are filed under
@@ -501,6 +565,22 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
   // …and the fixed assets' the same way (`fa1`, `fa2`…): a disposed asset's row keeps its id forever
   seq.asset = Math.max(seq.asset ?? liveAssets.length,
     (await db.select().from(fixedAssets)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
+  seq.posRegister = Math.max(seq.posRegister ?? livePosRegisters.length,
+    livePosRegisters.reduce((m, r) => Math.max(m, Number(r.id.slice(3)) || 0), 0))
+  seq.posShift = Math.max(seq.posShift ?? livePosShifts.length,
+    livePosShifts.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
+  seq.posSale = Math.max(seq.posSale ?? livePosSales.length,
+    livePosSales.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
+  seq.posSettlement = Math.max(seq.posSettlement ?? livePosSettlements.length,
+    livePosSettlements.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
+  seq.posToken = Math.max(seq.posToken ?? livePosTokens.length,
+    livePosTokens.reduce((m, r) => Math.max(m, Number(r.id.slice(3)) || 0), 0))
+  seq.posWebhook = Math.max(seq.posWebhook ?? livePosWebhooks.length,
+    livePosWebhooks.reduce((m, r) => Math.max(m, Number(r.id.slice(3)) || 0), 0))
+  seq.posDelivery = Math.max(seq.posDelivery ?? livePosDeliveries.length,
+    livePosDeliveries.reduce((m, r) => Math.max(m, Number(r.id.slice(3)) || 0), 0))
+  seq.posQueue = Math.max(seq.posQueue ?? livePosQueue.length,
+    livePosQueue.reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
   // … and the VAT documents' the same way: a deleted draft's row holds its id, so no series ever repeats
   seq.treasury = Math.max(seq.treasury ?? liveDeposits.length,
     (await db.select().from(treasuryDeposits)).reduce((m, r) => Math.max(m, Number(r.id.slice(2)) || 0), 0))
@@ -551,7 +631,7 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     seq[key] = Math.max(seq[key] ?? 0, seen)
   }
   restoreGlobals({
-    db: state.db as never, notifRead, users: list, prefs, company: await loadCompany(), units: unitRows,
+    db: state.db as never, notifRead, users: list, prefs, company: loadedCompany, units: unitRows,
     customers, vendors, partyTrash, items: itemRows, masterItems: masterRows, transfers, damages,
     sales: liveSales, saleTrash, purchases: livePurchases, purchaseTrash, creditNotes, debitNotes,
     openings: liveOpenings, batches: liveBatches, boms: liveBoms, productionConfig: config,
@@ -564,6 +644,10 @@ async function restore(state: { db: Record<string, unknown>; notifRead?: Record<
     moneyTransfers: liveTransfers, chequeEvents: liveChequeEvents,
     glAccounts: liveGl, journalEntries: liveJournal,
     assetClasses: liveAssetClasses, assets: liveAssets,
+    posRegisters: livePosRegisters, posShifts: livePosShifts, posSales: livePosSales,
+    posSettlements: livePosSettlements, posSettlementLines: livePosSettlementLines,
+    posTokens: livePosTokens, posWebhooks: livePosWebhooks,
+    posWebhookDeliveries: livePosDeliveries, posQueue: livePosQueue,
   })
   loadCompat()
   markParties([...mirror.parties("customer"), ...mirror.parties("vendor")])

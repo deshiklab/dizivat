@@ -3,6 +3,7 @@ import { STATIC_DEMO } from "@/lib/base-path"
 import { verifyInvoiceAnswer } from "@/lib/invoice-qr"
 import { company } from "@/lib/mock/company"
 import { db } from "@/lib/mock/db"
+import { posSaleAsSale } from "@/lib/pos"
 
 /**
  * R8.1 (e-invoice): the public half of the Mushak 6.3 QR. Anyone holding a printed copy — buyer, bank,
@@ -24,7 +25,9 @@ export default async function VerifyInvoicePage({ params, searchParams }: { para
       const res = await fetch(`${upstream}/api/v1/verify/invoice?token=${encodeURIComponent(token)}`, { cache: "no-store" })
       answer = (await res.json()) as typeof answer
     } else {
-      const sale = db.sales.find((x) => x.invoiceNo === token.split(".")[0]) ?? null
+      const invNo = token.split(".")[0]
+      const posSale = db.posSales.find((x) => x.invoiceNo === invNo)
+      const sale = db.sales.find((x) => x.invoiceNo === invNo) ?? (posSale ? posSaleAsSale(posSale) : null)
       answer = await verifyInvoiceAnswer(token, sale, { bin: company.bin, name: company.name })
     }
   }

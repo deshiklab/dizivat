@@ -1,6 +1,7 @@
 import { verifyInvoiceAnswer } from "@/lib/invoice-qr"
 import { company } from "@/lib/mock/company"
 import { db } from "@/lib/mock/db"
+import { posSaleAsSale } from "@/lib/pos"
 
 /**
  * R8.1 (e-invoicing): public verification of a Mushak 6.3 — GET /verify/invoice?token=<the QR's token>.
@@ -10,6 +11,8 @@ import { db } from "@/lib/mock/db"
  */
 export async function GET(req: Request) {
   const token = new URL(req.url).searchParams.get("token") ?? ""
-  const sale = db.sales.find((s) => s.invoiceNo === token.split(".")[0])
-  return Response.json(await verifyInvoiceAnswer(token, sale ?? null, { bin: company.bin, name: company.name }))
+  const invNo = token.split(".")[0]
+  const posSale = db.posSales.find((s) => s.invoiceNo === invNo)
+  const sale = db.sales.find((s) => s.invoiceNo === invNo) ?? (posSale ? posSaleAsSale(posSale) : null)
+  return Response.json(await verifyInvoiceAnswer(token, sale, { bin: company.bin, name: company.name }))
 }

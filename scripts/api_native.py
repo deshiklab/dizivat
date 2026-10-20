@@ -5825,6 +5825,79 @@ def run():
               and reg94["total"] >= 8,
               "the boot adopts the R9.4 chart rows and re-seeds the assets for a pre-R9.4 database — idempotently")
 
+        # ── R10: POS integration (counter POS, settlement reconciliation, external POS API & labels) ──
+        print("\nR10: POS integration — native tables, external token auth, settlement matcher & restart survival")
+        pos_sale_r = arif.post(f"{BASE}/pos/sales", json={
+            "registerId": "reg1",
+            "customerId": "walkin",
+            "issueDate": "2026-09-25",
+            "issueTime": "18:05",
+            "lines": [{"itemId": "i17", "qty": 1, "price": 720}],
+            "tenders": [{"method": "cash", "amount": 900}],
+            "discount": 0,
+        })
+        check(pos_sale_r.status_code == 201 and pos_sale_r.json().get("invoiceNo", "").startswith("POS-"),
+              f"R10.1: counter POS sale creates an approved POS invoice ({pos_sale_r.status_code})")
+        pos_sale_id = pos_sale_r.json()["id"]
+        pos_sale_no = pos_sale_r.json()["invoiceNo"]
+        pos_qr = pos_sale_r.json()["qr"]
+        ver_r = requests.get(f"{BASE}/verify/invoice", params={"token": pos_qr})
+        check(ver_r.status_code == 200 and ver_r.json().get("valid") is True
+              and ver_r.json().get("invoice", {}).get("invoiceNo") == pos_sale_no,
+              "R10.1: public Mushak 6.3 QR verification validates the POS invoice token")
+        tok_r = admin.post(f"{BASE}/pos/tokens", json={
+            "name": f"Native test token {TAG}",
+            "registerId": "reg1",
+            "scopes": ["pos:catalog:read", "pos:sale:write", "pos:queue:sync"],
+        })
+        check(tok_r.status_code == 201 and tok_r.json().get("secret", "").startswith("dzpos_"),
+              "R10.3: admin issues a scoped POS bearer token")
+        ext_secret = tok_r.json()["secret"]
+        ext_sale_r = requests.post(
+            f"{BASE}/pos/external/sales",
+            headers={"Authorization": f"Bearer {ext_secret}", "Idempotency-Key": f"idem-native-{TAG}"},
+            json={
+                "registerId": "reg1",
+                "idempotencyKey": f"idem-native-{TAG}",
+                "lines": [{"itemId": "i18", "qty": 1, "price": 1150}],
+                "tenders": [{"method": "bkash", "amount": 1322.5, "reference": f"BK-NAT-{TAG}"}],
+            },
+        )
+        ext_replay_r = requests.post(
+            f"{BASE}/pos/external/sales",
+            headers={"Authorization": f"Bearer {ext_secret}", "Idempotency-Key": f"idem-native-{TAG}"},
+            json={
+                "registerId": "reg1",
+                "idempotencyKey": f"idem-native-{TAG}",
+                "lines": [{"itemId": "i18", "qty": 1, "price": 1150}],
+                "tenders": [{"method": "bkash", "amount": 1322.5, "reference": f"BK-NAT-{TAG}"}],
+            },
+        )
+        check(ext_sale_r.status_code == 201 and ext_replay_r.status_code == 200
+              and ext_replay_r.json().get("replayed") is True
+              and ext_sale_r.json()["sale"]["id"] == ext_replay_r.json()["sale"]["id"],
+              "R10.3: external POS sale endpoint is idempotent under Bearer token auth")
+        stl_r = arif.post(f"{BASE}/pos/settlements", json={
+            "accountId": "ac4",
+            "channel": "bkash",
+            "source": f"native-{TAG}.csv",
+            "rows": [
+                {"date": "2026-09-25", "channel": "bkash", "reference": f"BK-NAT-{TAG}", "narration": "Native bKash sale", "gross": 1322.5, "fee": 24.47},
+                {"date": "2026-09-25", "channel": "bkash", "reference": f"BK-FEE-{TAG}", "narration": "Gateway fee", "gross": 0, "fee": 50},
+            ],
+        })
+        check(stl_r.status_code == 201 and stl_r.json().get("matched") == 1,
+              "R10.2: terminal settlement import auto-matches the external POS bKash sale")
+        restart()
+        check(arif.get(f"{BASE}/pos/sales/{pos_sale_id}").status_code == 200
+              and arif.get(f"{BASE}/pos/settlements/{stl_r.json()['statement']['id']}").status_code == 200,
+              "R10: POS sales, tokens, and terminal settlements survive the restart in PostgreSQL")
+        psql("delete from pos_registers"); psql("delete from pos_sales")
+        restart()
+        check(len(arif.get(f"{BASE}/pos/registers").json()) >= 2
+              and arif.get(f"{BASE}/pos/sales").json()["total"] >= 4,
+              "the boot re-seeds POS registers and sales for a pre-R10 database — idempotently")
+
         # ── the finale: compat_state itself is gone ───────────────────────────────────────────────
         print("\nFinale: the compat snapshot — read ids on the user's row, the table dropped")
         check(psql(COMPAT_GONE) == "t", "the drained snapshot table is gone after the boots above")
@@ -5850,13 +5923,13 @@ def run():
         # the whole map after every request, so a drill that keeps only the ids it cares about would let
         # notifications the suite read earlier pop back up as unread and fail the round-trip check below
         have = json.loads(psql("select notif_read::text from users where username = 'arif'") or "[]")
-        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 29, "29 migrations have run on this database")
-        # un-apply the last SIX journal rows: the migrator replays by position, so the boot has to re-run
-        # 0028 (R9.4's fixed assets + the widened purchases category check), 0027 (R9.2's chart and journal),
-        # 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and 0024 (R8.2's bank statements — all
-        # idempotent) to reach 0023 (the notif_read lift) again; 0022 and earlier keep their rows, because
-        # their tables are NOT idempotent and must not be replayed
-        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 6)")
+        check(int(psql("select count(*) from drizzle.__drizzle_migrations")) == 30, "30 migrations have run on this database")
+        # un-apply the last SEVEN journal rows: the migrator replays by position, so the boot has to re-run
+        # 0029 (R10's POS tables), 0028 (R9.4's fixed assets + the widened purchases category check),
+        # 0027 (R9.2's chart and journal), 0026 (R9.1's transfers and cheques), 0025 (R8.3's schedule) and
+        # 0024 (R8.2's bank statements — all idempotent) to reach 0023 (the notif_read lift) again; 0022 and
+        # earlier keep their rows, because their tables are NOT idempotent and must not be replayed
+        psql("delete from drizzle.__drizzle_migrations where id in (select id from drizzle.__drizzle_migrations order by id desc limit 7)")
         psql("alter table users drop column notif_read")
         ensure_compat_state()
         ids = [*have, "finale:migrated"]

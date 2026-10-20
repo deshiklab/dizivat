@@ -19,6 +19,7 @@ export const AUDIT_ENTITIES: AuditEntity[] = [
   "ud", "backup", "access", "import", "tariff",
   "moneyTransfer", "cheque", "journal",
   "asset", "assetClass", "accounting",
+  "posSale", "posShift", "posSettlement", "posRegister", "posToken", "posWebhook",
 ]
 
 export const ACTION_ICON: Record<AuditAction, LucideIcon> = {
@@ -80,6 +81,13 @@ export function entityHref(e: AuditEvent): string | null {
     case "asset": return `/accounting/assets?view=${e.entityId}`
     case "assetClass": return null // the classes live behind the settings API; there is no page of their own
     case "accounting": return "/accounting/config"
+    case "posSale": return `/sales/pos?sale=${e.entityId}`
+    case "posShift": return `/sales/pos?shift=${e.entityId}`
+    case "posSettlement": return `/accounting/pos-reconcile?id=${e.entityId}`
+    case "posRegister":
+    case "posToken":
+    case "posWebhook":
+      return "/master/pos-devices"
     default: return null
   }
 }

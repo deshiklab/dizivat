@@ -9,19 +9,20 @@ import type { Permission } from "@/lib/auth/roles"
  * `release` = the R-milestone from the development plan in which the page ships.
  * `ready` = built (Sprints 1–4 + R2 + R3 + R4) (renders a real page); others render a "Planned for Rx" page.
  */
-export type Release = "S1" | "R1" | "R2" | "R3" | "R4" | "R6" | "R8" | "R9"
+export type Release = "S1" | "R1" | "R2" | "R3" | "R4" | "R6" | "R8" | "R9" | "R10"
 export interface NavItem { key: string; href: string; release: Release; ready?: boolean; legacy?: string; perm?: Permission }
 export interface NavGroup { key: string; icon: LucideIcon; href: string; items: NavItem[]; shortcut?: string }
 
 export const RELEASE_DATES: Record<Release, string> = {
   S1: "2026-10-15",
   R1: "2026-11-19",
-  R2: "2026-12-24",
+  R2: "2027-12-24",
   R3: "2027-01-21",
   R4: "2027-02-25",
   R6: "2027-04-29",
   R8: "2027-06-24",
   R9: "2027-08-19",
+  R10: "2027-10-14",
 }
 
 export const NAV: NavGroup[] = [
@@ -30,6 +31,7 @@ export const NAV: NavGroup[] = [
     key: "sales", icon: ShoppingCart, href: "/sales", shortcut: "g s",
     items: [
       { key: "salesInvoices", href: "/sales", release: "R3", ready: true, legacy: "/en/sales" },
+      { key: "pos", href: "/sales/pos", release: "R10", ready: true },
       { key: "serviceSales", href: "/sales/services", release: "R3", ready: true },
       { key: "creditNotes", href: "/sales/credit-notes", release: "R3", ready: true },
       { key: "exports", href: "/sales/exports", release: "R3", ready: true },
@@ -80,6 +82,7 @@ export const NAV: NavGroup[] = [
       { key: "assets", href: "/accounting/assets", release: "R9", ready: true },
       { key: "statements", href: "/accounting/statements", release: "R4", ready: true },
       { key: "reconcile", href: "/accounting/reconcile", release: "R8", ready: true },
+      { key: "posReconcile", href: "/accounting/pos-reconcile", release: "R10", ready: true },
       { key: "accountingConfig", href: "/accounting/config", release: "R4", ready: true, perm: "settings.manage" },
     ],
   },
@@ -117,6 +120,7 @@ export const NAV: NavGroup[] = [
       { key: "dataImport", href: "/master/import", release: "R6", ready: true, perm: "master.edit" },
       { key: "backups", href: "/master/backups", release: "R6", ready: true, perm: "settings.manage" },
       { key: "schedule", href: "/master/schedule", release: "R8", ready: true, perm: "settings.manage" },
+      { key: "posDevices", href: "/master/pos-devices", release: "R10", ready: true, perm: "settings.manage" },
     ],
   },
 ]

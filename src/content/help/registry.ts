@@ -2,7 +2,7 @@
  * Language-neutral article registry: order, category, the app screens each article documents and related reading.
  * Small on purpose — the shell imports it for "Help for this page"; article text lives in ./en and ./bn.
  */
-export const HELP_UPDATED = "2026-10-16"
+export const HELP_UPDATED = "2026-10-19"
 
 export const CATEGORIES = ["gettingStarted", "sales", "purchase", "inventory", "production", "accounting", "nbrVat", "masterData", "reference"] as const
 export type Category = (typeof CATEGORIES)[number]
@@ -17,6 +17,7 @@ export const REGISTRY = {
   "using-this-help": { category: "gettingStarted", routes: ["/help"], related: ["welcome", "faq"] },
 
   "sales-invoices": { category: "sales", routes: ["/sales"], related: ["credit-notes", "document-lifecycle", "purchase-sales-books", "invoice-qr"] },
+  "counter-pos": { category: "sales", routes: ["/sales/pos"], related: ["pos-settlement", "pos-external-api", "sales-invoices", "invoice-qr"] },
   "service-sales": { category: "sales", routes: ["/sales/services"], related: ["sales-invoices", "vds-certificates"] },
   "exports": { category: "sales", routes: ["/sales/exports"], related: ["sales-invoices", "vat-return-9-1"] },
   "credit-notes": { category: "sales", routes: ["/sales/credit-notes"], related: ["sales-invoices", "debit-notes"] },
@@ -38,6 +39,7 @@ export const REGISTRY = {
   "receipts-and-payments": { category: "accounting", routes: ["/accounting/receipts", "/accounting/payments"], related: ["bank-accounts-and-statements", "bank-reconciliation", "local-purchases"] },
   "bank-accounts-and-statements": { category: "accounting", routes: ["/accounting/bank-accounts", "/accounting/statements", "/accounting/config"], related: ["receipts-and-payments"] },
   "bank-reconciliation": { category: "accounting", routes: ["/accounting/reconcile"], related: ["receipts-and-payments", "bank-accounts-and-statements"] },
+  "pos-settlement": { category: "accounting", routes: ["/accounting/pos-reconcile"], related: ["counter-pos", "bank-reconciliation", "bank-accounts-and-statements"] },
   "account-transfers-and-cheques": { category: "accounting", routes: ["/accounting/transfers", "/accounting/cheques"], related: ["receipts-and-payments", "bank-reconciliation", "bank-accounts-and-statements"] },
   "general-ledger": { category: "accounting", routes: ["/accounting/chart", "/accounting/journal", "/accounting/ledger"], related: ["statements-and-close", "fixed-assets", "vat-return-9-1", "bank-reconciliation"] },
   "statements-and-close": { category: "accounting", routes: ["/accounting/reports"], related: ["general-ledger", "receipts-and-payments", "vat-return-9-1"] },
@@ -69,6 +71,7 @@ export const REGISTRY = {
   "backups-and-data-import": { category: "masterData", routes: ["/master/backups", "/master/import"], related: ["items-and-hs-codes", "customers-and-vendors"] },
   "backup-restore": { category: "masterData", routes: ["/master/backups"], related: ["backups-and-data-import", "audit-log"] },
   "reminders-and-delivery": { category: "masterData", routes: ["/master/schedule"], related: ["vat-return-9-1", "treasury-tr6", "backups-and-data-import"] },
+  "pos-external-api": { category: "masterData", routes: ["/master/pos-devices"], related: ["counter-pos", "pos-settlement", "audit-log"] },
   "vat-officer-access": { category: "masterData", related: ["users-and-roles", "audit-log"] },
 
   "document-lifecycle": { category: "reference", related: ["sales-invoices", "vat-return-9-1"] },

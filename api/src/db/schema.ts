@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm"
 import {
   bigserial, boolean, check, customType, date, index, integer, jsonb, numeric, pgSequence, pgTable, primaryKey, serial, text, timestamp, uniqueIndex,
 } from "drizzle-orm/pg-core"
-import type { AssetDisposal, AssetRevaluation, AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, JournalLine, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
+import type { AssetDisposal, AssetRevaluation, AuditChange, BondUdGarment, BondUdInput, DrawbackClaimLine, HistoryEntry, JournalLine, Line, NbrEInvoiceAdapter, PosScope, PosTender, PosTenderMethod, PosTerminalLineMatch, PosWebhookEvent, PrcBatchLine, ReturnAmendment, ReturnComputation, ReturnManual, SdExportLink, UdAmendment, UdSettlement, VatProfile } from "@/lib/types"
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, precision: 3, mode: "date" })
 
@@ -2186,3 +2186,216 @@ export const fixedAssets = pgTable("fixed_assets", {
   index("fixed_assets_purchase_idx").on(t.purchaseId),
   check("fixed_assets_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
 ])
+
+/* ── R10: POS integration (counter POS, terminal settlement, external API, print & labels) ───────── */
+
+export const posRegisters = pgTable("pos_registers", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  cashAccountId: text("cash_account_id").notNull(),
+  cardAccountId: text("card_account_id").notNull(),
+  bkashAccountId: text("bkash_account_id").notNull(),
+  nagadAccountId: text("nagad_account_id").notNull(),
+  terminalId: text("terminal_id"),
+  active: boolean("active").default(true).notNull(),
+  lastSeqNo: integer("last_seq_no").default(0).notNull(),
+  lastSeenAt: ts("last_seen_at"),
+  createdAt: ts("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("pos_registers_code_key").on(t.code),
+  index("pos_registers_branch_idx").on(t.branchId),
+])
+
+export const posShifts = pgTable("pos_shifts", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  no: text("no").notNull(),
+  registerId: text("register_id").notNull(),
+  registerCode: text("register_code").notNull(),
+  registerName: text("register_name").notNull(),
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  cashAccountId: text("cash_account_id").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  status: text("status", { enum: ["open", "closed"] }).notNull(),
+  openingFloat: numeric("opening_float", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  openedAt: ts("opened_at").notNull(),
+  openedBy: text("opened_by").notNull(),
+  closedAt: ts("closed_at"),
+  closedBy: text("closed_by"),
+  zNo: text("z_no"),
+  expectedCash: numeric("expected_cash", { precision: 18, scale: 2, mode: "number" }),
+  countedCash: numeric("counted_cash", { precision: 18, scale: 2, mode: "number" }),
+  variance: numeric("variance", { precision: 18, scale: 2, mode: "number" }),
+  note: text("note"),
+  history: jsonb("history").$type<HistoryEntry[]>().notNull(),
+}, (t) => [
+  uniqueIndex("pos_shifts_no_key").on(t.no),
+  index("pos_shifts_register_idx").on(t.registerId, t.status),
+  index("pos_shifts_date_idx").on(t.date),
+  check("pos_shifts_status_check", sql`${t.status} in ('open','closed')`),
+])
+
+export const posSales = pgTable("pos_sales", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  invoiceNo: text("invoice_no").notNull(),
+  challanNo: text("challan_no").notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  issueTime: text("issue_time").notNull(),
+  process: text("process", { enum: ["Created", "Approved", "Cancelled"] }).notNull(),
+  registerId: text("register_id").notNull(),
+  registerCode: text("register_code").notNull(),
+  registerName: text("register_name").notNull(),
+  shiftId: text("shift_id").notNull(),
+  shiftNo: text("shift_no").notNull(),
+  branchId: text("branch_id").notNull(),
+  branchName: text("branch_name").notNull(),
+  customerId: text("customer_id").notNull(),
+  customerName: text("customer_name").notNull(),
+  customerBin: text("customer_bin").notNull(),
+  customerMobile: text("customer_mobile"),
+  customerAddress: text("customer_address").notNull(),
+  lines: jsonb("lines").$type<Line[]>().notNull(),
+  subtotal: numeric("subtotal", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  sd: numeric("sd", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  vat: numeric("vat", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  discount: numeric("discount", { precision: 18, scale: 2, mode: "number" }).default(0).notNull(),
+  netTotal: numeric("net_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  tenders: jsonb("tenders").$type<PosTender[]>().notNull(),
+  tenderedTotal: numeric("tendered_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  changeGiven: numeric("change_given", { precision: 18, scale: 2, mode: "number" }).default(0).notNull(),
+  idempotencyKey: text("idempotency_key"),
+  seqNo: integer("seq_no"),
+  source: text("source", { enum: ["counter", "external", "offlineQueue"] }).notNull(),
+  nbrAdapter: jsonb("nbr_adapter").$type<NbrEInvoiceAdapter>().notNull(),
+  issuedBy: text("issued_by").notNull(),
+  designation: text("designation").notNull(),
+  note: text("note"),
+  cancelReason: text("cancel_reason"),
+  createdAt: ts("created_at").notNull(),
+  updatedAt: ts("updated_at"),
+  history: jsonb("history").$type<HistoryEntry[]>().notNull(),
+}, (t) => [
+  uniqueIndex("pos_sales_invoice_no_key").on(t.invoiceNo),
+  index("pos_sales_shift_idx").on(t.shiftId),
+  index("pos_sales_register_idx").on(t.registerId),
+  index("pos_sales_date_idx").on(t.issueDate),
+  check("pos_sales_process_check", sql`${t.process} in ('Created','Approved','Cancelled')`),
+])
+
+export const posSettlements = pgTable("pos_settlements", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  no: text("no").notNull(),
+  accountId: text("account_id").notNull(),
+  accountName: text("account_name").notNull(),
+  channel: text("channel", { enum: ["card", "bkash", "nagad"] }).notNull(),
+  source: text("source").notNull(),
+  from: date("from", { mode: "string" }).notNull(),
+  to: date("to", { mode: "string" }).notNull(),
+  importedAt: ts("imported_at").notNull(),
+  importedBy: text("imported_by").notNull(),
+  lineCount: integer("line_count").notNull(),
+  grossTotal: numeric("gross_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  feeTotal: numeric("fee_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  netTotal: numeric("net_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+}, (t) => [
+  uniqueIndex("pos_settlements_no_key").on(t.no),
+  index("pos_settlements_account_idx").on(t.accountId),
+])
+
+export const posSettlementLines = pgTable("pos_settlement_lines", {
+  id: text("id").primaryKey(),
+  statementId: text("statement_id").notNull(),
+  rowNo: integer("row_no").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
+  channel: text("channel", { enum: ["card", "bkash", "nagad"] }).notNull(),
+  reference: text("reference").notNull(),
+  narration: text("narration").notNull(),
+  gross: numeric("gross", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  fee: numeric("fee", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  net: numeric("net", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  status: text("status", { enum: ["matched", "open", "charge", "ignored"] }).notNull(),
+  saleId: text("sale_id"),
+  invoiceNo: text("invoice_no"),
+  tenderMethod: text("tender_method", { enum: ["cash", "card", "bkash", "nagad"] }),
+  expectedFee: numeric("expected_fee", { precision: 18, scale: 2, mode: "number" }),
+  suggestion: jsonb("suggestion").$type<PosTerminalLineMatch["suggestion"]>(),
+  note: text("note"),
+}, (t) => [
+  uniqueIndex("pos_settlement_lines_statement_row_key").on(t.statementId, t.rowNo),
+  index("pos_settlement_lines_statement_idx").on(t.statementId),
+  index("pos_settlement_lines_sale_idx").on(t.saleId),
+])
+
+export const posTokens = pgTable("pos_tokens", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  name: text("name").notNull(),
+  registerId: text("register_id").notNull(),
+  registerCode: text("register_code").notNull(),
+  prefix: text("prefix").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  scopes: jsonb("scopes").$type<PosScope[]>().notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: ts("created_at").notNull(),
+  createdBy: text("created_by").notNull(),
+  lastUsedAt: ts("last_used_at"),
+  revokedAt: ts("revoked_at"),
+}, (t) => [
+  uniqueIndex("pos_tokens_hash_key").on(t.tokenHash),
+  index("pos_tokens_register_idx").on(t.registerId),
+])
+
+export const posWebhooks = pgTable("pos_webhooks", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  events: jsonb("events").$type<PosWebhookEvent[]>().notNull(),
+  secret: text("secret").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: ts("created_at").notNull(),
+  createdBy: text("created_by").notNull(),
+  lastDeliveryAt: ts("last_delivery_at"),
+  lastStatus: text("last_status", { enum: ["delivered", "failed"] }),
+})
+
+export const posWebhookDeliveries = pgTable("pos_webhook_deliveries", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  webhookId: text("webhook_id").notNull(),
+  webhookName: text("webhook_name").notNull(),
+  event: text("event", { enum: ["pos.sale.completed", "pos.sale.voided", "pos.shift.opened", "pos.shift.closed", "pos.settlement.reconciled"] }).notNull(),
+  ref: text("ref").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  signature: text("signature").notNull(),
+  status: text("status", { enum: ["delivered", "failed"] }).notNull(),
+  deliveredAt: ts("delivered_at").notNull(),
+}, (t) => [
+  index("pos_webhook_deliveries_webhook_idx").on(t.webhookId),
+])
+
+export const posQueue = pgTable("pos_queue", {
+  id: text("id").primaryKey(),
+  ord: serial("ord").notNull(),
+  registerId: text("register_id").notNull(),
+  registerCode: text("register_code").notNull(),
+  seqNo: integer("seq_no").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  saleId: text("sale_id").notNull(),
+  invoiceNo: text("invoice_no").notNull(),
+  netTotal: numeric("net_total", { precision: 18, scale: 2, mode: "number" }).notNull(),
+  clientCreatedAt: ts("client_created_at").notNull(),
+  syncedAt: ts("synced_at").notNull(),
+  status: text("status", { enum: ["synced", "replayed"] }).notNull(),
+}, (t) => [
+  uniqueIndex("pos_queue_register_seq_key").on(t.registerId, t.seqNo),
+  index("pos_queue_register_idx").on(t.registerId),
+])
+

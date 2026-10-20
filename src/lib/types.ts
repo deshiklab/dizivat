@@ -275,6 +275,8 @@ export type AuditEntity = "sale" | "purchase" | "transfer" | "damage" | "custome
   | "moneyTransfer" | "cheque"
   /** R9.2 — the manual journal entries (the chart is configuration, not documents) */
   | "journal"
+  /** R10 — counter POS sales, shifts, terminal settlement statements, registers, API tokens, webhooks */
+  | "posSale" | "posShift" | "posSettlement" | "posRegister" | "posToken" | "posWebhook"
 export type AuditAction =
   | "created" | "edited" | "approved" | "cancelled" | "deleted" | "restored"
   | "updated" | "activated" | "deactivated" | "roleChanged" | "invited" | "passwordReset" | "passwordChanged"
@@ -1800,3 +1802,287 @@ export interface ReceivablesDigestDoc {
   /** receipts not allocated to any invoice yet (the party statements' `advances`) */
   advances: number
 }
+
+/* ── R10: POS integration (counter POS, terminal settlement, external API, print & labels) ───────── */
+
+/** R10.1 — payment tender methods on a counter POS sale, mapped to existing MoneyAccount kinds. */
+export type PosTenderMethod = "cash" | "card" | "bkash" | "nagad"
+export interface PosTender {
+  method: PosTenderMethod
+  accountId: string
+  accountName: string
+  /** Gross amount tendered by the buyer (for cash, may include change; for non-cash, exact settled amount) */
+  amount: number
+  /** Change returned to the buyer (only > 0 on a cash tender) */
+  changeGiven: number
+  /** Net amount retained by the register (`amount - changeGiven`) */
+  netAmount: number
+  /** Terminal approval code / RRN / bKash TrxID / Nagad TxnID (required for card / bkash / nagad) */
+  reference?: string
+}
+
+/** R10.4 — Finance Act 2026 NBR e-invoice adapter slot (ERP self-issued Mushak 6.3). */
+export interface NbrEInvoiceAdapter {
+  mode: "selfIssued63" | "nbrPortal"
+  schemaVersion: "FA2026-6.3/1"
+  /** Invoice Reference Number (IRN): `IRN-<BIN>-<invoiceNo>-<sig8>` */
+  irn: string
+  signedAt: string
+  status: "issued" | "voided"
+}
+
+/** R10.1 / R10.3 / R10.4 — a counter or external POS sale (Mushak 6.3 with R8.1 QR & FA 2026 adapter). */
+export interface PosSale {
+  id: string
+  invoiceNo: string
+  challanNo: string
+  qr?: string
+  issueDate: string
+  issueTime: string
+  process: Process
+  registerId: string
+  registerCode: string
+  registerName: string
+  shiftId: string
+  shiftNo: string
+  branchId: string
+  branchName: string
+  customerId: string
+  customerName: string
+  customerBin: string
+  customerMobile?: string
+  customerAddress: string
+  lines: Line[]
+  subtotal: number
+  sd: number
+  vat: number
+  discount: number
+  netTotal: number
+  tenders: PosTender[]
+  tenderedTotal: number
+  changeGiven: number
+  idempotencyKey?: string
+  seqNo?: number
+  source: "counter" | "external" | "offlineQueue"
+  nbrAdapter: NbrEInvoiceAdapter
+  issuedBy: string
+  designation: string
+  note?: string
+  cancelReason?: string
+  createdAt: string
+  updatedAt?: string
+  history: HistoryEntry[]
+}
+
+/** R10.1 / R10.3 — a counter POS register / device bound to a branch and default money accounts. */
+export interface PosRegister {
+  id: string
+  code: string
+  name: string
+  branchId: string
+  branchName: string
+  cashAccountId: string
+  cardAccountId: string
+  bkashAccountId: string
+  nagadAccountId: string
+  terminalId?: string
+  active: boolean
+  /** Highest contiguous offline device queue sequence number processed for this register */
+  lastSeqNo: number
+  lastSeenAt?: string
+  createdAt: string
+}
+
+/** R10.1 — a cashier shift on a register, with X reading (while open) and Z report + cash variance (when closed). */
+export interface PosShift {
+  id: string
+  no: string
+  registerId: string
+  registerCode: string
+  registerName: string
+  branchId: string
+  branchName: string
+  cashAccountId: string
+  date: string
+  status: "open" | "closed"
+  openingFloat: number
+  openedAt: string
+  openedBy: string
+  closedAt?: string
+  closedBy?: string
+  zNo?: string
+  expectedCash?: number
+  countedCash?: number
+  variance?: number
+  note?: string
+  history: HistoryEntry[]
+}
+
+export interface PosShiftReport {
+  kind: "X" | "Z"
+  shift: PosShift
+  generatedAt: string
+  salesCount: number
+  voidedCount: number
+  voidedTotal: number
+  subtotal: number
+  sd: number
+  vat: number
+  discount: number
+  netSales: number
+  vatByRate: { rate: number; taxable: number; vat: number; count: number }[]
+  tenders: {
+    method: PosTenderMethod
+    count: number
+    tendered: number
+    changeGiven: number
+    netAmount: number
+  }[]
+  cashDrawer: {
+    openingFloat: number
+    cashTendered: number
+    changeGiven: number
+    netCashSales: number
+    expectedCash: number
+    countedCash?: number
+    variance?: number
+  }
+  invoices: {
+    id: string
+    invoiceNo: string
+    issueTime: string
+    customerName: string
+    netTotal: number
+    vat: number
+    process: Process
+    methods: PosTenderMethod[]
+  }[]
+}
+
+/** R10.2 — Card / MFS terminal settlement statement and its matched / charge-parked rows. */
+export type PosTerminalLineStatus = "matched" | "open" | "charge" | "ignored"
+export interface PosTerminalLineMatch {
+  status: PosTerminalLineStatus
+  saleId?: string
+  invoiceNo?: string
+  tenderMethod?: PosTenderMethod
+  expectedFee?: number
+  suggestion?: { saleId: string; invoiceNo: string; customerName: string; amount: number; date: string }
+}
+export interface PosTerminalLine extends PosTerminalLineMatch {
+  id: string
+  statementId: string
+  rowNo: number
+  date: string
+  channel: "card" | "bkash" | "nagad"
+  reference: string
+  narration: string
+  gross: number
+  fee: number
+  net: number
+  note?: string
+}
+export interface PosTerminalStatement {
+  id: string
+  no: string
+  accountId: string
+  accountName: string
+  channel: "card" | "bkash" | "nagad"
+  source: string
+  from: string
+  to: string
+  importedAt: string
+  importedBy: string
+  lineCount: number
+  totals: { gross: number; fee: number; net: number }
+}
+
+/** R10.3 — External POS API scoped tokens, webhooks, signed deliveries, and sequence-numbered offline queue. */
+export type PosScope =
+  | "pos:catalog:read"
+  | "pos:sale:write"
+  | "pos:shift:write"
+  | "pos:queue:sync"
+  | "pos:catalog.read"
+  | "pos:stock.read"
+  | "pos:sales.write"
+  | "pos:queue.sync"
+  | "pos:webhooks.manage"
+
+export interface PosApiToken {
+  id: string
+  name: string
+  registerId: string
+  registerCode: string
+  prefix: string
+  tokenHash: string
+  scopes: PosScope[]
+  active: boolean
+  createdAt: string
+  createdBy: string
+  lastUsedAt?: string
+  revokedAt?: string
+}
+
+export type PosWebhookEvent =
+  | "pos.sale.completed"
+  | "pos.sale.voided"
+  | "pos.shift.opened"
+  | "pos.shift.closed"
+  | "pos.settlement.reconciled"
+
+export interface PosWebhook {
+  id: string
+  name: string
+  url: string
+  events: PosWebhookEvent[]
+  secret: string
+  active: boolean
+  createdAt: string
+  createdBy: string
+  lastDeliveryAt?: string
+  lastStatus?: "delivered" | "failed"
+}
+
+export interface PosWebhookDelivery {
+  id: string
+  webhookId: string
+  webhookName: string
+  event: PosWebhookEvent
+  ref: string
+  payload: Record<string, unknown>
+  signature: string
+  status: "delivered" | "failed"
+  deliveredAt: string
+}
+
+export interface PosQueueEntry {
+  id: string
+  registerId: string
+  registerCode: string
+  seqNo: number
+  idempotencyKey: string
+  saleId: string
+  invoiceNo: string
+  netTotal: number
+  clientCreatedAt: string
+  syncedAt: string
+  status: "synced" | "replayed"
+}
+
+/** R10.4 — Item barcode label format and rendered Code-128B label specification. */
+export type PosLabelFormat = "38x25" | "50x30" | "a4-24"
+export interface PosBarcodeLabel {
+  itemId: string
+  sku: string
+  name: string
+  hsCode: string
+  unit: string
+  salePrice: number
+  vatRate: number
+  sdRate: number
+  priceInclTax: number
+  qty: number
+  bars: string
+}
+
