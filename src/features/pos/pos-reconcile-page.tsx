@@ -173,7 +173,7 @@ export function PosReconcilePage() {
   const dryRunMut = useMutation({
     mutationFn: async () => {
       const parsed = JSON.parse(rowsJson) as unknown[]
-      return fetchJson<DryRunPlan>("/pos/settlements/import", {
+      return fetchJson<DryRunPlan>("/pos/settlements", {
         method: "POST",
         body: JSON.stringify({
           accountId,
@@ -191,7 +191,7 @@ export function PosReconcilePage() {
   const importMut = useMutation({
     mutationFn: async () => {
       const parsed = JSON.parse(rowsJson) as unknown[]
-      return fetchJson<SettlementDetail>("/pos/settlements/import", {
+      return fetchJson<SettlementDetail>("/pos/settlements", {
         method: "POST",
         body: JSON.stringify({
           accountId,

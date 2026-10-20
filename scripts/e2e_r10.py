@@ -219,10 +219,11 @@ async def main():
 
             # 2b. Shift Z close + re-open via API & UI check
             try:
-                sh_detail = s_arif.get(f"{API}/pos/shifts/sh2").json()
+                open_sh = next(sh for sh in s_arif.get(f"{API}/pos/shifts").json()["data"] if sh["registerId"] == "reg1" and sh["status"] == "open")
+                sh_detail = s_arif.get(f"{API}/pos/shifts/{open_sh['id']}").json()
                 expected_cash = sh_detail["report"]["cashDrawer"]["expectedCash"]
                 r_close = s_arif.post(
-                    f"{API}/pos/shifts/sh2/close",
+                    f"{API}/pos/shifts/{open_sh['id']}/close",
                     json={"countedCash": round(expected_cash - 20, 2), "note": "E2E Z report close with -20 variance"},
                 )
                 assert r_close.status_code == 200, f"close shift failed: {r_close.status_code} {r_close.text}"

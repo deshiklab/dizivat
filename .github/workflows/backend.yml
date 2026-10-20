@@ -75,13 +75,14 @@ jobs:
         run: bash .ci-run.sh visual.py
       - { name: E2E — Sprint 1, working-directory: scripts, run: bash .ci-run.sh e2e.py }
       - { name: E2E — Sprint 2, working-directory: scripts, run: bash .ci-run.sh e2e_s2.py }
-      - { name: API contract (279 endpoints), working-directory: scripts, run: bash .ci-run.sh contract.py }
+      - { name: API contract (310 endpoints), working-directory: scripts, run: bash .ci-run.sh contract.py }
       - { name: E2E — Sprint 3, working-directory: scripts, run: bash .ci-run.sh e2e_s3.py }
       - { name: E2E — Sprint 4, working-directory: scripts, run: bash .ci-run.sh e2e_s4.py }
       - { name: E2E — R2, working-directory: scripts, run: bash .ci-run.sh e2e_r2.py }
       - { name: E2E — R3, working-directory: scripts, run: bash .ci-run.sh e2e_r3.py }
       - { name: E2E — R4, working-directory: scripts, run: bash .ci-run.sh e2e_r4.py }
       - { name: E2E — R9, working-directory: scripts, run: bash .ci-run.sh e2e_r9.py }
+      - { name: E2E — R10, working-directory: scripts, run: bash .ci-run.sh e2e_r10.py }
       - { name: E2E — Knowledge base, working-directory: scripts, run: bash .ci-run.sh e2e_kb.py }
       - { name: E2E — Mushak 4.3 + credit line, working-directory: scripts, run: bash .ci-run.sh e2e_m43.py }
       - { name: E2E — PDF download, working-directory: scripts, run: bash .ci-run.sh e2e_pdf.py }

@@ -191,6 +191,8 @@ def smoke(base: str) -> int:
         check("export & deemed-export register", s == 200 and isinstance(ex, dict) and "totals" in ex, f"HTTP {s}")
         s, _, _ = request(f"{base}/api/v1/vat/compliance", opener=op)
         check("compliance centre", s == 200, f"HTTP {s}")
+        s, regs, _ = request(f"{base}/api/v1/pos/registers", opener=op)
+        check("POS registers & terminals", s == 200 and isinstance(regs, list) and len(regs) >= 2, f"HTTP {s}")
         s, _, _ = request(f"{base}/api/v1/auth/logout", "POST", {}, opener=op)
         check("sign out", s == 200, f"HTTP {s}")
 

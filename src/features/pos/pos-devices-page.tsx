@@ -190,7 +190,7 @@ export function PosDevicesPage() {
         lastSeqNo: number
         processed: number
         results: { seqNo: number; invoiceNo: string; status: string }[]
-      }>("/pos/external/queue/sync", {
+      }>("/pos/external/queue", {
         method: "POST",
         body: JSON.stringify({
           registerId: "reg1",
